@@ -3,4 +3,4 @@
 ## Mathematical Formulations
 Here is the mathematical representation of the limit order book:
 
-![Limit Order Book Formulas](assets/formula.png)
+![Limit Order Book Formulas](assets/formula_1.png)
