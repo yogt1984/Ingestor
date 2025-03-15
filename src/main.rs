@@ -10,7 +10,7 @@ use std::fs::File;
 use std::io::Write;
 
 const BINANCE_WS_URL: &str = "wss://stream.binance.com:9443/ws/btcusdt@depth@100ms";
-const QUEUE_SIZE: usize = 1024;
+const QUEUE_SIZE: usize = 10000;
 
 #[derive(Debug, Deserialize)]
 struct DepthUpdate {
@@ -119,7 +119,14 @@ impl FeatureExtractor {
 }
 
 fn process_message(message: &str, queue: &mut VecDeque<String>, feature_extractor: &mut FeatureExtractor) {
+    // Parse the message into a DepthUpdate struct
     if let Ok(depth_update) = serde_json::from_str::<DepthUpdate>(message) {
+        // Check if either asks or bids are empty
+        if depth_update.a.is_empty() || depth_update.b.is_empty() {
+            // Discard this entry and return early
+            return;
+        }
+
         // Extract best bid and ask prices and volumes
         let best_bid = depth_update.b.first().and_then(|b| b[0].parse::<f64>().ok()).unwrap_or(0.0);
         let best_ask = depth_update.a.first().and_then(|a| a[0].parse::<f64>().ok()).unwrap_or(0.0);
@@ -187,7 +194,7 @@ fn file_writer(queue: Arc<Mutex<VecDeque<String>>>) {
         if queue.len() >= QUEUE_SIZE {
             let start_time = Instant::now();
             let json_array: Vec<_> = queue.iter().map(|msg| serde_json::from_str::<Value>(msg).unwrap()).collect();
-            let filename = format!("ingested_{}.json", start_time.elapsed().as_millis());
+            let filename = format!("test_1_{}.json", start_time.elapsed().as_millis());
             if let Ok(mut file) = File::create(&filename) {
                 if let Ok(json_string) = serde_json::to_string_pretty(&json_array) {
                     if file.write_all(json_string.as_bytes()).is_ok() {
