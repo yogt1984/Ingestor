@@ -1,6 +1,6 @@
-
 # Limit Order Book Features
 
-Click the link below to view the PDF with mathematical formulations:
+## Mathematical Formulations
+Here is the mathematical representation of the limit order book:
 
-📄 [View Full Formulas (PDF)](assets/formulations.pdf)
+![Limit Order Book Formulas](assets/formula.png)
