@@ -1,4 +1,18 @@
+# Ignore Rust build artifacts
+target/
+**/target/
+**/target/debug/
+**/target/release/
 
-/target/debug/
-*.o
-backlog
+# Ignore incremental compilation files
+**/target/debug/incremental/
+**/target/release/incremental/
+**/target/debug/incremental/**/*
+**/target/release/incremental/**/*
+
+# Ignore Cargo.lock (optional, if using workspace)
+Cargo.lock
+
+# Ignore editor-specific files (optional)
+.vscode/
+.idea/
