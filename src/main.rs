@@ -11,6 +11,8 @@ use serde::Deserialize;
 use tokio::sync::Mutex as AsyncMutex;
 use log::{info, warn, error, debug};
 use env_logger;
+use linregress::{FormulaRegressionBuilder, RegressionDataBuilder};
+use std::collections::HashMap;
 
 
 const LOB_URL: &str     = "wss://stream.binance.com:9443/ws/btcusdt@depth";
@@ -335,8 +337,343 @@ impl MarketState {
     
         Some(imbalance)
     }
+   
+    pub async fn compute_cwtd(&self, recent_ms: i64) -> Option<f64> {
+        let trades = self.trades.lock().await;
     
+        if trades.is_empty() {
+            warn!("No trades available to compute CWTD");
+            return None;
+        }
+    
+        let latest_trade_ts = trades.back().unwrap().2;
+    
+        let start = Instant::now();
+    
+        let relevant_trades: Vec<_> = trades.iter()
+            .filter(|&&(_, _, ts, _)| latest_trade_ts - ts <= recent_ms)
+            .collect();
+    
+        if relevant_trades.is_empty() {
+            debug!("No trades in the recent {} ms for CWTD.", recent_ms);
+            return None;
+        }
+    
+        // Compute cumulative weighted trade direction clearly
+        let cwtd: f64 = relevant_trades.iter()
+            .map(|&&(price, qty, _, buyer_maker)| {
+                let direction = if buyer_maker { -1.0 } else { 1.0 };
+                qty * direction
+            })
+            .sum();
+    
+        let duration = start.elapsed();
+        info!(
+            "CWTD computed for last {} ms in {:?}, result: {:.3}",
+            recent_ms, duration, cwtd
+        );
+    
+        Some(cwtd)
+    }
 
+    pub async fn compute_amihud_lambda(&self, interval_ms: i64, num_intervals: usize) -> Option<f64> {
+        let trades = self.trades.lock().await;
+    
+        if trades.len() < 2 {
+            warn!("Insufficient trades to compute Amihud's Lambda");
+            return None;
+        }
+    
+        let start = Instant::now();
+    
+        // Use the most recent trade timestamp as reference
+        let latest_trade_ts = trades.back().unwrap().2;
+        let analysis_period_ms = interval_ms * num_intervals as i64;
+    
+        // Filter trades within the total analysis period
+        let relevant_trades: Vec<_> = trades.iter()
+            .filter(|&&(_, _, ts, _)| latest_trade_ts - ts <= analysis_period_ms)
+            .collect();
+    
+        if relevant_trades.len() < 2 {
+            debug!("Insufficient recent trades for Amihud's Lambda.");
+            return None;
+        }
+    
+        // Initialize vectors to store returns and volumes
+        let mut interval_returns = Vec::new();
+        let mut interval_volumes = Vec::new();
+    
+        // Compute returns and volumes clearly per interval
+        let mut interval_start = latest_trade_ts - analysis_period_ms;
+        let mut prev_interval_price: Option<f64> = None;
+        let mut interval_volume = 0.0;
+        let mut last_trade_price: Option<f64> = None;
+    
+        for &&(price, qty, ts, _) in &relevant_trades {
+            if ts >= interval_start + interval_ms {
+                if let (Some(prev_price), Some(last_price)) = (prev_interval_price, last_trade_price) {
+                    let ret = (last_price - prev_price).abs() / prev_price;
+                    if interval_volume > 0.0 {
+                        interval_returns.push(ret);
+                        interval_volumes.push(interval_volume);
+                    }
+                }
+                interval_start += interval_ms;
+                interval_volume = 0.0;
+                prev_interval_price = last_trade_price;
+            }
+    
+            interval_volume += qty;
+            last_trade_price = Some(price);
+            if prev_interval_price.is_none() {
+                prev_interval_price = Some(price);
+            }
+        }
+    
+        // Compute Amihud's Lambda
+        if interval_returns.is_empty() {
+            debug!("No valid intervals for Amihud's Lambda calculation.");
+            return None;
+        }
+    
+        let amihud_lambda: f64 = interval_returns.iter()
+            .zip(interval_volumes.iter())
+            .map(|(&r, &v)| r / v)
+            .sum::<f64>() / interval_returns.len() as f64;
+    
+        let duration = start.elapsed();
+        info!(
+            "Amihud's Lambda computed over {} intervals ({} ms each) in {:?}, value: {:.6}",
+            interval_returns.len(), interval_ms, duration, amihud_lambda
+        );
+    
+        Some(amihud_lambda)
+    }
+
+    pub async fn compute_kyle_lambda(&self, interval_ms: i64, num_intervals: usize) -> Option<f64> {
+        let trades = self.trades.lock().await;
+
+        if trades.len() < 2 {
+            warn!("Insufficient trades to compute Kyle's Lambda");
+            return None;
+        }
+
+        let start = Instant::now();
+
+        let latest_trade_ts = trades.back().unwrap().2;
+        let analysis_period_ms = interval_ms * num_intervals as i64;
+
+        let relevant_trades: Vec<_> = trades.iter()
+            .filter(|&&(_, _, ts, _)| latest_trade_ts - ts <= analysis_period_ms)
+            .collect();
+
+        if relevant_trades.len() < 2 {
+            debug!("Insufficient recent trades for Kyle's Lambda.");
+            return None;
+        }
+
+        let mut returns = Vec::new();
+        let mut signed_volumes = Vec::new();
+
+        let mut interval_start = latest_trade_ts - analysis_period_ms;
+        let mut prev_price: Option<f64> = None;
+        let mut signed_volume = 0.0;
+        let mut last_trade_price: Option<f64> = None;
+
+        for &&(price, qty, ts, buyer_maker) in &relevant_trades {
+            if ts >= interval_start + interval_ms {
+                if let (Some(prev_p), Some(last_p)) = (prev_price, last_trade_price) {
+                    let ret = (last_p - prev_p) / prev_p;
+                    returns.push(ret);
+                    signed_volumes.push(signed_volume);
+                }
+                interval_start += interval_ms;
+                signed_volume = 0.0;
+                prev_price = last_trade_price;
+            }
+
+            let direction = if buyer_maker { -1.0 } else { 1.0 };
+            signed_volume += qty * direction;
+            last_trade_price = Some(price);
+
+            if prev_price.is_none() {
+                prev_price = Some(price);
+            }
+        }
+
+        if returns.len() < 2 {
+            debug!("Not enough intervals to run regression for Kyle's Lambda.");
+            return None;
+        }
+
+        // ✅ Corrected: Pass an iterator of tuples, not a HashMap
+        let data = vec![
+            ("y", returns),
+            ("x", signed_volumes),
+        ];
+
+        let regression_data = RegressionDataBuilder::new()
+            .build_from(data.into_iter())  // ✅ Corrected: Use an iterator of tuples
+            .ok()?;
+
+        let model = FormulaRegressionBuilder::new()
+            .data(&regression_data)
+            .formula("y ~ x")
+            .fit()
+            .ok()?;
+
+        // ✅ Extract the slope (Kyle's Lambda)
+        let params = model.parameters();
+        if params.len() < 2 {
+            debug!("Regression model did not produce a valid slope coefficient.");
+            return None;
+        }
+
+        let lambda = params[1]; // First parameter is intercept, second is Kyle's Lambda (slope)
+
+        let duration = start.elapsed();
+        info!(
+            "Kyle's Lambda computed over {} intervals ({} ms each) in {:?}, value: {:.6}",
+            num_intervals, interval_ms, duration, lambda
+        );
+
+        Some(lambda)
+    }
+
+    pub async fn compute_price_impact(&self, interval_ms: i64, num_intervals: usize) -> Option<f64> {
+        let trades = self.trades.lock().await;
+    
+        if trades.len() < 2 {
+            warn!("Insufficient trades to compute Price Impact");
+            return None;
+        }
+    
+        let start = Instant::now();
+    
+        let latest_trade_ts = trades.back().unwrap().2;
+        let analysis_period_ms = interval_ms * num_intervals as i64;
+    
+        let relevant_trades: Vec<_> = trades.iter()
+            .filter(|&&(_, _, ts, _)| latest_trade_ts - ts <= analysis_period_ms)
+            .collect();
+    
+        if relevant_trades.len() < 2 {
+            debug!("Insufficient recent trades for Price Impact.");
+            return None;
+        }
+    
+        let mut price_impacts = Vec::new();
+    
+        let mut interval_start = latest_trade_ts - analysis_period_ms;
+        let mut prev_price: Option<f64> = None;
+        let mut interval_volume = 0.0;
+        let mut last_trade_price: Option<f64> = None;
+    
+        for &&(price, qty, ts, _) in &relevant_trades {
+            if ts >= interval_start + interval_ms {
+                if let (Some(prev_p), Some(last_p)) = (prev_price, last_trade_price) {
+                    if interval_volume > 0.0 {
+                        let impact = (last_p - prev_p).abs() / interval_volume;
+                        price_impacts.push(impact);
+                    }
+                }
+                interval_start += interval_ms;
+                interval_volume = 0.0;
+                prev_price = last_trade_price;
+            }
+    
+            interval_volume += qty;
+            last_trade_price = Some(price);
+            if prev_price.is_none() {
+                prev_price = Some(price);
+            }
+        }
+    
+        if price_impacts.is_empty() {
+            debug!("No valid intervals for Price Impact calculation.");
+            return None;
+        }
+    
+        let avg_price_impact: f64 = price_impacts.iter().sum::<f64>() / price_impacts.len() as f64;
+    
+        let duration = start.elapsed();
+        info!(
+            "Price Impact computed over {} intervals ({} ms each) in {:?}, value: {:.6}",
+            price_impacts.len(), interval_ms, duration, avg_price_impact
+        );
+    
+        Some(avg_price_impact)
+    }
+   
+    pub async fn compute_vwap_deviation(&self, recent_ms: i64) -> Option<f64> {
+        let trades = self.trades.lock().await;
+    
+        if trades.is_empty() {
+            warn!("No trades available to compute VWAP Deviation");
+            return None;
+        }
+    
+        let latest_trade = trades.back().unwrap();
+        let p_current = latest_trade.0; // Most recent trade price
+    
+        let vwap = self.compute_vwap(recent_ms).await?;
+    
+        if vwap == 0.0 {
+            warn!("VWAP is zero, cannot compute deviation.");
+            return None;
+        }
+    
+        let vwap_deviation = (p_current - vwap) / vwap;
+    
+        info!(
+            "VWAP Deviation computed for last {} ms: {:.6}",
+            recent_ms, vwap_deviation
+        );
+    
+        Some(vwap_deviation)
+    }
+
+    pub async fn compute_intertrade_duration(&self, recent_ms: i64) -> Option<f64> {
+        let trades = self.trades.lock().await;
+    
+        if trades.len() < 2 {
+            warn!("Insufficient trades to compute Intertrade Duration");
+            return None;
+        }
+    
+        let latest_trade_ts = trades.back().unwrap().2;
+        let analysis_period_ms = recent_ms;
+    
+        // Collect relevant trade timestamps
+        let trade_timestamps: Vec<i64> = trades.iter()
+            .filter(|&&(_, _, ts, _)| latest_trade_ts - ts <= analysis_period_ms)
+            .map(|&(_, _, ts, _)| ts)
+            .collect();
+    
+        if trade_timestamps.len() < 2 {
+            debug!("Not enough trades in the last {} ms to compute Intertrade Duration.", recent_ms);
+            return None;
+        }
+    
+        // Compute time differences between consecutive trades
+        let intertrade_durations: Vec<i64> = trade_timestamps.windows(2)
+            .map(|window| window[1] - window[0])
+            .collect();
+    
+        // Compute average intertrade duration
+        let avg_intertrade_duration: f64 = intertrade_durations.iter().sum::<i64>() as f64
+            / intertrade_durations.len() as f64;
+    
+        info!(
+            "Intertrade Duration computed for last {} ms: {:.3} ms",
+            recent_ms, avg_intertrade_duration
+        );
+    
+        Some(avg_intertrade_duration)
+    }
+
+    
 }
 
 async fn connect_to_lob_websocket(market_state: Arc<MarketState>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> 
@@ -531,6 +868,135 @@ fn periodic_volume_imbalance_logger(market_state: Arc<MarketState>) {
     });
 }
 
+fn periodic_cwtd_logger(market_state: Arc<MarketState>) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            let cwtd = market_state.compute_cwtd(100).await;
+
+            match cwtd {
+                Some(val) => info!("CWTD (100 ms): {:.3}", val),
+                None => debug!("CWTD not computable in last 100 ms."),
+            }
+        }
+    });
+}
+
+fn periodic_amihud_logger(market_state: Arc<MarketState>) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+
+            // Example: 100ms intervals, 600 intervals = 1 minute
+            let amihud_lambda = market_state.compute_amihud_lambda(100, 600).await;
+
+            match amihud_lambda {
+                Some(val) => info!("Amihud's Lambda (1-min window): {:.6}", val),
+                None => debug!("Amihud's Lambda not computable."),
+            }
+        }
+    });
+}
+
+fn periodic_kyle_lambda_logger(market_state: Arc<MarketState>) {
+    tokio::spawn(async move {
+        let update_period_as_secs : u64 = 60; // 1 minute window
+        let interval_ms = 100; // fixed interval of 100ms
+        let intervals_per_sec = 1000 / interval_ms; // clearly: 10 intervals per second
+        let num_intervals = intervals_per_sec * update_period_as_secs; // intervals in total window
+
+        loop {
+            tokio::time::sleep(Duration::from_secs(update_period_as_secs)).await;
+
+            let kyle_lambda = market_state
+                .compute_kyle_lambda(interval_ms as i64, num_intervals as usize)
+                .await;
+
+            match kyle_lambda {
+                Some(val) => {
+                    info!(
+                        "Kyle's Lambda ({}-sec window, {} intervals × {} ms): {:.6}",
+                        update_period_as_secs, num_intervals, interval_ms, val
+                    );
+                }
+                None => debug!("Kyle's Lambda not computable."),
+            }
+        }
+    });
+}
+
+fn periodic_price_impact_logger(market_state: Arc<MarketState>) {
+    tokio::spawn(async move {
+        let update_period_as_secs : u64 = 1; // 1 minute window
+        let interval_ms = 100; // Each trade window is 100ms
+        let intervals_per_sec = 1000 / interval_ms;
+        let num_intervals = intervals_per_sec * update_period_as_secs;
+
+        loop {
+            tokio::time::sleep(Duration::from_secs(update_period_as_secs)).await;
+
+            let price_impact = market_state
+                .compute_price_impact(interval_ms as i64, num_intervals as usize)
+                .await;
+
+            match price_impact {
+                Some(val) => {
+                    info!(
+                        "Price Impact ({}-sec window, {} intervals × {} ms): {:.6}",
+                        update_period_as_secs, num_intervals, interval_ms, val
+                    );
+                }
+                None => debug!("Price Impact not computable."),
+            }
+        }
+    });
+}
+
+fn periodic_vwap_deviation_logger(market_state: Arc<MarketState>) {
+    tokio::spawn(async move {
+        let update_period_as_secs = 60;
+        loop {
+            tokio::time::sleep(Duration::from_secs(update_period_as_secs)).await;
+
+            let vwap_deviation = market_state
+                .compute_vwap_deviation(60_000) // Use 1-minute VWAP window
+                .await;
+
+            match vwap_deviation {
+                Some(val) => {
+                    info!(
+                        "VWAP Deviation ({}-sec window): {:.6}",
+                        update_period_as_secs, val
+                    );
+                }
+                None => debug!("VWAP Deviation not computable."),
+            }
+        }
+    });
+}
+
+fn periodic_intertrade_duration_logger(market_state: Arc<MarketState>, update_period_as_secs: u64) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(update_period_as_secs)).await;
+
+            let intertrade_duration = market_state
+                .compute_intertrade_duration(60_000) // Use 1-minute window
+                .await;
+
+            match intertrade_duration {
+                Some(val) => {
+                    info!(
+                        "Intertrade Duration ({}-sec window): {:.3} ms",
+                        update_period_as_secs, val
+                    );
+                }
+                None => debug!("Intertrade Duration not computable."),
+            }
+        }
+    });
+}
 
 #[tokio::main]
 async fn main() 
@@ -546,6 +1012,18 @@ async fn main()
     periodic_trade_intensity_logger(Arc::clone(&market_state)); 
 
     periodic_volume_imbalance_logger(Arc::clone(&market_state)); 
+
+    periodic_cwtd_logger(Arc::clone(&market_state));
+
+    periodic_amihud_logger(Arc::clone(&market_state));
+
+    periodic_kyle_lambda_logger(Arc::clone(&market_state));
+
+    periodic_price_impact_logger(Arc::clone(&market_state));
+
+    periodic_vwap_deviation_logger(Arc::clone(&market_state));
+
+    periodic_intertrade_duration_logger(Arc::clone(&market_state), 60);
 
     let lob_task     = tokio::spawn(connect_to_lob_websocket(Arc::clone(&market_state)));
     let trade_task   = tokio::spawn(connect_to_trade_websocket(Arc::clone(&market_state)));
