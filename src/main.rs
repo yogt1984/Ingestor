@@ -920,10 +920,10 @@ async fn connect_to_trade_websocket(market_state: Arc<MarketState>) -> Result<()
 
 fn periodic_printer(market_state: Arc<MarketState>) {
     tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(1000));
         loop {
-            // wait 1 second before each snapshot
-            tokio::time::sleep(Duration::from_secs(1)).await;
 
+            interval.tick().await;
             
             let midprice = market_state.compute_midprice().await;
 
@@ -979,13 +979,11 @@ fn periodic_printer(market_state: Arc<MarketState>) {
                 Some(val) => info!("Current PW-Imbalance: {:.3}", val),
                 None => warn!("PW-Imbalance not computable (missing best bid or ask)."),
             }
-           
 
             match slope {
                 Some(val) => info!("Current Order Book Slope: {:.6}", val),
                 None => warn!("Order Book Slope not computable (missing best bid or ask)."),
             }
-
 
             match depth5 {
                 Some(val) => info!("Total Order Book Depth (Top 5 levels): {:.3}", val),
@@ -1002,8 +1000,9 @@ fn periodic_printer(market_state: Arc<MarketState>) {
 
 fn periodic_vwap_logger(market_state: Arc<MarketState>) {
     tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(100));
         loop {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            interval.tick().await; // Ensures consistent timing
 
             let vwap = market_state.compute_vwap(100).await;
 
@@ -1017,8 +1016,9 @@ fn periodic_vwap_logger(market_state: Arc<MarketState>) {
 
 fn periodic_trade_intensity_logger(market_state: Arc<MarketState>) {
     tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(100));
         loop {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            interval.tick().await;
 
             let intensity = market_state.compute_trade_intensity(100).await;
 
@@ -1032,8 +1032,9 @@ fn periodic_trade_intensity_logger(market_state: Arc<MarketState>) {
 
 fn periodic_volume_imbalance_logger(market_state: Arc<MarketState>) {
     tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(100));
         loop {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            interval.tick().await;
 
             let imbalance = market_state.compute_trade_volume_imbalance(100).await;
 
@@ -1047,8 +1048,9 @@ fn periodic_volume_imbalance_logger(market_state: Arc<MarketState>) {
 
 fn periodic_cwtd_logger(market_state: Arc<MarketState>) {
     tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(100));
         loop {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            interval.tick().await;
 
             let cwtd = market_state.compute_cwtd(100).await;
 
@@ -1062,10 +1064,10 @@ fn periodic_cwtd_logger(market_state: Arc<MarketState>) {
 
 fn periodic_amihud_logger(market_state: Arc<MarketState>) {
     tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
-            tokio::time::sleep(Duration::from_secs(60)).await;
+            interval.tick().await;
 
-            // Example: 100ms intervals, 600 intervals = 1 minute
             let amihud_lambda = market_state.compute_amihud_lambda(100, 600).await;
 
             match amihud_lambda {
@@ -1078,25 +1080,19 @@ fn periodic_amihud_logger(market_state: Arc<MarketState>) {
 
 fn periodic_kyle_lambda_logger(market_state: Arc<MarketState>) {
     tokio::spawn(async move {
-        let update_period_as_secs : u64 = 60; // 1 minute window
-        let interval_ms = 100; // fixed interval of 100ms
-        let intervals_per_sec = 1000 / interval_ms; // clearly: 10 intervals per second
-        let num_intervals = intervals_per_sec * update_period_as_secs; // intervals in total window
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        let interval_ms = 100;
+        let num_intervals = (1000 / interval_ms) * 60;
 
         loop {
-            tokio::time::sleep(Duration::from_secs(update_period_as_secs)).await;
+            interval.tick().await;
 
             let kyle_lambda = market_state
                 .compute_kyle_lambda(interval_ms as i64, num_intervals as usize)
                 .await;
 
             match kyle_lambda {
-                Some(val) => {
-                    info!(
-                        "Kyle's Lambda ({}-sec window, {} intervals × {} ms): {:.6}",
-                        update_period_as_secs, num_intervals, interval_ms, val
-                    );
-                }
+                Some(val) => info!("Kyle's Lambda (60s window): {:.6}", val),
                 None => debug!("Kyle's Lambda not computable."),
             }
         }
@@ -1105,25 +1101,19 @@ fn periodic_kyle_lambda_logger(market_state: Arc<MarketState>) {
 
 fn periodic_price_impact_logger(market_state: Arc<MarketState>) {
     tokio::spawn(async move {
-        let update_period_as_secs : u64 = 1; // 1 minute window
-        let interval_ms = 100; // Each trade window is 100ms
-        let intervals_per_sec = 1000 / interval_ms;
-        let num_intervals = intervals_per_sec * update_period_as_secs;
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        let interval_ms = 100;
+        let num_intervals = (1000 / interval_ms) * 1;
 
         loop {
-            tokio::time::sleep(Duration::from_secs(update_period_as_secs)).await;
+            interval.tick().await;
 
             let price_impact = market_state
                 .compute_price_impact(interval_ms as i64, num_intervals as usize)
                 .await;
 
             match price_impact {
-                Some(val) => {
-                    info!(
-                        "Price Impact ({}-sec window, {} intervals × {} ms): {:.6}",
-                        update_period_as_secs, num_intervals, interval_ms, val
-                    );
-                }
+                Some(val) => info!("Price Impact (1s window): {:.6}", val),
                 None => debug!("Price Impact not computable."),
             }
         }
@@ -1132,48 +1122,37 @@ fn periodic_price_impact_logger(market_state: Arc<MarketState>) {
 
 fn periodic_vwap_deviation_logger(market_state: Arc<MarketState>) {
     tokio::spawn(async move {
-        let update_period_as_secs = 60;
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
-            tokio::time::sleep(Duration::from_secs(update_period_as_secs)).await;
+            interval.tick().await;
 
-            let vwap_deviation = market_state
-                .compute_vwap_deviation(60_000) // Use 1-minute VWAP window
-                .await;
+            let vwap_deviation = market_state.compute_vwap_deviation(60_000).await;
 
             match vwap_deviation {
-                Some(val) => {
-                    info!(
-                        "VWAP Deviation ({}-sec window): {:.6}",
-                        update_period_as_secs, val
-                    );
-                }
+                Some(val) => info!("VWAP Deviation (1-min window): {:.6}", val),
                 None => debug!("VWAP Deviation not computable."),
             }
         }
     });
 }
 
+
 fn periodic_intertrade_duration_logger(market_state: Arc<MarketState>, update_period_as_secs: u64) {
     tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(update_period_as_secs));
         loop {
-            tokio::time::sleep(Duration::from_secs(update_period_as_secs)).await;
+            interval.tick().await;
 
-            let intertrade_duration = market_state
-                .compute_intertrade_duration(60_000) // Use 1-minute window
-                .await;
+            let intertrade_duration = market_state.compute_intertrade_duration(60_000).await;
 
             match intertrade_duration {
-                Some(val) => {
-                    info!(
-                        "Intertrade Duration ({}-sec window): {:.3} ms",
-                        update_period_as_secs, val
-                    );
-                }
+                Some(val) => info!("Intertrade Duration ({}s window): {:.3} ms", update_period_as_secs, val),
                 None => debug!("Intertrade Duration not computable."),
             }
         }
     });
 }
+
 
 #[tokio::main]
 async fn main() 
