@@ -848,36 +848,38 @@ impl MarketState {
     }
 }
 
-async fn connect_to_lob_websocket(market_state: Arc<MarketState>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> 
-{
+async fn connect_to_lob_websocket(market_state: Arc<MarketState>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (ws_stream, _) = connect_async(LOB_URL).await?;
     info!("Connected to LOB WebSocket");
     let (_, mut read) = ws_stream.split();
-    while let Some(Ok(message)) = read.next().await 
-    {
+
+    while let Some(Ok(message)) = read.next().await {
         if let Message::Text(text) = message {
             let start = Instant::now();
             match serde_json::from_str::<DepthUpdate>(&text) {
                 Ok(depth_update) => {
                     let mut bids = market_state.bids.lock().await;
                     let mut asks = market_state.asks.lock().await;
-                    for bid in depth_update.b.iter() {
+
+                    for bid in &depth_update.b {
                         if let (Ok(price), Ok(qty)) = (bid[0].parse::<f64>(), bid[1].parse::<f64>()) {
                             bids.push_back((price, qty));
                             if bids.len() > 1000 { bids.pop_front(); }
                         }
                     }
-                    for ask in depth_update.a.iter() {
+
+                    for ask in &depth_update.a {
                         if let (Ok(price), Ok(qty)) = (ask[0].parse::<f64>(), ask[1].parse::<f64>()) {
                             asks.push_back((price, qty));
                             if asks.len() > 1000 { asks.pop_front(); }
                         }
                     }
+
                     let duration = start.elapsed();
                     info!("LOB ingestion completed ({} bids, {} asks) in {:?}", bids.len(), asks.len(), duration);
                 }
                 Err(err) => {
-                    println!("Failed to parse LOB message: {}\nError: {}", text, err);
+                    error!("LOB WebSocket: Failed to parse message: {}\nError: {}", text, err);
                 }
             }
         }
@@ -885,27 +887,30 @@ async fn connect_to_lob_websocket(market_state: Arc<MarketState>) -> Result<(), 
     Ok(())
 }
 
-async fn connect_to_trade_websocket(market_state: Arc<MarketState>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> 
-{
+async fn connect_to_trade_websocket(market_state: Arc<MarketState>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (ws_stream, _) = connect_async(TRADE_URL).await?;
     info!("Connected to Trade WebSocket");
     let (_, mut read) = ws_stream.split();
+
     while let Some(Ok(message)) = read.next().await {
         if let Message::Text(text) = message {
             let start = Instant::now();
             match serde_json::from_str::<TradeUpdate>(&text) {
                 Ok(trade_update) => {
                     let mut trades = market_state.trades.lock().await;
+
                     if let (Ok(price), Ok(qty)) = (trade_update.p.parse::<f64>(), trade_update.q.parse::<f64>()) {
-                        trades.push_back((price, qty, trade_update.T as i64, trade_update.m)); 
-                        if trades.len() > 10000 { trades.pop_front(); }
-                        //println!("Stored Trade: Price: {}, Qty: {}, Time: {}", price, qty, trade_update.T);
+                        trades.push_back((price, qty, trade_update.T as i64, trade_update.m));
+                        if trades.len() > QUEUE_SIZE { trades.pop_front(); }
+                    } else {
+                        warn!("Trade WebSocket: Invalid price or quantity in message: {}", text);
                     }
+
                     let duration = start.elapsed();
                     info!("Trade ingestion completed ({} total trades) in {:?}", trades.len(), duration);
                 }
                 Err(err) => {
-                    println!("Failed to parse trade message: {}\nError: {}", text, err);
+                    error!("Trade WebSocket: Failed to parse message: {}\nError: {}", text, err);
                 }
             }
         }
