@@ -849,73 +849,103 @@ impl MarketState {
 }
 
 async fn connect_to_lob_websocket(market_state: Arc<MarketState>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let (ws_stream, _) = connect_async(LOB_URL).await?;
-    info!("Connected to LOB WebSocket");
-    let (_, mut read) = ws_stream.split();
+    let mut retry_delay = Duration::from_secs(1); // Start with 1 second
 
-    while let Some(Ok(message)) = read.next().await {
-        if let Message::Text(text) = message {
-            let start = Instant::now();
-            match serde_json::from_str::<DepthUpdate>(&text) {
-                Ok(depth_update) => {
-                    let mut bids = market_state.bids.lock().await;
-                    let mut asks = market_state.asks.lock().await;
+    loop {
+        match connect_async(LOB_URL).await {
+            Ok((ws_stream, _)) => {
+                info!("Connected to LOB WebSocket");
+                let (_, mut read) = ws_stream.split();
 
-                    for bid in &depth_update.b {
-                        if let (Ok(price), Ok(qty)) = (bid[0].parse::<f64>(), bid[1].parse::<f64>()) {
-                            bids.push_back((price, qty));
-                            if bids.len() > 1000 { bids.pop_front(); }
+                while let Some(Ok(message)) = read.next().await {
+                    if let Message::Text(text) = message {
+                        let start = Instant::now();
+                        match serde_json::from_str::<DepthUpdate>(&text) {
+                            Ok(depth_update) => {
+                                let mut bids = market_state.bids.lock().await;
+                                let mut asks = market_state.asks.lock().await;
+
+                                for bid in &depth_update.b {
+                                    if let (Ok(price), Ok(qty)) = (bid[0].parse::<f64>(), bid[1].parse::<f64>()) {
+                                        bids.push_back((price, qty));
+                                        if bids.len() > 1000 { bids.pop_front(); }
+                                    }
+                                }
+
+                                for ask in &depth_update.a {
+                                    if let (Ok(price), Ok(qty)) = (ask[0].parse::<f64>(), ask[1].parse::<f64>()) {
+                                        asks.push_back((price, qty));
+                                        if asks.len() > 1000 { asks.pop_front(); }
+                                    }
+                                }
+
+                                let duration = start.elapsed();
+                                debug!("LOB ingestion completed ({} bids, {} asks) in {:?}", bids.len(), asks.len(), duration);
+                            }
+                            Err(err) => {
+                                error!("LOB WebSocket: Failed to parse message: {}\nError: {}", text, err);
+                            }
                         }
                     }
-
-                    for ask in &depth_update.a {
-                        if let (Ok(price), Ok(qty)) = (ask[0].parse::<f64>(), ask[1].parse::<f64>()) {
-                            asks.push_back((price, qty));
-                            if asks.len() > 1000 { asks.pop_front(); }
-                        }
-                    }
-
-                    let duration = start.elapsed();
-                    info!("LOB ingestion completed ({} bids, {} asks) in {:?}", bids.len(), asks.len(), duration);
                 }
-                Err(err) => {
-                    error!("LOB WebSocket: Failed to parse message: {}\nError: {}", text, err);
-                }
+                // If we reach here, connection was lost. Try to reconnect.
+                warn!("LOB WebSocket connection lost. Reconnecting...");
+            }
+            Err(err) => {
+                error!("Failed to connect to LOB WebSocket: {}", err);
             }
         }
+
+        // Apply exponential backoff
+        tokio::time::sleep(retry_delay).await;
+        retry_delay = std::cmp::min(retry_delay * 2, Duration::from_secs(60)); // Max backoff: 60 seconds
     }
-    Ok(())
 }
 
 async fn connect_to_trade_websocket(market_state: Arc<MarketState>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let (ws_stream, _) = connect_async(TRADE_URL).await?;
-    info!("Connected to Trade WebSocket");
-    let (_, mut read) = ws_stream.split();
+    let mut retry_delay = Duration::from_secs(1); // Start with 1 second
 
-    while let Some(Ok(message)) = read.next().await {
-        if let Message::Text(text) = message {
-            let start = Instant::now();
-            match serde_json::from_str::<TradeUpdate>(&text) {
-                Ok(trade_update) => {
-                    let mut trades = market_state.trades.lock().await;
+    loop {
+        match connect_async(TRADE_URL).await {
+            Ok((ws_stream, _)) => {
+                info!("Connected to Trade WebSocket");
+                let (_, mut read) = ws_stream.split();
 
-                    if let (Ok(price), Ok(qty)) = (trade_update.p.parse::<f64>(), trade_update.q.parse::<f64>()) {
-                        trades.push_back((price, qty, trade_update.T as i64, trade_update.m));
-                        if trades.len() > QUEUE_SIZE { trades.pop_front(); }
-                    } else {
-                        warn!("Trade WebSocket: Invalid price or quantity in message: {}", text);
+                while let Some(Ok(message)) = read.next().await {
+                    if let Message::Text(text) = message {
+                        let start = Instant::now();
+                        match serde_json::from_str::<TradeUpdate>(&text) {
+                            Ok(trade_update) => {
+                                let mut trades = market_state.trades.lock().await;
+
+                                if let (Ok(price), Ok(qty)) = (trade_update.p.parse::<f64>(), trade_update.q.parse::<f64>()) {
+                                    trades.push_back((price, qty, trade_update.T as i64, trade_update.m));
+                                    if trades.len() > QUEUE_SIZE { trades.pop_front(); }
+                                } else {
+                                    warn!("Trade WebSocket: Invalid price or quantity in message: {}", text);
+                                }
+
+                                let duration = start.elapsed();
+                                debug!("Trade ingestion completed ({} total trades) in {:?}", trades.len(), duration);
+                            }
+                            Err(err) => {
+                                error!("Trade WebSocket: Failed to parse message: {}\nError: {}", text, err);
+                            }
+                        }
                     }
-
-                    let duration = start.elapsed();
-                    info!("Trade ingestion completed ({} total trades) in {:?}", trades.len(), duration);
                 }
-                Err(err) => {
-                    error!("Trade WebSocket: Failed to parse message: {}\nError: {}", text, err);
-                }
+                // If we reach here, connection was lost. Try to reconnect.
+                warn!("Trade WebSocket connection lost. Reconnecting...");
+            }
+            Err(err) => {
+                error!("Failed to connect to Trade WebSocket: {}", err);
             }
         }
+
+        // Apply exponential backoff
+        tokio::time::sleep(retry_delay).await;
+        retry_delay = std::cmp::min(retry_delay * 2, Duration::from_secs(60)); // Max backoff: 60 seconds
     }
-    Ok(())
 }
 
 fn periodic_printer(market_state: Arc<MarketState>) {
