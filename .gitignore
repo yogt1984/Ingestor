@@ -1,5 +1,7 @@
 backlog
 
+*.swp
+
 target/
 **/target/
 **/target/debug/
