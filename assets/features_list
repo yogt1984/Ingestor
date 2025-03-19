@@ -20,7 +20,6 @@ intertrade_duration	: measures the time between consecutive trades, shorter dura
 
 
 to_be_implemented:
-
 spectral features:
 volatility              : measures short term varience
 hurst_exponent		: measures mean reversion vs trend following behaviour
@@ -32,4 +31,5 @@ spectral_entropy	: measures randomnes   in price fluctuations
 shannon_entropy		: measures uncertainty in price movements
 
 
-definition of the datatypes
+
+chatgpt feedback:

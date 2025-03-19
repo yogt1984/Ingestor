@@ -13,6 +13,7 @@ use log::{info, warn, error, debug};
 use env_logger;
 use linregress::{FormulaRegressionBuilder, RegressionDataBuilder};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 
 const LOB_URL: &str     = "wss://stream.binance.com:9443/ws/btcusdt@depth";
@@ -44,376 +45,500 @@ struct TradeUpdate {
 }
 
 pub struct MarketState {
-    pub bids:   Arc<AsyncMutex<VecDeque<(f64, f64)>>>,
-    pub asks:   Arc<AsyncMutex<VecDeque<(f64, f64)>>>,
-    pub trades: Arc<AsyncMutex<VecDeque<(f64, f64, i64, bool)>>>,
+    pub bids:                               Arc<AsyncMutex<VecDeque<(f64, f64)>>>,
+    pub asks:                               Arc<AsyncMutex<VecDeque<(f64, f64)>>>,
+    pub trades:                             Arc<AsyncMutex<VecDeque<(f64, f64, i64, bool)>>>,
+    last_vwap:                              AtomicU64,
+    last_vwap_timestamp:                    AtomicU64,
+    last_trade_intensity:                   AtomicU64, 
+    last_trade_intensity_timestamp:         AtomicU64,
+    last_trade_volume_imbalance:            AtomicU64, 
+    last_trade_volume_imbalance_timestamp:  AtomicU64,
+    last_cwtd:                              AtomicU64, 
+    last_cwtd_timestamp:                    AtomicU64,
+    last_amihud_lambda:                     AtomicU64,  
+    last_amihud_timestamp:                  AtomicU64,  
+    last_kyle_lambda:                       AtomicU64,
+    last_kyle_timestamp:                    AtomicU64,
+    last_price_impact:                      AtomicU64,  
+    last_price_impact_timestamp:            AtomicU64,
+    last_vwap_deviation:                    AtomicU64,  
+    last_vwap_deviation_timestamp:          AtomicU64,
+    last_intertrade_duration:               AtomicU64,
+    last_intertrade_timestamp:              AtomicU64,
 }
 
 impl MarketState {
     pub fn new() -> Self {
         Self {
-            bids:   Arc::new(AsyncMutex::new(VecDeque::with_capacity(QUEUE_SIZE))),
-            asks:   Arc::new(AsyncMutex::new(VecDeque::with_capacity(QUEUE_SIZE))),
-            trades: Arc::new(AsyncMutex::new(VecDeque::with_capacity(QUEUE_SIZE))),
+            bids:                                   Arc::new(AsyncMutex::new(VecDeque::with_capacity(QUEUE_SIZE))),
+            asks:                                   Arc::new(AsyncMutex::new(VecDeque::with_capacity(QUEUE_SIZE))),
+            trades:                                 Arc::new(AsyncMutex::new(VecDeque::with_capacity(QUEUE_SIZE))),
+            last_vwap:                              AtomicU64::new(0),
+            last_vwap_timestamp:                    AtomicU64::new(0),
+            last_trade_intensity:                   AtomicU64::new(0),
+            last_trade_intensity_timestamp:         AtomicU64::new(0),
+            last_trade_volume_imbalance:            AtomicU64::new(0),
+            last_trade_volume_imbalance_timestamp:  AtomicU64::new(0),
+            last_cwtd:                              AtomicU64::new(0),
+            last_cwtd_timestamp:                    AtomicU64::new(0),
+            last_amihud_lambda:                     AtomicU64::new(0),
+            last_amihud_timestamp:                  AtomicU64::new(0), 
+            last_kyle_lambda:                       AtomicU64::new(0),
+            last_kyle_timestamp:                    AtomicU64::new(0),
+            last_price_impact:                      AtomicU64::new(0),
+            last_price_impact_timestamp:            AtomicU64::new(0),
+            last_vwap_deviation:                    AtomicU64::new(0),  
+            last_vwap_deviation_timestamp:          AtomicU64::new(0),
+            last_intertrade_duration:               AtomicU64::new(0),
+            last_intertrade_timestamp:              AtomicU64::new(0),
         }
     }
 
     pub async fn compute_midprice(&self) -> Option<f64> {
-        let bids = self.bids.lock().await;
-        let asks = self.asks.lock().await;
-
         let start = Instant::now();
-        let best_bid = bids.iter().filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
-                                .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        let best_ask = asks.iter().filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
-                                .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        
+    
+        // Concurrently acquire locks for bids and asks
+        let (bids, asks) = tokio::join!(self.bids.lock(), self.asks.lock());
+    
+        // Find the best bid and best ask
+        let best_bid = bids.iter()
+            .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
+            .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    
+        let best_ask = asks.iter()
+            .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    
         let duration = start.elapsed();
-        info!("midprice computed in {:?}", duration);
-
-        match (best_bid, best_ask) 
-        {
+        info!("Midprice computed in {:?}", duration);
+    
+        // Compute midprice if both best bid and best ask exist
+        match (best_bid, best_ask) {
             (Some(bid), Some(ask)) => Some((bid.0 + ask.0) / 2.0),
-            _ => None,
+            _ => {
+                warn!("Midprice not computable (missing best bid or ask).");
+                None
+            }
         }
     }
-
-
-    pub async fn compute_spread(&self) -> Option<f64> {
-        let bids = self.bids.lock().await;
-        let asks = self.asks.lock().await;
     
+    pub async fn compute_spread(&self) -> Option<f64> {
         let start = Instant::now();
+    
+        // Concurrently acquire locks for bids and asks
+        let (bids, asks) = tokio::join!(self.bids.lock(), self.asks.lock());
+    
+        // Find the best bid and best ask
         let best_bid = bids.iter()
-                           .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
-                           .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-                           
+            .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
+            .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    
         let best_ask = asks.iter()
-                           .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
-                           .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        
+            .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    
         let duration = start.elapsed();
         info!("Spread computed in {:?}", duration);
     
+        // Compute spread if both best bid and best ask exist
         match (best_bid, best_ask) {
             (Some(bid), Some(ask)) => Some(ask.0 - bid.0),
-            _ => None,
+            _ => {
+                warn!("Spread not computable (missing best bid or ask).");
+                None
+            }
         }
     }
-
+    
 
     pub async fn compute_imbalance(&self) -> Option<f64> {
-        let bids = self.bids.lock().await;
-        let asks = self.asks.lock().await;
-    
         let start = Instant::now();
     
+        // Concurrently acquire locks for bids and asks
+        let (bids, asks) = tokio::join!(self.bids.lock(), self.asks.lock());
+    
+        // Find the best bid and best ask with valid price and quantity
         let best_bid = bids.iter()
-                           .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
-                           .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
+            .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     
         let best_ask = asks.iter()
-                           .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
-                           .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     
         let duration = start.elapsed();
         info!("Imbalance computed in {:?}", duration);
     
+        // Compute imbalance only if both best bid and best ask exist
         match (best_bid, best_ask) {
-            (Some((_, bid_qty)), Some((_, ask_qty))) if (bid_qty + ask_qty) > 0.0 => {
-                Some((bid_qty - ask_qty) / (bid_qty + ask_qty))
-            },
-            _ => None,
+            (Some((_, bid_qty)), Some((_, ask_qty))) => {
+                let total_qty = bid_qty + ask_qty;
+                if total_qty > 0.0 {
+                    let imbalance = (bid_qty - ask_qty) / total_qty;
+                    Some(imbalance)
+                } else {
+                    warn!("Imbalance not computable (zero total volume).");
+                    None
+                }
+            }
+            _ => {
+                warn!("Imbalance not computable (missing best bid or ask).");
+                None
+            }
         }
     }
-
-    pub async fn compute_pwimbalance(&self) -> Option<f64> {
-        let bids = self.bids.lock().await;
-        let asks = self.asks.lock().await;
     
+    pub async fn compute_pwimbalance(&self) -> Option<f64> {
         let start = Instant::now();
     
+        // Concurrently acquire locks for bids and asks
+        let (bids, asks) = tokio::join!(self.bids.lock(), self.asks.lock());
+    
+        // Find the best bid and best ask with valid price and quantity
         let best_bid = bids.iter()
-                           .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
-                           .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
+            .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     
         let best_ask = asks.iter()
-                           .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
-                           .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     
         let duration = start.elapsed();
-        info!("pwimbalance computed in {:?}", duration);
+        info!("PW-Imbalance computed in {:?}", duration);
     
+        // Compute price-weighted imbalance only if both best bid and best ask exist
         match (best_bid, best_ask) {
             (Some((bid_price, bid_qty)), Some((ask_price, ask_qty))) => {
                 let bid_product = bid_price * bid_qty;
                 let ask_product = ask_price * ask_qty;
+                let total_product = bid_product + ask_product;
     
-                if (bid_product + ask_product) > 0.0 {
-                    Some((bid_product - ask_product) / (bid_product + ask_product))
+                if total_product > 0.0 {
+                    let pw_imbalance = (bid_product - ask_product) / total_product;
+                    Some(pw_imbalance)
                 } else {
+                    warn!("PW-Imbalance not computable (zero total weighted volume).");
                     None
                 }
-            },
-            _ => None,
+            }
+            _ => {
+                warn!("PW-Imbalance not computable (missing best bid or ask).");
+                None
+            }
         }
     }
-
-    pub async fn compute_slope(&self) -> Option<f64> {
-        let bids = self.bids.lock().await;
-        let asks = self.asks.lock().await;
     
+    pub async fn compute_slope(&self) -> Option<f64> {
         let start = Instant::now();
     
+        // Concurrently acquire locks for bids and asks
+        let (bids, asks) = tokio::join!(self.bids.lock(), self.asks.lock());
+    
+        // Find the best bid and best ask with valid price and quantity
         let best_bid = bids.iter()
-                           .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
-                           .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
+            .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     
         let best_ask = asks.iter()
-                           .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
-                           .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     
         let duration = start.elapsed();
-        info!("Slope computed in {:?}", duration);
+        info!("Order Book Slope computed in {:?}", duration);
     
+        // Compute slope if both best bid and best ask exist
         match (best_bid, best_ask) {
-            (Some((bid_price, bid_qty)), Some((ask_price, ask_qty))) if (bid_qty + ask_qty) > 0.0 => {
-                Some((ask_price - bid_price).abs() / (bid_qty + ask_qty))
-            },
-            _ => None,
+            (Some((bid_price, bid_qty)), Some((ask_price, ask_qty))) => {
+                let total_qty = bid_qty + ask_qty;
+                if total_qty > 0.0 {
+                    let slope = (ask_price - bid_price).abs() / total_qty;
+                    Some(slope)
+                } else {
+                    warn!("Slope not computable (zero total volume).");
+                    None
+                }
+            }
+            _ => {
+                warn!("Slope not computable (missing best bid or ask).");
+                None
+            }
         }
     }
 
     pub async fn compute_depthN(&self, n: usize) -> Option<f64> {
-        let bids = self.bids.lock().await;
-        let asks = self.asks.lock().await;
-    
         let start = Instant::now();
     
-        let mut sorted_bids = bids.iter()
-                                  .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
-                                  .collect::<Vec<_>>();
-        sorted_bids.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        // Concurrently acquire locks for bids and asks
+        let (bids, asks) = tokio::join!(self.bids.lock(), self.asks.lock());
     
-        let mut sorted_asks = asks.iter()
-                                  .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
-                                  .collect::<Vec<_>>();
-        sorted_asks.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        // Filter and sort bids (descending order)
+        let mut sorted_bids: Vec<_> = bids.iter()
+            .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
+            .collect();
+        sorted_bids.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     
+        // Filter and sort asks (ascending order)
+        let mut sorted_asks: Vec<_> = asks.iter()
+            .filter(|&&(price, qty)| price > 0.0 && qty > 0.0)
+            .collect();
+        sorted_asks.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    
+        // Compute total depth for top `n` levels
         let bid_depth: f64 = sorted_bids.iter().take(n).map(|&&(_, qty)| qty).sum();
         let ask_depth: f64 = sorted_asks.iter().take(n).map(|&&(_, qty)| qty).sum();
-    
         let total_depth = bid_depth + ask_depth;
     
         let duration = start.elapsed();
-        info!("Depth computed for top {} levels in {:?}", n, duration);
+        info!("Total Depth for top {} levels computed in {:?}", n, duration);
     
         if total_depth > 0.0 {
             Some(total_depth)
         } else {
+            warn!("Depth N={} not computable (no valid orders).", n);
             None
         }
     }
-
+    
     pub async fn compute_vwap(&self, recent_ms: i64) -> Option<f64> {
         let trades = self.trades.lock().await;
-    
+
         if trades.is_empty() {
             warn!("No trades available to compute VWAP");
             return None;
         }
-    
+
         let latest_trade_ts = trades.back().unwrap().2;
-    
+
+        // Read last cached values (VWAP stored as scaled integer)
+        let last_cached_vwap = self.last_vwap.load(Ordering::Relaxed) as f64 / 1_000_000.0;
+        let last_cached_ts = self.last_vwap_timestamp.load(Ordering::Relaxed) as i64;
+
+        // If no new trades, return cached VWAP
+        if latest_trade_ts <= last_cached_ts {
+            debug!("VWAP cache hit. Returning cached VWAP: {:.6}", last_cached_vwap);
+            return Some(last_cached_vwap);
+        }
+
         let start = Instant::now();
-    
-        // Clearly collect relevant trades first
+
+        // Filter relevant trades
         let relevant_trades: Vec<_> = trades.iter()
             .filter(|&&( _, _, ts, _)| latest_trade_ts - ts <= recent_ms)
             .collect();
-    
-        // Sum total volume separately and clearly
+
         let total_volume: f64 = relevant_trades.iter().map(|&&( _, qty, _, _)| qty).sum();
-    
         if total_volume == 0.0 {
             debug!("VWAP: No volume in the last {} ms", recent_ms);
             return None;
         }
-    
-        // Compute VWAP separately and clearly
+
+        // Compute VWAP
         let vwap_sum: f64 = relevant_trades.iter()
             .map(|&&(price, qty, _, _)| price * qty)
             .sum();
-    
+
         let vwap = vwap_sum / total_volume;
-    
+
+        // Store VWAP as an integer (scaled by 1_000_000)
+        self.last_vwap.store((vwap * 1_000_000.0) as u64, Ordering::Relaxed);
+        self.last_vwap_timestamp.store(latest_trade_ts as u64, Ordering::Relaxed);
+
         let duration = start.elapsed();
-        info!("VWAP computed for last {} ms in {:?}", recent_ms, duration);
-    
+        info!("VWAP computed for last {} ms in {:?}, Value: {:.6}", recent_ms, duration, vwap);
+
         Some(vwap)
     }
     
     pub async fn compute_trade_intensity(&self, recent_ms: i64) -> Option<f64> {
-        let trades = self.trades.lock().await;
-    
-        if trades.is_empty() {
-            warn!("No trades available to compute trade intensity");
-            return None;
-        }
-    
-        let latest_trade_ts = trades.back().unwrap().2;
-    
-        let start = Instant::now();
-    
-        let trade_count = trades.iter()
-            .filter(|&&(_, _, ts, _)| latest_trade_ts - ts <= recent_ms)
-            .count();
-
-    
         if recent_ms == 0 {
             warn!("recent_ms cannot be zero for trade intensity calculation.");
             return None;
         }
-    
+
+        let trades = self.trades.lock().await;
+
+        if trades.is_empty() {
+            warn!("No trades available to compute trade intensity");
+            return None;
+        }
+
+        let latest_trade_ts = trades.back().unwrap().2;
+
+        // Read last cached values
+        let last_cached_intensity = self.last_trade_intensity.load(Ordering::Relaxed) as f64 / 1_000_000.0;
+        let last_cached_ts = self.last_trade_intensity_timestamp.load(Ordering::Relaxed) as i64;
+
+        // If no new trades, return cached intensity
+        if latest_trade_ts <= last_cached_ts {
+            debug!("Trade intensity cache hit. Returning cached intensity: {:.6} trades/sec", last_cached_intensity);
+            return Some(last_cached_intensity);
+        }
+
+        let start = Instant::now();
+
+        // Filter recent trades
+        let trade_count = trades.iter()
+            .filter(|&&(_, _, ts, _)| latest_trade_ts - ts <= recent_ms)
+            .count();
+
         let intensity = (trade_count as f64) / (recent_ms as f64 / 1000.0);
-    
+
+        // Store computed trade intensity
+        self.last_trade_intensity.store((intensity * 1_000_000.0) as u64, Ordering::Relaxed);
+        self.last_trade_intensity_timestamp.store(latest_trade_ts as u64, Ordering::Relaxed);
+
         let duration = start.elapsed();
         info!(
-            "Trade intensity computed for last {} ms ({} trades) in {:?}",
-            recent_ms, trade_count, duration
+            "Trade intensity computed for last {} ms ({} trades) in {:?}, Value: {:.6} trades/sec",
+            recent_ms, trade_count, duration, intensity
         );
-    
+
         Some(intensity)
     }
 
     pub async fn compute_trade_volume_imbalance(&self, recent_ms: i64) -> Option<f64> {
         let trades = self.trades.lock().await;
-    
+
         if trades.is_empty() {
             warn!("No trades available to compute volume imbalance");
             return None;
         }
-    
+
         let latest_trade_ts = trades.back().unwrap().2;
-    
-        let start = Instant::now();
-    
-        let relevant_trades: Vec<_> = trades.iter()
-            .filter(|&&(_, _, ts, _)| latest_trade_ts - ts <= recent_ms)
-            .collect();
-    
-        if relevant_trades.is_empty() {
-            debug!("No trades in the recent {} ms for volume imbalance.", recent_ms);
-            return None;
+
+        // Read last cached values (stored as scaled integer)
+        let last_cached_imbalance = self.last_trade_volume_imbalance.load(Ordering::Relaxed) as f64 / 1_000_000.0;
+        let last_cached_ts = self.last_trade_volume_imbalance_timestamp.load(Ordering::Relaxed) as i64;
+
+        // If no new trades, return cached imbalance
+        if latest_trade_ts <= last_cached_ts {
+            debug!("Trade volume imbalance cache hit. Returning cached value: {:.6}", last_cached_imbalance);
+            return Some(last_cached_imbalance);
         }
-    
-        let mut buy_volume = 0.0;
-        let mut sell_volume = 0.0;
-    
-        // Buyer_maker = true means trade was initiated by seller (aggressive sell)
-        // Buyer_maker = false means trade was initiated by buyer (aggressive buy)
-        for &&(price, qty, _, buyer_maker) in &relevant_trades {
+
+        let start = Instant::now();
+
+        // Initialize volume counters
+        let (mut buy_volume, mut sell_volume) = (0.0, 0.0);
+
+        // Accumulate buy/sell volume efficiently
+        for &(price, qty, ts, buyer_maker) in trades.iter().rev() {
+            if latest_trade_ts - ts > recent_ms {
+                break;
+            }
             if buyer_maker {
-                sell_volume += qty;  // aggressive sell
+                sell_volume += qty; // Aggressive sell
             } else {
-                buy_volume += qty;   // aggressive buy
+                buy_volume += qty; // Aggressive buy
             }
         }
-    
+
         let total_volume = buy_volume + sell_volume;
-    
         if total_volume == 0.0 {
             debug!("Trade volumes neutral or insufficient to calculate imbalance.");
             return None;
         }
-    
+
         let imbalance = (buy_volume - sell_volume) / total_volume;
-    
+
+        // Store computed imbalance (scaled for precision)
+        self.last_trade_volume_imbalance.store((imbalance * 1_000_000.0) as u64, Ordering::Relaxed);
+        self.last_trade_volume_imbalance_timestamp.store(latest_trade_ts as u64, Ordering::Relaxed);
+
         let duration = start.elapsed();
         info!(
-            "Trade volume imbalance computed for last {} ms in {:?}",
-            recent_ms, duration
+            "Trade volume imbalance computed for last {} ms in {:?}, Value: {:.6}",
+            recent_ms, duration, imbalance
         );
-    
+
         Some(imbalance)
     }
    
     pub async fn compute_cwtd(&self, recent_ms: i64) -> Option<f64> {
         let trades = self.trades.lock().await;
-    
+
         if trades.is_empty() {
             warn!("No trades available to compute CWTD");
             return None;
         }
-    
+
         let latest_trade_ts = trades.back().unwrap().2;
-    
-        let start = Instant::now();
-    
-        let relevant_trades: Vec<_> = trades.iter()
-            .filter(|&&(_, _, ts, _)| latest_trade_ts - ts <= recent_ms)
-            .collect();
-    
-        if relevant_trades.is_empty() {
-            debug!("No trades in the recent {} ms for CWTD.", recent_ms);
-            return None;
+
+        // Read last cached CWTD
+        let last_cached_cwtd = self.last_cwtd.load(Ordering::Relaxed) as f64 / 1_000_000.0;
+        let last_cached_ts = self.last_cwtd_timestamp.load(Ordering::Relaxed) as i64;
+
+        // If no new trades, return cached CWTD
+        if latest_trade_ts <= last_cached_ts {
+            debug!("CWTD cache hit. Returning cached value: {:.6}", last_cached_cwtd);
+            return Some(last_cached_cwtd);
         }
-    
-        // Compute cumulative weighted trade direction clearly
-        let cwtd: f64 = relevant_trades.iter()
-            .map(|&&(price, qty, _, buyer_maker)| {
+
+        let start = Instant::now();
+
+        // Compute CWTD in a single-pass iteration
+        let cwtd: f64 = trades.iter().rev()
+            .take_while(|&&(_, _, ts, _)| latest_trade_ts - ts <= recent_ms)
+            .map(|&(_, qty, _, buyer_maker)| {
                 let direction = if buyer_maker { -1.0 } else { 1.0 };
                 qty * direction
             })
             .sum();
-    
+
+        // Cache computed CWTD (scaled for precision)
+        self.last_cwtd.store((cwtd * 1_000_000.0)      as u64, Ordering::Relaxed);
+        self.last_cwtd_timestamp.store(latest_trade_ts as u64, Ordering::Relaxed);
+
         let duration = start.elapsed();
         info!(
-            "CWTD computed for last {} ms in {:?}, result: {:.3}",
+            "CWTD computed for last {} ms in {:?}, result: {:.6}",
             recent_ms, duration, cwtd
         );
-    
+
         Some(cwtd)
     }
 
     pub async fn compute_amihud_lambda(&self, interval_ms: i64, num_intervals: usize) -> Option<f64> {
         let trades = self.trades.lock().await;
-    
+
         if trades.len() < 2 {
             warn!("Insufficient trades to compute Amihud's Lambda");
             return None;
         }
-    
-        let start = Instant::now();
-    
-        // Use the most recent trade timestamp as reference
+
         let latest_trade_ts = trades.back().unwrap().2;
         let analysis_period_ms = interval_ms * num_intervals as i64;
-    
-        // Filter trades within the total analysis period
-        let relevant_trades: Vec<_> = trades.iter()
-            .filter(|&&(_, _, ts, _)| latest_trade_ts - ts <= analysis_period_ms)
-            .collect();
-    
-        if relevant_trades.len() < 2 {
-            debug!("Insufficient recent trades for Amihud's Lambda.");
-            return None;
+
+        // Read last cached value
+        let last_cached_lambda = self.last_amihud_lambda.load(Ordering::Relaxed) as f64 / 1_000_000.0;
+        let last_cached_ts = self.last_amihud_timestamp.load(Ordering::Relaxed) as i64;
+
+        // If no new trades, return cached Lambda
+        if latest_trade_ts <= last_cached_ts {
+            debug!("Amihud's Lambda cache hit. Returning cached value: {:.6}", last_cached_lambda);
+            return Some(last_cached_lambda);
         }
-    
-        // Initialize vectors to store returns and volumes
-        let mut interval_returns = Vec::new();
-        let mut interval_volumes = Vec::new();
-    
-        // Compute returns and volumes clearly per interval
+
+        let start = Instant::now();
+
+        // Efficient filtering using reverse iteration
+        let mut interval_returns = Vec::with_capacity(num_intervals);
+        let mut interval_volumes = Vec::with_capacity(num_intervals);
+
         let mut interval_start = latest_trade_ts - analysis_period_ms;
-        let mut prev_interval_price: Option<f64> = None;
+        let mut prev_price: Option<f64> = None;
         let mut interval_volume = 0.0;
         let mut last_trade_price: Option<f64> = None;
-    
-        for &&(price, qty, ts, _) in &relevant_trades {
+
+        for &(price, qty, ts, _) in trades.iter().rev() {
+            if ts < interval_start {
+                break;
+            }
+
             if ts >= interval_start + interval_ms {
-                if let (Some(prev_price), Some(last_price)) = (prev_interval_price, last_trade_price) {
-                    let ret = (last_price - prev_price).abs() / prev_price;
+                if let (Some(prev_p), Some(last_p)) = (prev_price, last_trade_price) {
+                    let ret = (last_p - prev_p).abs() / prev_p;
                     if interval_volume > 0.0 {
                         interval_returns.push(ret);
                         interval_volumes.push(interval_volume);
@@ -421,33 +546,36 @@ impl MarketState {
                 }
                 interval_start += interval_ms;
                 interval_volume = 0.0;
-                prev_interval_price = last_trade_price;
+                prev_price = last_trade_price;
             }
-    
+
             interval_volume += qty;
             last_trade_price = Some(price);
-            if prev_interval_price.is_none() {
-                prev_interval_price = Some(price);
+            if prev_price.is_none() {
+                prev_price = Some(price);
             }
         }
-    
+
         // Compute Amihud's Lambda
         if interval_returns.is_empty() {
             debug!("No valid intervals for Amihud's Lambda calculation.");
             return None;
         }
-    
+
         let amihud_lambda: f64 = interval_returns.iter()
             .zip(interval_volumes.iter())
             .map(|(&r, &v)| r / v)
             .sum::<f64>() / interval_returns.len() as f64;
-    
+
+        // Cache computed lambda
+        self.last_amihud_lambda.store((amihud_lambda * 1_000_000.0) as u64, Ordering::Relaxed);
+        self.last_amihud_timestamp.store(latest_trade_ts as u64, Ordering::Relaxed);
+
         let duration = start.elapsed();
         info!(
             "Amihud's Lambda computed over {} intervals ({} ms each) in {:?}, value: {:.6}",
             interval_returns.len(), interval_ms, duration, amihud_lambda
         );
-    
         Some(amihud_lambda)
     }
 
@@ -459,29 +587,34 @@ impl MarketState {
             return None;
         }
 
-        let start = Instant::now();
-
         let latest_trade_ts = trades.back().unwrap().2;
         let analysis_period_ms = interval_ms * num_intervals as i64;
 
-        let relevant_trades: Vec<_> = trades.iter()
-            .filter(|&&(_, _, ts, _)| latest_trade_ts - ts <= analysis_period_ms)
-            .collect();
+        // Read last cached value
+        let last_cached_lambda = self.last_kyle_lambda.load(Ordering::Relaxed) as f64 / 1_000_000.0;
+        let last_cached_ts = self.last_kyle_timestamp.load(Ordering::Relaxed) as i64;
 
-        if relevant_trades.len() < 2 {
-            debug!("Insufficient recent trades for Kyle's Lambda.");
-            return None;
+        // If no new trades, return cached Lambda
+        if latest_trade_ts <= last_cached_ts {
+            debug!("Kyle's Lambda cache hit. Returning cached value: {:.6}", last_cached_lambda);
+            return Some(last_cached_lambda);
         }
 
-        let mut returns = Vec::new();
-        let mut signed_volumes = Vec::new();
+        let start = Instant::now();
+
+        let mut returns = Vec::with_capacity(num_intervals);
+        let mut signed_volumes = Vec::with_capacity(num_intervals);
 
         let mut interval_start = latest_trade_ts - analysis_period_ms;
         let mut prev_price: Option<f64> = None;
         let mut signed_volume = 0.0;
         let mut last_trade_price: Option<f64> = None;
 
-        for &&(price, qty, ts, buyer_maker) in &relevant_trades {
+        for &(price, qty, ts, buyer_maker) in trades.iter().rev() {
+            if ts < interval_start {
+                break;
+            }
+
             if ts >= interval_start + interval_ms {
                 if let (Some(prev_p), Some(last_p)) = (prev_price, last_trade_price) {
                     let ret = (last_p - prev_p) / prev_p;
@@ -496,7 +629,6 @@ impl MarketState {
             let direction = if buyer_maker { -1.0 } else { 1.0 };
             signed_volume += qty * direction;
             last_trade_price = Some(price);
-
             if prev_price.is_none() {
                 prev_price = Some(price);
             }
@@ -507,14 +639,10 @@ impl MarketState {
             return None;
         }
 
-        // ✅ Corrected: Pass an iterator of tuples, not a HashMap
-        let data = vec![
-            ("y", returns),
-            ("x", signed_volumes),
-        ];
+        let data: Vec<(f64, Vec<f64>)> = returns.into_iter().zip(signed_volumes.into_iter().map(|v| vec![v])).collect();
 
         let regression_data = RegressionDataBuilder::new()
-            .build_from(data.into_iter())  // ✅ Corrected: Use an iterator of tuples
+            .build_from(data.iter().map(|(y, x)| (y.to_string(), x.clone()))) // Convert to required format
             .ok()?;
 
         let model = FormulaRegressionBuilder::new()
@@ -523,7 +651,6 @@ impl MarketState {
             .fit()
             .ok()?;
 
-        // ✅ Extract the slope (Kyle's Lambda)
         let params = model.parameters();
         if params.len() < 2 {
             debug!("Regression model did not produce a valid slope coefficient.");
@@ -531,6 +658,10 @@ impl MarketState {
         }
 
         let lambda = params[1]; // First parameter is intercept, second is Kyle's Lambda (slope)
+
+        // Cache computed lambda
+        self.last_kyle_lambda.store((lambda * 1_000_000.0) as u64, Ordering::Relaxed);
+        self.last_kyle_timestamp.store(latest_trade_ts as u64, Ordering::Relaxed);
 
         let duration = start.elapsed();
         info!(
@@ -543,34 +674,38 @@ impl MarketState {
 
     pub async fn compute_price_impact(&self, interval_ms: i64, num_intervals: usize) -> Option<f64> {
         let trades = self.trades.lock().await;
-    
+
         if trades.len() < 2 {
             warn!("Insufficient trades to compute Price Impact");
             return None;
         }
-    
-        let start = Instant::now();
-    
+
         let latest_trade_ts = trades.back().unwrap().2;
         let analysis_period_ms = interval_ms * num_intervals as i64;
-    
-        let relevant_trades: Vec<_> = trades.iter()
-            .filter(|&&(_, _, ts, _)| latest_trade_ts - ts <= analysis_period_ms)
-            .collect();
-    
-        if relevant_trades.len() < 2 {
-            debug!("Insufficient recent trades for Price Impact.");
-            return None;
+
+        // Read last cached value
+        let last_cached_impact = self.last_price_impact.load(Ordering::Relaxed) as f64 / 1_000_000.0;
+        let last_cached_ts = self.last_price_impact_timestamp.load(Ordering::Relaxed) as i64;
+
+        // If no new trades, return cached Price Impact
+        if latest_trade_ts <= last_cached_ts {
+            debug!("Price Impact cache hit. Returning cached value: {:.6}", last_cached_impact);
+            return Some(last_cached_impact);
         }
-    
-        let mut price_impacts = Vec::new();
-    
+
+        let start = Instant::now();
+
+        let mut price_impacts = Vec::with_capacity(num_intervals);
         let mut interval_start = latest_trade_ts - analysis_period_ms;
         let mut prev_price: Option<f64> = None;
         let mut interval_volume = 0.0;
         let mut last_trade_price: Option<f64> = None;
-    
-        for &&(price, qty, ts, _) in &relevant_trades {
+
+        for &(price, qty, ts, _) in trades.iter().rev() {
+            if ts < interval_start {
+                break;
+            }
+
             if ts >= interval_start + interval_ms {
                 if let (Some(prev_p), Some(last_p)) = (prev_price, last_trade_price) {
                     if interval_volume > 0.0 {
@@ -582,98 +717,135 @@ impl MarketState {
                 interval_volume = 0.0;
                 prev_price = last_trade_price;
             }
-    
+
             interval_volume += qty;
             last_trade_price = Some(price);
             if prev_price.is_none() {
                 prev_price = Some(price);
             }
         }
-    
+
         if price_impacts.is_empty() {
             debug!("No valid intervals for Price Impact calculation.");
             return None;
         }
-    
+
         let avg_price_impact: f64 = price_impacts.iter().sum::<f64>() / price_impacts.len() as f64;
-    
+
+        // Cache computed Price Impact (scaled for precision)
+        self.last_price_impact.store((avg_price_impact * 1_000_000.0) as u64, Ordering::Relaxed);
+        self.last_price_impact_timestamp.store(latest_trade_ts as u64, Ordering::Relaxed);
+
         let duration = start.elapsed();
         info!(
             "Price Impact computed over {} intervals ({} ms each) in {:?}, value: {:.6}",
             price_impacts.len(), interval_ms, duration, avg_price_impact
         );
-    
+
         Some(avg_price_impact)
     }
    
     pub async fn compute_vwap_deviation(&self, recent_ms: i64) -> Option<f64> {
         let trades = self.trades.lock().await;
-    
+
         if trades.is_empty() {
             warn!("No trades available to compute VWAP Deviation");
             return None;
         }
-    
+
         let latest_trade = trades.back().unwrap();
+        let latest_trade_ts = latest_trade.2;
         let p_current = latest_trade.0; // Most recent trade price
-    
+
+        // Read last cached value
+        let last_cached_dev = self.last_vwap_deviation.load(Ordering::Relaxed) as f64 / 1_000_000.0;
+        let last_cached_ts = self.last_vwap_deviation_timestamp.load(Ordering::Relaxed) as i64;
+
+        // If no new trades, return cached VWAP Deviation
+        if latest_trade_ts <= last_cached_ts {
+            debug!("VWAP Deviation cache hit. Returning cached value: {:.6}", last_cached_dev);
+            return Some(last_cached_dev);
+        }
+
+        let start = Instant::now();
         let vwap = self.compute_vwap(recent_ms).await?;
-    
+
         if vwap == 0.0 {
             warn!("VWAP is zero, cannot compute deviation.");
             return None;
         }
-    
+
         let vwap_deviation = (p_current - vwap) / vwap;
-    
+
+        // Cache computed VWAP Deviation (scaled for precision)
+        self.last_vwap_deviation.store((vwap_deviation * 1_000_000.0) as u64, Ordering::Relaxed);
+        self.last_vwap_deviation_timestamp.store(latest_trade_ts as u64, Ordering::Relaxed);
+
+        let duration = start.elapsed();
         info!(
-            "VWAP Deviation computed for last {} ms: {:.6}",
-            recent_ms, vwap_deviation
+            "VWAP Deviation computed for last {} ms in {:?}, value: {:.6}",
+            recent_ms, duration, vwap_deviation
         );
-    
+
         Some(vwap_deviation)
     }
 
     pub async fn compute_intertrade_duration(&self, recent_ms: i64) -> Option<f64> {
         let trades = self.trades.lock().await;
-    
+
         if trades.len() < 2 {
             warn!("Insufficient trades to compute Intertrade Duration");
             return None;
         }
-    
+
         let latest_trade_ts = trades.back().unwrap().2;
+
+        // Read last cached value
+        let last_cached_duration = self.last_intertrade_duration.load(Ordering::Relaxed) as f64 / 1_000.0;
+        let last_cached_ts = self.last_intertrade_timestamp.load(Ordering::Relaxed) as i64;
+
+        // If no new trades, return cached Intertrade Duration
+        if latest_trade_ts <= last_cached_ts {
+            debug!("Intertrade Duration cache hit. Returning cached value: {:.3} ms", last_cached_duration);
+            return Some(last_cached_duration);
+        }
+
+        let start = Instant::now();
         let analysis_period_ms = recent_ms;
-    
+
         // Collect relevant trade timestamps
         let trade_timestamps: Vec<i64> = trades.iter()
-            .filter(|&&(_, _, ts, _)| latest_trade_ts - ts <= analysis_period_ms)
+            .rev()
+            .take_while(|&&(_, _, ts, _)| latest_trade_ts - ts <= analysis_period_ms)
             .map(|&(_, _, ts, _)| ts)
             .collect();
-    
+
         if trade_timestamps.len() < 2 {
             debug!("Not enough trades in the last {} ms to compute Intertrade Duration.", recent_ms);
             return None;
         }
-    
+
         // Compute time differences between consecutive trades
         let intertrade_durations: Vec<i64> = trade_timestamps.windows(2)
-            .map(|window| window[1] - window[0])
+            .map(|window| window[0] - window[1]) // Ensure correct ordering
             .collect();
-    
+
         // Compute average intertrade duration
         let avg_intertrade_duration: f64 = intertrade_durations.iter().sum::<i64>() as f64
             / intertrade_durations.len() as f64;
-    
+
+        // Cache computed Intertrade Duration (scaled for precision)
+        self.last_intertrade_duration.store((avg_intertrade_duration * 1_000.0) as u64, Ordering::Relaxed);
+        self.last_intertrade_timestamp.store(latest_trade_ts as u64, Ordering::Relaxed);
+
+        let duration = start.elapsed();
         info!(
-            "Intertrade Duration computed for last {} ms: {:.3} ms",
-            recent_ms, avg_intertrade_duration
+            "Intertrade Duration computed for last {} ms in {:?}, value: {:.3} ms",
+            recent_ms, duration, avg_intertrade_duration
         );
-    
+
         Some(avg_intertrade_duration)
     }
-
-    
 }
 
 async fn connect_to_lob_websocket(market_state: Arc<MarketState>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> 
