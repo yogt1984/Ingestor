@@ -95,6 +95,34 @@ impl MarketState {
         }
     }
 
+    pub async fn update_lob(&self, new_bids: Vec<(f64, f64)>, new_asks: Vec<(f64, f64)>) {
+        let mut bids = self.bids.lock().await;
+        let mut asks = self.asks.lock().await;
+    
+        for (price, qty) in new_bids {
+            bids.push_back((price, qty));
+            if bids.len() > QUEUE_SIZE {
+                bids.pop_front(); // Ensure bounded size
+            }
+        }
+    
+        for (price, qty) in new_asks {
+            asks.push_back((price, qty));
+            if asks.len() > QUEUE_SIZE {
+                asks.pop_front(); // Ensure bounded size
+            }
+        }
+    }
+    
+    pub async fn update_trades(&self, price: f64, qty: f64, ts: i64, buyer_maker: bool) {
+        let mut trades = self.trades.lock().await;
+    
+        trades.push_back((price, qty, ts, buyer_maker));
+        if trades.len() > QUEUE_SIZE {
+            trades.pop_front(); // Ensure bounded size
+        }
+    }
+
     pub async fn compute_midprice(&self) -> Option<f64> {
         let start = Instant::now();
     
@@ -862,25 +890,29 @@ async fn connect_to_lob_websocket(market_state: Arc<MarketState>) -> Result<(), 
                         let start = Instant::now();
                         match serde_json::from_str::<DepthUpdate>(&text) {
                             Ok(depth_update) => {
-                                let mut bids = market_state.bids.lock().await;
-                                let mut asks = market_state.asks.lock().await;
-
+                                let mut new_bids = Vec::new();
+                                let mut new_asks = Vec::new();
+                
                                 for bid in &depth_update.b {
                                     if let (Ok(price), Ok(qty)) = (bid[0].parse::<f64>(), bid[1].parse::<f64>()) {
-                                        bids.push_back((price, qty));
-                                        if bids.len() > 1000 { bids.pop_front(); }
+                                        new_bids.push((price, qty));
                                     }
                                 }
-
+                
                                 for ask in &depth_update.a {
                                     if let (Ok(price), Ok(qty)) = (ask[0].parse::<f64>(), ask[1].parse::<f64>()) {
-                                        asks.push_back((price, qty));
-                                        if asks.len() > 1000 { asks.pop_front(); }
+                                        new_asks.push((price, qty));
                                     }
                                 }
-
+                
+                                // Call update_lob() instead of manually modifying the queues
+                                market_state.update_lob(new_bids, new_asks).await;
+                
                                 let duration = start.elapsed();
-                                debug!("LOB ingestion completed ({} bids, {} asks) in {:?}", bids.len(), asks.len(), duration);
+                                debug!(
+                                    "LOB ingestion completed in {:?}",
+                                    duration
+                                );
                             }
                             Err(err) => {
                                 error!("LOB WebSocket: Failed to parse message: {}\nError: {}", text, err);
@@ -888,6 +920,7 @@ async fn connect_to_lob_websocket(market_state: Arc<MarketState>) -> Result<(), 
                         }
                     }
                 }
+                
                 // If we reach here, connection was lost. Try to reconnect.
                 warn!("LOB WebSocket connection lost. Reconnecting...");
             }
@@ -916,17 +949,15 @@ async fn connect_to_trade_websocket(market_state: Arc<MarketState>) -> Result<()
                         let start = Instant::now();
                         match serde_json::from_str::<TradeUpdate>(&text) {
                             Ok(trade_update) => {
-                                let mut trades = market_state.trades.lock().await;
-
                                 if let (Ok(price), Ok(qty)) = (trade_update.p.parse::<f64>(), trade_update.q.parse::<f64>()) {
-                                    trades.push_back((price, qty, trade_update.T as i64, trade_update.m));
-                                    if trades.len() > QUEUE_SIZE { trades.pop_front(); }
+                                    // Call update_trades() instead of manually modifying trades
+                                    market_state.update_trades(price, qty, trade_update.T as i64, trade_update.m).await;
                                 } else {
                                     warn!("Trade WebSocket: Invalid price or quantity in message: {}", text);
                                 }
-
+                
                                 let duration = start.elapsed();
-                                debug!("Trade ingestion completed ({} total trades) in {:?}", trades.len(), duration);
+                                debug!("Trade ingestion completed in {:?}", duration);
                             }
                             Err(err) => {
                                 error!("Trade WebSocket: Failed to parse message: {}\nError: {}", text, err);
