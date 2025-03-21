@@ -1,5 +1,12 @@
 #![allow(warnings)]
 
+mod fsm;
+mod ingestor;
+mod connector;
+
+use crate::connector::LobConnector;
+use crate::connector::TradesConnector;
+
 use std::collections::VecDeque;
 use std::sync::{Arc};
 use std::thread;
@@ -218,7 +225,7 @@ impl MarketState {
         // Compute midprice and spread
         if let (Some(&(bid_price, _)), Some(&(ask_price, _))) = (best_bid, best_ask) {
             let midprice = (bid_price + ask_price) / 2.0;
-            let spread = ask_price - bid_price;
+            let spread   = ask_price - bid_price;
     
             // Store values atomically
             self.last_midprice.store((midprice * 1_000_000.0) as u64, Ordering::Relaxed);
@@ -227,7 +234,7 @@ impl MarketState {
             self.last_spread_timestamp.store(current_timestamp, Ordering::Relaxed);
     
             debug!(
-                "Midprice updated: {:.6}, Spread: {:.6}, Timestamp: {}",
+                "midprice and spread updated: {:.6}, Spread: {:.6}, Timestamp: {}",
                 midprice, spread, current_timestamp
             );
         } else {
@@ -273,7 +280,7 @@ impl MarketState {
                 self.last_imbalance.store((imbalance * 1_000_000.0) as u64, Ordering::Relaxed);
                 self.last_imbalance_timestamp.store(current_timestamp, Ordering::Relaxed);
                 debug!(
-                    "Order book imbalance updated: {:.6}, Timestamp: {}",
+                    "imbalance updated: {:.6}, Timestamp: {}",
                     imbalance, current_timestamp
                 );
             }
@@ -306,7 +313,7 @@ impl MarketState {
             .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     
         let duration = start.elapsed();
-        debug!("PW-Imbalance computation completed in {:?}", duration);
+        debug!("pw_imbalance computation time: {:?}", duration);
     
         let pw_imbalance = match (best_bid, best_ask) {
             (Some((bid_price, bid_qty)), Some((ask_price, ask_qty))) => {
@@ -316,15 +323,16 @@ impl MarketState {
     
                 if total_product > 0.0 {
                     let imbalance = (bid_product - ask_product) / total_product;
+                    
                     Some(imbalance)
                 } else {
-                    warn!("PW-Imbalance not computable (zero total weighted volume).");
+                    warn!("pw_imbalance not computable (zero total weighted volume).");
                     None
                 }
             }
             _ => {
                 warn!(
-                    "PW-Imbalance not computable: Missing best bid or ask. Bids: {}, Asks: {}",
+                    "pw_imbalance not computable: Missing best bid or ask. Bids: {}, Asks: {}",
                     bids.len(),
                     asks.len()
                 );
@@ -338,7 +346,7 @@ impl MarketState {
         self.last_pw_imbalance_timestamp.store(current_timestamp, Ordering::Relaxed);
     
         debug!(
-            "Stored PW-Imbalance: {:.6} at timestamp {}",
+            "updated pw_imbalance: {:.6} at timestamp {}",
             imbalance_value as f64 / 1_000_000.0,
             self.last_pw_imbalance_timestamp.load(Ordering::Relaxed)
         );
@@ -362,7 +370,7 @@ impl MarketState {
             .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     
         let duration = start.elapsed();
-        debug!("Order Book Slope computation completed in {:?}", duration);
+        debug!("slope computation time {:?}", duration);
     
         let slope = match (best_bid, best_ask) {
             (Some((bid_price, bid_qty)), Some((ask_price, ask_qty))) => {
@@ -390,7 +398,7 @@ impl MarketState {
         self.last_slope_timestamp.store(current_timestamp, Ordering::Relaxed);
     
         debug!(
-            "Stored Order Book Slope: {:.6} at timestamp {}",
+            "slope updated slope: {:.6} at timestamp {}",
             slope_value as f64 / 1_000_000.0,
             self.last_slope_timestamp.load(Ordering::Relaxed)
         );
@@ -426,7 +434,7 @@ impl MarketState {
         let total_depth10 = bid_depth10 + ask_depth10;
     
         let duration = start.elapsed();
-        debug!("Total Depths computation completed in {:?}", duration);
+        debug!("depts computation time: {:?}", duration);
     
         // Store depths as scaled integers for precision
         let depth5_value = (total_depth5 * 1_000_000.0) as u64;
@@ -439,7 +447,7 @@ impl MarketState {
         self.last_depth10_timestamp.store(current_timestamp, Ordering::Relaxed);
     
         debug!(
-            "Stored Depths => Depth5: {:.3}, Depth10: {:.3}, Timestamps: {} & {}",
+            "depts updated => Depth5: {:.3}, Depth10: {:.3}, Timestamps: {} & {}",
             depth5_value as f64 / 1_000_000.0,
             depth10_value as f64 / 1_000_000.0,
             self.last_depth5_timestamp.load(Ordering::Relaxed),
@@ -1036,7 +1044,9 @@ pub async fn process_lob_updates(
     }
 }
 
-async fn connect_to_lob_websocket(market_state: Arc<MarketState>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn connect_to_lob_websocket(
+    market_state: Arc<MarketState>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut retry_delay = Duration::from_secs(1); // Initial retry delay
 
     loop {
@@ -1047,6 +1057,8 @@ async fn connect_to_lob_websocket(market_state: Arc<MarketState>) -> Result<(), 
 
                 while let Some(Ok(message)) = read.next().await {
                     if let Message::Text(text) = message {
+                        debug!("Raw JSON received: {}", text); // <<<< ADDED LINE
+
                         let start = Instant::now();
 
                         match serde_json::from_str::<DepthUpdate>(&text) {
@@ -1093,7 +1105,6 @@ async fn connect_to_lob_websocket(market_state: Arc<MarketState>) -> Result<(), 
         }
     }
 }
-
 
 async fn connect_to_trade_websocket(market_state: Arc<MarketState>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut retry_delay = Duration::from_secs(1); // Start with 1 second
@@ -1184,30 +1195,13 @@ pub async fn periodic_lob_updater(market_state: Arc<MarketState>, update_periods
 #[tokio::main]
 async fn main() {
     env_logger::init();
-    info!("Starting MarketState Ingestor...");
 
-    let market_state = Arc::new(MarketState::new(mpsc::channel(100).0));
+    let mut lob_connector = LobConnector::new("wss://stream.binance.com:9443/ws/btcusdt@depth".to_string());
+    let mut trades_connector = TradesConnector::new("wss://stream.binance.com:9443/ws/btcusdt@trade".to_string());
 
-    // Define update periods (adjust as needed)
-    let update_periods = vec![100, 200, 300, 400, 500, 600];
-
-    // Spawn WebSocket connections
-    let lob_ws = tokio::spawn(connect_to_lob_websocket(market_state.clone()));
-    let trade_ws = tokio::spawn(connect_to_trade_websocket(market_state.clone()));
-
-    // Start periodic updates
-    let periodic_updates = tokio::spawn(periodic_lob_updater(market_state.clone(), update_periods));
-
-    // Prevent main thread from exiting by monitoring tasks
-    tokio::select! {
-        _ = lob_ws => {
-            panic!("LOB WebSocket task exited unexpectedly.");
-        }
-        _ = trade_ws => {
-            panic!("Trade WebSocket task exited unexpectedly.");
-        }
-        _ = periodic_updates => {
-            panic!("Periodic LOB updater task exited unexpectedly.");
-        }
-    }
+    // Run both concurrently
+    tokio::join!(
+        lob_connector.run(),
+        trades_connector.run()
+    );
 }
