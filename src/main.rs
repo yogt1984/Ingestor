@@ -1196,12 +1196,14 @@ pub async fn periodic_lob_updater(market_state: Arc<MarketState>, update_periods
 async fn main() {
     env_logger::init();
 
-    let mut lob_connector = LobConnector::new("wss://stream.binance.com:9443/ws/btcusdt@depth".to_string());
-    let mut trades_connector = TradesConnector::new("wss://stream.binance.com:9443/ws/btcusdt@trade".to_string());
+    let mut lob_100ms  = LobConnector::new("wss://stream.binance.com:9443/ws/btcusdt@depth@100ms".to_string());
+    let mut lob_1000ms = LobConnector::new("wss://stream.binance.com:9443/ws/btcusdt@depth".to_string());
+    let mut trades     = TradesConnector::new("wss://stream.binance.com:9443/ws/btcusdt@trade".to_string());
 
     // Run both concurrently
     tokio::join!(
-        lob_connector.run(),
-        trades_connector.run()
+        lob_100ms.run_test(),
+        lob_1000ms.run_test(),
+        trades.run_test()
     );
 }
