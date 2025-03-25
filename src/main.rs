@@ -3,6 +3,10 @@
 mod fsm;
 mod ingestor;
 mod connector;
+mod orderbook;
+mod lob_feed_manager;
+
+use lob_feed_manager::LobFeedManager;
 
 use crate::connector::LobConnector;
 use crate::connector::TradesConnector;
@@ -1196,14 +1200,22 @@ pub async fn periodic_lob_updater(market_state: Arc<MarketState>, update_periods
 async fn main() {
     env_logger::init();
 
-    let mut lob_100ms  = LobConnector::new("wss://stream.binance.com:9443/ws/btcusdt@depth@100ms".to_string());
-    let mut lob_1000ms = LobConnector::new("wss://stream.binance.com:9443/ws/btcusdt@depth".to_string());
-    let mut trades     = TradesConnector::new("wss://stream.binance.com:9443/ws/btcusdt@trade".to_string());
+    //let mut lob_100ms  = LobConnector::new("wss://stream.binance.com:9443/ws/btcusdt@depth@100ms".to_string());
+    //let mut lob_1000ms = LobConnector::new("wss://stream.binance.com:9443/ws/btcusdt@depth".to_string());
+    //let mut trades     = TradesConnector::new("wss://stream.binance.com:9443/ws/btcusdt@trade".to_string());
 
     // Run both concurrently
-    tokio::join!(
-        lob_100ms.run_test(),
-        lob_1000ms.run_test(),
-        trades.run_test()
+    //tokio::join!(
+    //   lob_100ms.run_test(),
+    //   lob_1000ms.run_test(),
+    //   trades.run_test()
+    //);
+
+    let manager = LobFeedManager::new(
+        "wss://stream.binance.com:9443/ws/btcusdt@depth@100ms".to_string(),
+        "wss://stream.binance.com:9443/ws/btcusdt@depth".to_string(),
     );
+
+    manager.start().await;
+
 }

@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+rust_decimal = "1"
+rust_decimal_macros = "1"
 tokio = { version = "1", features = ["full"] }  # Asynchronous runtime
 tokio-tungstenite = { version = "0.16", features = ["native-tls"] }  # WebSocket client with TLS support
 futures-util = "0.3"  # Utilities for working with futures
