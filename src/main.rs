@@ -6,7 +6,11 @@ mod connector;
 mod orderbook;
 mod lob_feed_manager;
 
+use rust_decimal_macros::dec;
+
 use lob_feed_manager::LobFeedManager;
+
+use crate::orderbook::ConcurrentOrderBook;
 
 use crate::connector::LobConnector;
 use crate::connector::TradesConnector;
@@ -29,6 +33,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::sleep;
 use tokio::join;
 use tokio::task;
+use tokio::time::interval;
 
 
 const LOB_URL: &str     = "wss://stream.binance.com:9443/ws/btcusdt@depth";
@@ -1211,11 +1216,82 @@ async fn main() {
     //   trades.run_test()
     //);
 
+    // 1. Create the manager (manager owns the order book internally)
     let manager = LobFeedManager::new(
         "wss://stream.binance.com:9443/ws/btcusdt@depth@100ms".to_string(),
         "wss://stream.binance.com:9443/ws/btcusdt@depth".to_string(),
     );
 
-    manager.start().await;
+    // 2. Clone the order book via public accessor
+    let order_book = manager.get_order_book();
 
+    // 3. Start the manager in a task
+    let feed_handle = tokio::spawn(async move {
+        manager.start().await;
+    });
+
+    // 4. Start the analytics loop in another task
+    let features_handle = tokio::spawn(async move {
+        let mut interval = interval(Duration::from_millis(100));
+        loop {
+            interval.tick().await;
+
+            let best_bid = order_book.best_bid().await;
+            let best_ask = order_book.best_ask().await;
+            let mid_price = order_book.mid_price().await;
+            let spread = order_book.spread().await;
+            let imbalance = order_book.order_book_imbalance().await;
+            let top_bids = order_book.top_bids(5).await;
+            let top_asks = order_book.top_asks(5).await;
+
+            println!("--- Order Book Features ---");
+            println!("Best Bid                       : {:?}", best_bid);
+            println!("Best Ask                       : {:?}", best_ask);
+            println!("Mid Price                      : {:?}", mid_price);
+            println!("Spread                         : {:?}", spread);
+            println!("Imbalance                      : {:?}", imbalance);
+            println!("Top 5 Bids                     : {:?}", top_bids);
+            println!("Top 5 Asks                     : {:?}", top_asks);
+
+            if let Some(pwi_1) = order_book.price_weighted_imbalance_percent(dec!(1)).await {
+                println!("Price-Weighted Imbalance ±1%   : {:.4}", pwi_1);
+            }
+            if let Some(pwi_5) = order_book.price_weighted_imbalance_percent(dec!(5)).await {
+                println!("Price-Weighted Imbalance ±5%   : {:.4}", pwi_5);
+            }
+            if let Some(pwi_25) = order_book.price_weighted_imbalance_percent(dec!(25)).await {
+                println!("Price-Weighted Imbalance ±25%  : {:.4}", pwi_25);
+            }
+            if let Some(pwi_50) = order_book.price_weighted_imbalance_percent(dec!(50)).await {
+                println!("Price-Weighted Imbalance ±50%  : {:.4}", pwi_50);
+            }
+
+            if let Some((bid_slope, ask_slope)) = order_book.slope(5).await {
+                println!("Bid Slope                      : {:?}", bid_slope);
+                println!("Ask Slope                      : {:?}", ask_slope);
+            }
+
+            if let Some(vol_imb) = order_book.volume_imbalance().await {
+                println!("Volume Imbalance (Top 5)       : {:?}", vol_imb);
+            }
+
+            if let Some((bid_ratio, ask_ratio)) = order_book.depth_ratio().await {
+                println!("Depth Ratio (Top 3/10)         : Bids={:.4}, Asks={:.4}", bid_ratio, ask_ratio);
+            }
+            
+            if let Some((bid_vol, ask_vol)) = order_book.volume_within_percent_range(dec!(0.01)).await {
+                println!("Volume ±0.01% Mid              : Bids={:.4}, Asks={:.4}", bid_vol, ask_vol);
+            }
+            
+            if let Some((bid_dist, ask_dist)) = order_book.avg_price_distance(5).await {
+                println!("Avg Distance (Top 5)           : Bids={:.4}, Asks={:.4}", bid_dist, ask_dist);
+            }
+
+            println!();
+        }
+
+    });
+
+    // 5. Wait for both tasks
+    let _ = tokio::join!(feed_handle, features_handle);
 }
