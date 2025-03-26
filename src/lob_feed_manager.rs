@@ -56,30 +56,30 @@ impl LobFeedManager {
         loop {
             match connect_async(&uri).await {
                 Ok((ws_stream, _)) => {
-                    info!("✅ Connected to WebSocket at {}", uri);
+                    info!("Connected to WebSocket at {}", uri);
                     let (_, mut read) = ws_stream.split();
     
                     while let Some(msg) = read.next().await {
                         match msg {
                             Ok(Message::Text(text)) => {
                                 if let Ok(parsed) = serde_json::from_str::<BinanceDepthUpdate>(&text) {
-                                    debug!("📥 Parsed Binance depth update (text)");
+                                    debug!("Parsed Binance depth update (text)");
                                     let parsed_bids = Self::parse_levels(parsed.bids);
                                     let parsed_asks = Self::parse_levels(parsed.asks);
                                     order_book.apply_deltas(parsed_bids, parsed_asks).await;
                                 } else {
-                                    warn!("❌ Failed to parse depth update: {}", text);
+                                    warn!("Failed to parse depth update: {}", text);
                                 }
                             }
                             Ok(Message::Binary(bin)) => {
                                 if let Ok(text) = String::from_utf8(bin) {
                                     if let Ok(parsed) = serde_json::from_str::<BinanceDepthUpdate>(&text) {
-                                        debug!("📥 Parsed Binance depth update (binary)");
+                                        debug!("Parsed Binance depth update (binary)");
                                         let parsed_bids = Self::parse_levels(parsed.bids);
                                         let parsed_asks = Self::parse_levels(parsed.asks);
                                         order_book.apply_deltas(parsed_bids, parsed_asks).await;
                                     } else {
-                                        warn!("❌ Failed to parse binary depth update: {}", text);
+                                        warn!("Failed to parse binary depth update: {}", text);
                                     }
                                 }
                             }
@@ -96,11 +96,11 @@ impl LobFeedManager {
                     warn!("⚠️ WebSocket stream closed for {}", uri);
                 }
                 Err(e) => {
-                    error!("❌ Failed to connect to {}: {}", uri, e);
+                    error!("Failed to connect to {}: {}", uri, e);
                 }
             }
     
-            warn!("🔁 Reconnecting to {} in {:?}...", uri, retry_delay);
+            warn!("Reconnecting to {} in {:?}...", uri, retry_delay);
             sleep(retry_delay).await;
             retry_delay = std::cmp::min(retry_delay * 2, Duration::from_secs(60));
         }

@@ -67,7 +67,7 @@ impl LogFeedManager {
             match connect_async(&self.uri).await {
                 Ok((ws_stream, _)) => {
                     self.metrics.current_connections.set(1.0);
-                    info!("✅ Connected to Trade WebSocket at {}", self.uri);
+                    info!("Connected to Trade WebSocket at {}", self.uri);
 
                     let (_, mut read) = ws_stream.split();
 
@@ -99,11 +99,11 @@ impl LogFeedManager {
                 }
                 Err(err) => {
                     self.metrics.connection_errors.increment(1);
-                    error!("❌ Failed to connect to {}: {}", self.uri, err);
+                    error!("Failed to connect to {}: {}", self.uri, err);
                 }
             }
 
-            warn!("🔁 Reconnecting to {} in {:?}...", self.uri, retry_delay);
+            warn!("Reconnecting to {} in {:?}...", self.uri, retry_delay);
             sleep(retry_delay).await;
             retry_delay = std::cmp::min(retry_delay * 2, Duration::from_secs(60));
         }
