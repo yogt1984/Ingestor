@@ -1,0 +1,22 @@
+
+services:
+  ingestor:
+    build: .
+    container_name: ingestor
+    volumes:
+      - ./data:/data
+    environment:
+      - RUST_LOG=info
+
+  jupyter:
+    image: jupyter/scipy-notebook
+    container_name: jupyter_lab
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./data:/home/jovyan/data
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+
+  # Optional: Add Parquet viewer or separate processing service if needed
+

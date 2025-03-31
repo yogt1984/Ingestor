@@ -5,3 +5,7 @@ start:
 
 debug:
 	cargo build && RUST_LOG=debug cargo run
+
+compose:
+	docker compose up --build
+
