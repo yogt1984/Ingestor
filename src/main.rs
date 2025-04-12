@@ -5,6 +5,7 @@ mod tradeslog;
 mod lob_feed_manager;
 mod log_feed_manager;
 mod analytics;
+mod persistence;
 
 use std::sync::Arc;
 use tokio::{spawn, join};
