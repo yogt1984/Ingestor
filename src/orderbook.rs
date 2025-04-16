@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
+use serde::Serialize;
 
 #[derive(Debug, Clone)]
 pub struct OrderBook {
@@ -10,6 +11,30 @@ pub struct OrderBook {
     asks: BTreeMap<Decimal, Decimal>, // price -> quantity (ascending)
     best_bid: Option<Decimal>,        // cached best bid price
     best_ask: Option<Decimal>,        // cached best ask price
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderBookSnapshot {
+    pub best_bid: Option<(Decimal, Decimal)>,
+    pub best_ask: Option<(Decimal, Decimal)>,
+    pub mid_price: Option<Decimal>,
+    pub spread: Option<Decimal>,
+    pub imbalance: Option<Decimal>,
+    pub top_bids: Vec<(Decimal, Decimal)>,
+    pub top_asks: Vec<(Decimal, Decimal)>,
+    pub pwi_1: Option<Decimal>,
+    pub pwi_5: Option<Decimal>,
+    pub pwi_25: Option<Decimal>,
+    pub pwi_50: Option<Decimal>,
+    pub bid_slope: Option<Decimal>,
+    pub ask_slope: Option<Decimal>,
+    pub volume_imbalance_top5: Option<Decimal>,
+    pub bid_depth_ratio: Option<Decimal>,
+    pub ask_depth_ratio: Option<Decimal>,
+    pub bid_volume_001: Option<Decimal>,
+    pub ask_volume_001: Option<Decimal>,
+    pub bid_avg_distance: Option<Decimal>,
+    pub ask_avg_distance: Option<Decimal>,
 }
 
 impl OrderBook {
@@ -269,6 +294,34 @@ impl OrderBook {
     
         Some((bid_avg, ask_avg))
     }
+
+    pub fn get_snapshot(&self) -> OrderBookSnapshot {
+        let best_bid = self.best_bid();
+        let best_ask = self.best_ask();
+        
+        OrderBookSnapshot {
+            best_bid,
+            best_ask,
+            mid_price: self.mid_price(),
+            spread: self.spread(),
+            imbalance: self.order_book_imbalance(),
+            top_bids: self.top_bids(5),
+            top_asks: self.top_asks(5),
+            pwi_1: self.price_weighted_imbalance_percent(dec!(1)),
+            pwi_5: self.price_weighted_imbalance_percent(dec!(5)),
+            pwi_25: self.price_weighted_imbalance_percent(dec!(25)),
+            pwi_50: self.price_weighted_imbalance_percent(dec!(50)),
+            bid_slope: self.slope(5).map(|(b, _)| b),
+            ask_slope: self.slope(5).map(|(_, a)| a),
+            volume_imbalance_top5: self.volume_imbalance(),
+            bid_depth_ratio: self.depth_ratio().map(|(b, _)| b),
+            ask_depth_ratio: self.depth_ratio().map(|(_, a)| a),
+            bid_volume_001: self.volume_within_percent_range(dec!(0.01)).map(|(b, _)| b),
+            ask_volume_001: self.volume_within_percent_range(dec!(0.01)).map(|(_, a)| a),
+            bid_avg_distance: self.avg_price_distance(5).map(|(b, _)| b),
+            ask_avg_distance: self.avg_price_distance(5).map(|(_, a)| a),
+        }
+    }
 }
 
 /// Thread-safe wrapper for the order book using Arc<RwLock<_>>.
@@ -367,5 +420,10 @@ impl ConcurrentOrderBook {
     pub async fn avg_price_distance(&self, levels: usize) -> Option<(Decimal, Decimal)> {
         let book = self.inner.read().await;
         book.avg_price_distance(levels)
+    }
+
+    pub async fn get_snapshot(&self) -> OrderBookSnapshot {
+        let book = self.inner.read().await;
+        book.get_snapshot()
     }
 }

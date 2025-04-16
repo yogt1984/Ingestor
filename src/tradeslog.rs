@@ -4,6 +4,7 @@ use tokio::sync::RwLock;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use thiserror::Error;
+use serde::Serialize;
 
 #[derive(Debug, Clone)]
 pub struct Trade {
@@ -22,6 +23,19 @@ pub struct TradesLog {
     sell_volume: Decimal,
     stats_dirty: bool,
     cached_stats: CachedStats,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TradeLogSnapshot {
+    pub last_price: Option<Decimal>,
+    pub vwap_50: Option<Decimal>,
+    pub aggr_ratio_50: Option<Decimal>,
+    pub trade_imbalance: Option<Decimal>,
+    pub vwap_total: Option<Decimal>,
+    pub price_change: Option<Decimal>,
+    pub avg_trade_size: Option<Decimal>,
+    pub signed_count_momentum: i64,
+    pub trade_rate_10s: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -209,6 +223,22 @@ impl TradesLog {
     pub fn signed_count_momentum(&self) -> i64 {
         self.cached_stats.signed_count_momentum
     }
+
+    pub fn get_snapshot(&mut self) -> TradeLogSnapshot {
+        self.update_cached_stats();
+        
+        TradeLogSnapshot {
+            last_price: self.last_price(),
+            vwap_50: self.vwap(50).ok(),
+            aggr_ratio_50: self.aggressor_volume_ratio(50).ok(),
+            trade_imbalance: self.trade_imbalance(),
+            vwap_total: self.vwap_total(),
+            price_change: self.price_change(),
+            avg_trade_size: self.avg_trade_size(),
+            signed_count_momentum: self.signed_count_momentum(),
+            trade_rate_10s: self.trade_rate(10_000).ok(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -276,5 +306,10 @@ impl ConcurrentTradesLog {
     pub async fn signed_count_momentum(&self) -> i64 {
         let log = self.inner.read().await;
         log.signed_count_momentum()
+    }
+
+    pub async fn get_snapshot(&self) -> TradeLogSnapshot {
+        let mut log = self.inner.write().await;
+        log.get_snapshot()
     }
 }
