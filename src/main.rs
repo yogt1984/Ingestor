@@ -8,7 +8,7 @@ mod analytics;
 mod persistence;
 
 use std::sync::Arc;
-use tokio::{spawn, sync::watch};
+use tokio::{spawn, sync::watch, time::Duration};
 use crate::{
     orderbook::ConcurrentOrderBook,
     tradeslog::ConcurrentTradesLog,
@@ -20,8 +20,8 @@ use crate::{
 async fn main() {
     env_logger::init();
 
-    // Set up shutdown channel
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    // Set up shutdown channel - NOTE: Now mutable
+    let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
 
     // Set up the order book feed manager
     let lob_manager = LobFeedManager::new(
@@ -49,7 +49,7 @@ async fn main() {
     });
 
     let analytics_handle = spawn({
-        let shutdown_rx = shutdown_rx.clone();
+        let mut shutdown_rx = shutdown_rx.clone(); // Now mutable
         async move {
             analytics::run_analytics_task(
                 order_book_arc,

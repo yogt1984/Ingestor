@@ -46,6 +46,9 @@ pub struct FeaturesSnapshot {
     pub avg_trade_size: Option<Decimal>,
     pub signed_count_momentum: i64,
     pub trade_rate_10s: Option<f64>,
+    pub order_flow_imbalance: Option<Decimal>,
+    pub order_flow_pressure: Decimal,
+    pub order_flow_significance: bool,
 }
 
 pub async fn run_analytics_task(
@@ -53,6 +56,9 @@ pub async fn run_analytics_task(
     trades_log: Arc<ConcurrentTradesLog>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
+    const PRESSURE_THRESHOLD: Decimal = dec!(5.0);
+    const SIGNIFICANCE_THRESHOLD: Decimal = dec!(10.0);
+
     let mut interval = interval(Duration::from_millis(SNAPSHOT_INTERVAL_MS));
     let mut batch = Vec::with_capacity(BATCH_SIZE);
     let mut batch_id = 0;
@@ -64,6 +70,8 @@ pub async fn run_analytics_task(
                     order_book.get_snapshot(),
                     trades_log.get_snapshot()
                 );
+
+                let (flow_imbalance, flow_pressure) = order_book.get_flow_imbalance().await;
 
                 let snapshot = FeaturesSnapshot {
                     timestamp: Utc::now().to_rfc3339(),
@@ -96,6 +104,9 @@ pub async fn run_analytics_task(
                     avg_trade_size: trade_snap.avg_trade_size,
                     signed_count_momentum: trade_snap.signed_count_momentum,
                     trade_rate_10s: trade_snap.trade_rate_10s,
+                    order_flow_imbalance: flow_imbalance,
+                    order_flow_pressure: flow_pressure,
+                    order_flow_significance: flow_pressure >= SIGNIFICANCE_THRESHOLD,
                 };
                 
                 // Simple console output
@@ -106,7 +117,8 @@ pub async fn run_analytics_task(
                      DEPTH: B{:?}/A{:?} | VOL(0.01%): B{:?}/A{:?}\n\
                      TRADES: LAST={:?} VWAP50={:?} AGR={:?} IMB={:?}\n\
                      VWAP_TOT={:?} ΔPRICE={:?} AVG_SIZE={:?}\n\
-                     MOMENTUM: {} TRADE_RATE={:?}",
+                     MOMENTUM: {} TRADE_RATE={:?}\n\
+                     FLOWIMBALANCE: {:.3} ",
                     snapshot.timestamp,
                     snapshot.best_bid,
                     snapshot.best_ask,
@@ -132,7 +144,8 @@ pub async fn run_analytics_task(
                     snapshot.price_change,
                     snapshot.avg_trade_size,
                     snapshot.signed_count_momentum,
-                    snapshot.trade_rate_10s
+                    snapshot.trade_rate_10s,
+                    snapshot.order_flow_imbalance.unwrap_or(dec!(0)),
                 );
 
                 batch.push(snapshot);
@@ -149,53 +162,5 @@ pub async fn run_analytics_task(
                 break;
             }
         }
-    }
-}
-
-async fn generate_snapshot(
-    order_book: &ConcurrentOrderBook,
-    trades_log: &ConcurrentTradesLog,
-) -> FeaturesSnapshot {
-    let timestamp = Utc::now().to_rfc3339();
-    
-    let best_bid = order_book.best_bid().await.map(|(p, _)| p);
-    let best_ask = order_book.best_ask().await.map(|(p, _)| p);
-    let mid_price = order_book.mid_price().await;
-    let spread = order_book.spread().await;
-    let imbalance = order_book.order_book_imbalance().await;
-    let top_bids = order_book.top_bids(5).await;
-    let top_asks = order_book.top_asks(5).await;
-
-    FeaturesSnapshot {
-        timestamp,
-        best_bid,
-        best_ask,
-        mid_price,
-        spread,
-        imbalance,
-        top_bids,
-        top_asks,
-        pwi_1: order_book.price_weighted_imbalance_percent(dec!(1)).await,
-        pwi_5: order_book.price_weighted_imbalance_percent(dec!(5)).await,
-        pwi_25: order_book.price_weighted_imbalance_percent(dec!(25)).await,
-        pwi_50: order_book.price_weighted_imbalance_percent(dec!(50)).await,
-        bid_slope: order_book.slope(5).await.map(|(b, _)| b),
-        ask_slope: order_book.slope(5).await.map(|(_, a)| a),
-        volume_imbalance_top5: order_book.volume_imbalance().await,
-        bid_depth_ratio: order_book.depth_ratio().await.map(|(b, _)| b),
-        ask_depth_ratio: order_book.depth_ratio().await.map(|(_, a)| a),
-        bid_volume_001: order_book.volume_within_percent_range(dec!(0.01)).await.map(|(b, _)| b),
-        ask_volume_001: order_book.volume_within_percent_range(dec!(0.01)).await.map(|(_, a)| a),
-        bid_avg_distance: order_book.avg_price_distance(5).await.map(|(b, _)| b),
-        ask_avg_distance: order_book.avg_price_distance(5).await.map(|(_, a)| a),
-        last_trade_price: trades_log.last_price().await,
-        vwap_50: trades_log.vwap(50).await.ok(),
-        aggr_ratio_50: trades_log.aggressor_volume_ratio(50).await.ok(),
-        trade_imbalance: trades_log.trade_imbalance().await,
-        vwap_total: trades_log.vwap_total().await,
-        price_change: trades_log.price_change().await,
-        avg_trade_size: trades_log.avg_trade_size().await,
-        signed_count_momentum: trades_log.signed_count_momentum().await,
-        trade_rate_10s: trades_log.trade_rate(10_000).await.ok(),
     }
 }

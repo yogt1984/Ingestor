@@ -1,9 +1,84 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::Serialize;
+use num::FromPrimitive;
+use std::collections::{BTreeMap, VecDeque};
+use std::time::{Instant, Duration};
+
+#[derive(Debug, Clone, Copy)]
+pub enum OrderFlowEvent {
+    BidOrder(Decimal),  
+    AskOrder(Decimal),
+    BidCancel,
+    AskCancel,
+}
+
+#[derive(Debug, Clone)]
+pub struct RollingFlowTracker {
+    events: VecDeque<(Instant, OrderFlowEvent)>,
+    window: Duration,
+    cancel_penalty: Decimal,
+    min_pressure: Decimal,
+}
+
+impl RollingFlowTracker {
+    pub fn new(window_secs: u64) -> Self {
+        Self {
+            events: VecDeque::with_capacity(2000),
+            window: Duration::from_secs(window_secs),
+            cancel_penalty: dec!(0.35),
+            min_pressure: dec!(2.5),
+        }
+    }
+
+    pub fn add_event(&mut self, event: OrderFlowEvent) {
+        let now = Instant::now();
+        self.prune_old(now);
+        self.events.push_back((now, event));
+    }
+
+    fn prune_old(&mut self, now: Instant) {
+        let cutoff = now - self.window;
+        while let Some((time, _)) = self.events.front() {
+            if *time < cutoff {
+                self.events.pop_front();
+            } else {
+                break;
+            }
+        }
+    }
+
+    pub fn imbalance(&self) -> (Option<Decimal>, Decimal) {
+        let mut bid_pressure = dec!(0);
+        let mut ask_pressure = dec!(0);
+        let now = Instant::now();
+
+        for (time, event) in &self.events {
+            let age_secs = (now - *time).as_secs_f64();
+            let age_weight = 1.0 - (age_secs / self.window.as_secs_f64()).min(1.0);
+            let weight = Decimal::from_f64(age_weight).unwrap_or(dec!(1));
+
+            match event {
+                OrderFlowEvent::BidOrder(qty) => bid_pressure += qty * weight,
+                OrderFlowEvent::AskOrder(qty) => ask_pressure += qty * weight,
+                OrderFlowEvent::BidCancel => bid_pressure -= self.cancel_penalty * weight,
+                OrderFlowEvent::AskCancel => ask_pressure -= self.cancel_penalty * weight,
+            }
+        }
+
+        let total_pressure = bid_pressure + ask_pressure;
+        let imbalance = if total_pressure >= self.min_pressure {
+            Some((bid_pressure - ask_pressure) / total_pressure)
+        } else {
+            None
+        };
+
+        (imbalance, total_pressure)
+    }
+}
+
 
 #[derive(Debug, Clone)]
 pub struct OrderBook {
@@ -11,6 +86,7 @@ pub struct OrderBook {
     asks: BTreeMap<Decimal, Decimal>, // price -> quantity (ascending)
     best_bid: Option<Decimal>,        // cached best bid price
     best_ask: Option<Decimal>,        // cached best ask price
+    pub flow_tracker: RollingFlowTracker,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -35,6 +111,8 @@ pub struct OrderBookSnapshot {
     pub ask_volume_001: Option<Decimal>,
     pub bid_avg_distance: Option<Decimal>,
     pub ask_avg_distance: Option<Decimal>,
+    pub order_flow_imbalance: Option<Decimal>,
+    pub order_flow_pressure: Decimal,  
 }
 
 impl OrderBook {
@@ -45,6 +123,7 @@ impl OrderBook {
             asks: BTreeMap::new(),
             best_bid: None,
             best_ask: None,
+            flow_tracker: RollingFlowTracker::new(10),  // 10-second window
         }
     }
 
@@ -68,32 +147,51 @@ impl OrderBook {
         self.update_best_bid_ask();
     }
 
-    /// Applies incremental delta updates to the order book.
     pub fn apply_deltas(&mut self, bids: Vec<(Decimal, Decimal)>, asks: Vec<(Decimal, Decimal)>) {
-        for (price, quantity) in bids {
-            if price >= dec!(0) && quantity >= dec!(0) {
-                if quantity == dec!(0) {
-                    self.bids.remove(&price);
+        // Process bids
+        for (price, qty) in bids {
+            let event = if qty == dec!(0) {
+                if self.bids.contains_key(&price) {
+                    OrderFlowEvent::BidCancel
                 } else {
-                    self.bids.insert(price, quantity);
+                    continue;  // Not a real cancel
                 }
+            } else {
+                OrderFlowEvent::BidOrder(qty)
+            };
+            self.flow_tracker.add_event(event);
+
+            // Update book
+            if qty == dec!(0) {
+                self.bids.remove(&price);
+            } else {
+                self.bids.insert(price, qty);
             }
         }
 
-        for (price, quantity) in asks {
-            if price >= dec!(0) && quantity >= dec!(0) {
-                if quantity == dec!(0) {
-                    self.asks.remove(&price);
+        // Process asks (mirror of bids)
+        for (price, qty) in asks {
+            let event = if qty == dec!(0) {
+                if self.asks.contains_key(&price) {
+                    OrderFlowEvent::AskCancel
                 } else {
-                    self.asks.insert(price, quantity);
+                    continue;
                 }
+            } else {
+                OrderFlowEvent::AskOrder(qty)
+            };
+            self.flow_tracker.add_event(event);
+
+            if qty == dec!(0) {
+                self.asks.remove(&price);
+            } else {
+                self.asks.insert(price, qty);
             }
         }
 
         self.update_best_bid_ask();
     }
 
-    /// Updates cached best bid/ask.
     fn update_best_bid_ask(&mut self) {
         self.best_bid = self.bids.keys().next_back().cloned();
         self.best_ask = self.asks.keys().next().cloned();
@@ -299,6 +397,9 @@ impl OrderBook {
         let best_bid = self.best_bid();
         let best_ask = self.best_ask();
         
+        // Get flow metrics from the tracker
+        let (flow_imbalance, flow_pressure) = self.flow_tracker.imbalance();
+    
         OrderBookSnapshot {
             best_bid,
             best_ask,
@@ -320,6 +421,8 @@ impl OrderBook {
             ask_volume_001: self.volume_within_percent_range(dec!(0.01)).map(|(_, a)| a),
             bid_avg_distance: self.avg_price_distance(5).map(|(b, _)| b),
             ask_avg_distance: self.avg_price_distance(5).map(|(_, a)| a),
+            order_flow_imbalance: flow_imbalance,
+            order_flow_pressure: flow_pressure,
         }
     }
 }
@@ -422,8 +525,14 @@ impl ConcurrentOrderBook {
         book.avg_price_distance(levels)
     }
 
+    pub async fn get_flow_imbalance(&self) -> (Option<Decimal>, Decimal) {
+        let book = self.inner.read().await;
+        book.flow_tracker.imbalance()
+    }
+
     pub async fn get_snapshot(&self) -> OrderBookSnapshot {
         let book = self.inner.read().await;
+        let (flow_imb, flow_pressure) = book.flow_tracker.imbalance();
         book.get_snapshot()
     }
 }

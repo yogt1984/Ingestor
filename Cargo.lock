@@ -353,6 +353,7 @@ dependencies = [
  "log",
  "metrics 0.20.1",
  "metrics-exporter-prometheus",
+ "num",
  "parquet2",
  "polars",
  "rust_decimal",
