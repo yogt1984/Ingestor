@@ -113,6 +113,7 @@ pub struct OrderBookSnapshot {
     pub ask_avg_distance: Option<Decimal>,
     pub order_flow_imbalance: Option<Decimal>,
     pub order_flow_pressure: Decimal,  
+    pub microprice: Option<Decimal>,
 }
 
 impl OrderBook {
@@ -393,6 +394,16 @@ impl OrderBook {
         Some((bid_avg, ask_avg))
     }
 
+    pub fn microprice(&self) -> Option<Decimal> {
+        let (bid_price, bid_size) = self.best_bid()?;
+        let (ask_price, ask_size) = self.best_ask()?;
+        
+        let numerator = bid_price * ask_size + ask_price * bid_size;
+        let denominator = bid_size + ask_size;
+        
+        Some(numerator / denominator)
+    }
+
     pub fn get_snapshot(&self) -> OrderBookSnapshot {
         let best_bid = self.best_bid();
         let best_ask = self.best_ask();
@@ -423,6 +434,7 @@ impl OrderBook {
             ask_avg_distance: self.avg_price_distance(5).map(|(_, a)| a),
             order_flow_imbalance: flow_imbalance,
             order_flow_pressure: flow_pressure,
+            microprice: self.microprice(),
         }
     }
 }

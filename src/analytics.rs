@@ -20,6 +20,7 @@ pub struct FeaturesSnapshot {
     pub best_bid: Option<Decimal>,
     pub best_ask: Option<Decimal>,
     pub mid_price: Option<Decimal>,
+    pub microprice: Option<Decimal>,
     pub spread: Option<Decimal>,
     pub imbalance: Option<Decimal>,
     pub top_bids: Vec<(Decimal, Decimal)>,
@@ -78,6 +79,7 @@ pub async fn run_analytics_task(
                     best_bid: ob_snap.best_bid.map(|(p, _)| p),
                     best_ask: ob_snap.best_ask.map(|(p, _)| p),
                     mid_price: ob_snap.mid_price,
+                    microprice: ob_snap.microprice,
                     spread: ob_snap.spread,
                     imbalance: ob_snap.imbalance,
                     top_bids: ob_snap.top_bids,
@@ -111,18 +113,21 @@ pub async fn run_analytics_task(
                 
                 // Simple console output
                 println!(
-                    "[{}] BID/ASK: {:?}/{:?} | MID: {:?} | SPRD: {:?} | IMB: {:?}\n\
+                    "[{}] MID: {:.2} | MICRO: {:.2} (Δ {:.4})\n\
+                     BID/ASK: {:?}/{:?} | SPRD: {:?} | IMB: {:?}\n\
                      PWI: 1%={:?} 5%={:?} 25%={:?} 50%={:?}\n\
                      SLOPE: B{:?}/A{:?} | VOL_IMB: {:?}\n\
                      DEPTH: B{:?}/A{:?} | VOL(0.01%): B{:?}/A{:?}\n\
                      TRADES: LAST={:?} VWAP50={:?} AGR={:?} IMB={:?}\n\
                      VWAP_TOT={:?} ΔPRICE={:?} AVG_SIZE={:?}\n\
                      MOMENTUM: {} TRADE_RATE={:?}\n\
-                     FLOWIMBALANCE: {:.3} ",
+                     FLWIMB: {:.3}",
                     snapshot.timestamp,
+                    snapshot.mid_price.unwrap_or(dec!(0)),
+                    snapshot.microprice.unwrap_or(dec!(0)),
+                    snapshot.microprice.unwrap_or(dec!(0)) - snapshot.mid_price.unwrap_or(dec!(0)),  // Price difference
                     snapshot.best_bid,
                     snapshot.best_ask,
-                    snapshot.mid_price,
                     snapshot.spread,
                     snapshot.imbalance,
                     snapshot.pwi_1,
