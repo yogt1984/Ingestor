@@ -28,7 +28,6 @@ pub struct TradesLog {
 #[derive(Debug, Clone, Serialize)]
 pub struct TradeLogSnapshot {
     pub last_price: Option<Decimal>,
-    pub aggr_ratio_50: Option<Decimal>,
     pub trade_imbalance: Option<Decimal>,
     pub vwap_total: Option<Decimal>,
     pub price_change: Option<Decimal>,
@@ -39,6 +38,10 @@ pub struct TradeLogSnapshot {
     pub vwap_50: Option<Decimal>,
     pub vwap_100: Option<Decimal>,
     pub vwap_1000: Option<Decimal>,
+    pub aggr_ratio_10: Option<Decimal>,
+    pub aggr_ratio_50: Option<Decimal>,
+    pub aggr_ratio_100: Option<Decimal>,
+    pub aggr_ratio_1000: Option<Decimal>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -242,7 +245,6 @@ impl TradesLog {
         
         TradeLogSnapshot {
             last_price: self.last_price(),
-            aggr_ratio_50: self.aggressor_volume_ratio(50).ok(),
             trade_imbalance: self.trade_imbalance(),
             vwap_total: self.vwap_total(),
             price_change: self.price_change(),
@@ -253,6 +255,10 @@ impl TradesLog {
             vwap_50: self.vwap(50).ok(),
             vwap_100: self.vwap(100).ok(),
             vwap_1000: self.vwap(1000).ok(),
+            aggr_ratio_10: self.aggressor_volume_ratio(10).ok(),
+            aggr_ratio_50: self.aggressor_volume_ratio(50).ok(),
+            aggr_ratio_100: self.aggressor_volume_ratio(100).ok(),
+            aggr_ratio_1000: self.aggressor_volume_ratio(1000).ok(),
         }
     }
 }
