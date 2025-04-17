@@ -39,7 +39,6 @@ pub struct FeaturesSnapshot {
     pub bid_avg_distance: Option<Decimal>,
     pub ask_avg_distance: Option<Decimal>,
     pub last_trade_price: Option<Decimal>,
-    pub vwap_50: Option<Decimal>,
     pub aggr_ratio_50: Option<Decimal>,
     pub trade_imbalance: Option<Decimal>,
     pub vwap_total: Option<Decimal>,
@@ -50,6 +49,10 @@ pub struct FeaturesSnapshot {
     pub order_flow_imbalance: Option<Decimal>,
     pub order_flow_pressure: Decimal,
     pub order_flow_significance: bool,
+    pub vwap_10: Option<Decimal>,   
+    pub vwap_50: Option<Decimal>,   
+    pub vwap_100: Option<Decimal>,
+    pub vwap_1000: Option<Decimal>,
 }
 
 pub async fn run_analytics_task(
@@ -98,7 +101,10 @@ pub async fn run_analytics_task(
                     bid_avg_distance: ob_snap.bid_avg_distance,
                     ask_avg_distance: ob_snap.ask_avg_distance,
                     last_trade_price: trade_snap.last_price,
-                    vwap_50: trade_snap.vwap_50,
+                    vwap_10: trade_snap.vwap_10,
+                    vwap_50: trade_snap.vwap_50,  
+                    vwap_100: trade_snap.vwap_100,
+                    vwap_1000: trade_snap.vwap_1000,
                     aggr_ratio_50: trade_snap.aggr_ratio_50,
                     trade_imbalance: trade_snap.trade_imbalance,
                     vwap_total: trade_snap.vwap_total,
@@ -113,19 +119,24 @@ pub async fn run_analytics_task(
                 
                 // Simple console output
                 println!(
-                    "[{}] MID: {:.2} | MICRO: {:.2} (Δ {:.4})\n\
-                     BID/ASK: {:?}/{:?} | SPRD: {:?} | IMB: {:?}\n\
-                     PWI: 1%={:?} 5%={:?} 25%={:?} 50%={:?}\n\
-                     SLOPE: B{:?}/A{:?} | VOL_IMB: {:?}\n\
-                     DEPTH: B{:?}/A{:?} | VOL(0.01%): B{:?}/A{:?}\n\
-                     TRADES: LAST={:?} VWAP50={:?} AGR={:?} IMB={:?}\n\
-                     VWAP_TOT={:?} ΔPRICE={:?} AVG_SIZE={:?}\n\
-                     MOMENTUM: {} TRADE_RATE={:?}\n\
-                     FLWIMB: {:.3}",
+                    r#"[{}] MID: {:.2} | MICRO: {:.2} (Δ {:.4})
+                    VWAP: 10={:.2} | 50={:.2} | 100={:.2} | 1000={:.2}
+                    BID/ASK: {:?}/{:?} | SPRD: {:?} | IMB: {:?}
+                    PWI: 1%={:?} 5%={:?} 25%={:?} 50%={:?}
+                    SLOPE: B{:?}/A{:?} | VOL_IMB: {:?}
+                    DEPTH: B{:?}/A{:?} | VOL(0.01%): B{:?}/A{:?}
+                    TRADES: LAST={:?} AGR={:?} IMB={:?}
+                    VWAP_TOT={:?} ΔPRICE={:?} AVG_SIZE={:?}
+                    MOMENTUM: {} TRADE_RATE={:?}
+                    FLWIMB: {:.3}"#,
                     snapshot.timestamp,
                     snapshot.mid_price.unwrap_or(dec!(0)),
                     snapshot.microprice.unwrap_or(dec!(0)),
-                    snapshot.microprice.unwrap_or(dec!(0)) - snapshot.mid_price.unwrap_or(dec!(0)),  // Price difference
+                    snapshot.microprice.unwrap_or(dec!(0)) - snapshot.mid_price.unwrap_or(dec!(0)),  
+                    snapshot.vwap_10.unwrap_or(dec!(0)),  
+                    snapshot.vwap_50.unwrap_or(dec!(0)),
+                    snapshot.vwap_100.unwrap_or(dec!(0)),
+                    snapshot.vwap_1000.unwrap_or(dec!(0)),
                     snapshot.best_bid,
                     snapshot.best_ask,
                     snapshot.spread,
@@ -142,7 +153,6 @@ pub async fn run_analytics_task(
                     snapshot.bid_volume_001,
                     snapshot.ask_volume_001,
                     snapshot.last_trade_price,
-                    snapshot.vwap_50,
                     snapshot.aggr_ratio_50,
                     snapshot.trade_imbalance,
                     snapshot.vwap_total,

@@ -28,7 +28,6 @@ pub struct TradesLog {
 #[derive(Debug, Clone, Serialize)]
 pub struct TradeLogSnapshot {
     pub last_price: Option<Decimal>,
-    pub vwap_50: Option<Decimal>,
     pub aggr_ratio_50: Option<Decimal>,
     pub trade_imbalance: Option<Decimal>,
     pub vwap_total: Option<Decimal>,
@@ -36,6 +35,10 @@ pub struct TradeLogSnapshot {
     pub avg_trade_size: Option<Decimal>,
     pub signed_count_momentum: i64,
     pub trade_rate_10s: Option<f64>,
+    pub vwap_10: Option<Decimal>,
+    pub vwap_50: Option<Decimal>,
+    pub vwap_100: Option<Decimal>,
+    pub vwap_1000: Option<Decimal>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -48,12 +51,14 @@ struct CachedStats {
     signed_count_momentum: i64,
 }
 
-#[derive(Error, Debug)]
+#[derive(Debug, Error)]
 pub enum TradesLogError {
-    #[error("Insufficient trades for calculation")]
+    #[error("Insufficient trades available")]
     InsufficientTrades,
-    #[error("Zero volume encountered in calculation")]
+    #[error("Zero volume in window")]
     ZeroVolume,
+    #[error("Invalid window size")]
+    InvalidWindowSize,
 }
 
 impl TradesLog {
@@ -143,19 +148,27 @@ impl TradesLog {
         self.trades.iter().rev().take(n)
     }
 
-    pub fn vwap(&self, n: usize) -> Result<Decimal, TradesLogError> {
-        if n == 0 || self.trades.is_empty() {
+    pub fn vwap(&self, window: usize) -> Result<Decimal, TradesLogError> {
+        if window == 0 {
+            return Err(TradesLogError::InvalidWindowSize);
+        }
+        
+        if self.trades.len() < window {
             return Err(TradesLogError::InsufficientTrades);
         }
-
-        let (weighted_sum, total_volume) = self.last_n_trades_ref(n)
-            .map(|t| (t.price * t.quantity, t.quantity))
-            .fold((dec!(0), dec!(0)), |(ws, tv), (wp, q)| (ws + wp, tv + q));
-
-        if total_volume == dec!(0) {
+    
+        let (sum_pq, sum_q) = self.trades
+            .iter()
+            .rev()
+            .take(window)
+            .fold((Decimal::ZERO, Decimal::ZERO), |(acc_pq, acc_q), trade| {
+                (acc_pq + trade.price * trade.quantity, acc_q + trade.quantity)
+            });
+    
+        if sum_q.is_zero() {
             Err(TradesLogError::ZeroVolume)
         } else {
-            Ok(weighted_sum / total_volume)
+            Ok(sum_pq / sum_q)
         }
     }
 
@@ -229,7 +242,6 @@ impl TradesLog {
         
         TradeLogSnapshot {
             last_price: self.last_price(),
-            vwap_50: self.vwap(50).ok(),
             aggr_ratio_50: self.aggressor_volume_ratio(50).ok(),
             trade_imbalance: self.trade_imbalance(),
             vwap_total: self.vwap_total(),
@@ -237,6 +249,10 @@ impl TradesLog {
             avg_trade_size: self.avg_trade_size(),
             signed_count_momentum: self.signed_count_momentum(),
             trade_rate_10s: self.trade_rate(10_000).ok(),
+            vwap_10: self.vwap(10).ok(),  
+            vwap_50: self.vwap(50).ok(),
+            vwap_100: self.vwap(100).ok(),
+            vwap_1000: self.vwap(1000).ok(),
         }
     }
 }
@@ -264,7 +280,7 @@ impl ConcurrentTradesLog {
     }
 
     pub async fn vwap(&self, n: usize) -> Result<Decimal, TradesLogError> {
-        let log = self.inner.read().await;
+        let log = self.inner.read().await;  
         log.vwap(n)
     }
 
