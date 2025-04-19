@@ -118,24 +118,34 @@ impl TradesLog {
     }
 
     pub fn insert_trade(&mut self, trade: Trade) {
+        // Handle trade eviction if buffer is full
         if self.trades.len() == self.max_len {
             let removed = self.trades.pop_front().unwrap();
+            
+            // Adjust volumes and momentum for removed trade
             if removed.is_buyer_maker {
                 self.sell_volume -= removed.quantity;
+                // When removing a sell trade, we need to increment momentum
+                // because we're removing a -1 that was previously added
                 self.cached_stats.signed_count_momentum += 1;
             } else {
                 self.buy_volume -= removed.quantity;
+                // When removing a buy trade, we need to decrement momentum
+                // because we're removing a +1 that was previously added
                 self.cached_stats.signed_count_momentum -= 1;
             }
         } else {
             self.trade_count += 1;
         }
 
+        // Add new trade
         if trade.is_buyer_maker {
             self.sell_volume += trade.quantity;
+            // Sell trades (maker) decrease momentum
             self.cached_stats.signed_count_momentum -= 1;
         } else {
             self.buy_volume += trade.quantity;
+            // Buy trades (taker) increase momentum
             self.cached_stats.signed_count_momentum += 1;
         }
 
@@ -192,6 +202,9 @@ impl TradesLog {
 
     pub fn aggressor_volume_ratio(&self, n: usize) -> Result<Decimal, TradesLogError> {
         if n == 0 {
+            return Err(TradesLogError::InvalidWindowSize);
+        }
+        if self.trades.is_empty() {  
             return Err(TradesLogError::InsufficientTrades);
         }
 
@@ -333,5 +346,203 @@ impl ConcurrentTradesLog {
     pub async fn get_snapshot(&self) -> TradeLogSnapshot {
         let mut log = self.inner.write().await;
         log.get_snapshot()
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal_macros::dec;
+
+    fn create_test_trade(price: Decimal, quantity: Decimal, is_buyer_maker: bool) -> Trade {
+        Trade {
+            price,
+            quantity,
+            timestamp: 0,
+            is_buyer_maker,
+        }
+    }
+
+    #[test]
+    fn test_new_trades_log() {
+        let log = TradesLog::new(100);
+        assert_eq!(log.trades.len(), 0);
+        assert_eq!(log.max_len, 100);
+        assert_eq!(log.buy_volume, dec!(0));
+        assert_eq!(log.sell_volume, dec!(0));
+    }
+
+    #[test]
+    fn test_insert_trade() {
+        let mut log = TradesLog::new(2); // max_len = 2
+        
+        // 1. Add first buy trade
+        log.insert_trade(create_test_trade(dec!(100), dec!(1), false));
+        assert_eq!(log.signed_count_momentum(), 1, "First buy should set momentum to 1");
+        
+        // 2. Add sell trade
+        log.insert_trade(create_test_trade(dec!(101), dec!(1), true));
+        assert_eq!(log.signed_count_momentum(), 0, "Sell should decrement momentum to 0");
+        
+        // 3. Add another buy trade (will evict the first trade)
+        log.insert_trade(create_test_trade(dec!(102), dec!(1), false));
+        
+        // Breakdown of expected momentum calculation:
+        // - Evict first buy trade (was +1): momentum -= 1 → -1
+        // - Add new buy trade: momentum += 1 → 0
+        // - Current trades in buffer: sell (-1) and buy (+1) → net 0
+        assert_eq!(log.signed_count_momentum(), 0, "After eviction and new buy, momentum should be 0");
+        
+        // Verify volumes
+        assert_eq!(log.buy_volume, dec!(1), "Buy volume should be 1");
+        assert_eq!(log.sell_volume, dec!(1), "Sell volume should be 1");
+    }
+
+    #[test]
+    fn test_vwap_calculation() {
+        let mut log = TradesLog::new(10);
+        
+        // Empty log
+        assert!(matches!(
+            log.vwap(1),
+            Err(TradesLogError::InsufficientTrades)
+        ));
+        
+        // Add trades
+        log.insert_trade(create_test_trade(dec!(100), dec!(1), false));
+        log.insert_trade(create_test_trade(dec!(101), dec!(2), true));
+        log.insert_trade(create_test_trade(dec!(102), dec!(3), false));
+        
+        // Test VWAP with approximate comparison
+        let vwap = log.vwap(3).unwrap();
+        let expected = dec!(101.3333333333333333333333333);
+        assert!((vwap - expected).abs() < dec!(0.0000001));
+        
+        // Test zero volume error
+        let mut empty_log = TradesLog::new(10);
+        empty_log.insert_trade(create_test_trade(dec!(100), dec!(0), false));
+        assert!(matches!(
+            empty_log.vwap(1),
+            Err(TradesLogError::ZeroVolume)
+        ));
+    }
+
+    #[test]
+    fn test_trade_rate() {
+        let mut log = TradesLog::new(10);
+        
+        // Empty log
+        assert!(matches!(
+            log.trade_rate(1000),
+            Err(TradesLogError::InsufficientTrades)
+        ));
+        
+        // Add trades with timestamps
+        let now = 100_000; // ms
+        log.insert_trade(Trade {
+            price: dec!(100),
+            quantity: dec!(1),
+            timestamp: now - 5000,
+            is_buyer_maker: false,
+        });
+        log.insert_trade(Trade {
+            price: dec!(101),
+            quantity: dec!(2),
+            timestamp: now - 3000,
+            is_buyer_maker: true,
+        });
+        log.insert_trade(Trade {
+            price: dec!(102),
+            quantity: dec!(3),
+            timestamp: now,
+            is_buyer_maker: false,
+        });
+        
+        // Test trade rate with approximate comparison
+        let rate = log.trade_rate(5000).unwrap();
+        assert!((rate - 0.6).abs() < 0.0001); // 3 trades / 5 seconds
+    }
+
+    #[test]
+    fn test_aggressor_volume_ratio() {
+        let mut log = TradesLog::new(10);
+        
+        // Empty log
+        assert!(matches!(
+            log.aggressor_volume_ratio(1),
+            Err(TradesLogError::InsufficientTrades)
+        ));
+        
+        // Add trades
+        log.insert_trade(create_test_trade(dec!(100), dec!(1), false));
+        log.insert_trade(create_test_trade(dec!(101), dec!(2), true));
+        
+        // Use approximate comparison for decimal values
+        let ratio = log.aggressor_volume_ratio(2).unwrap();
+        assert!((ratio - dec!(0.3333333333333333333333333)).abs() < dec!(0.0000001));
+    }
+
+    #[test]
+    fn test_snapshot() {
+        let mut log = TradesLog::new(10);
+        
+        // Add trades
+        log.insert_trade(create_test_trade(dec!(100), dec!(1), false));
+        log.insert_trade(create_test_trade(dec!(101), dec!(2), true));
+        
+        let snapshot = log.get_snapshot();
+        
+        assert_eq!(snapshot.last_price, Some(dec!(101)));
+        assert!((snapshot.trade_imbalance.unwrap() - dec!(0.3333333333333333333333333)).abs() < dec!(0.0000001));
+        assert_eq!(snapshot.vwap_10, log.vwap(10).ok());
+    }
+
+    #[test]
+    fn test_zero_quantity_trades() {
+        let mut log = TradesLog::new(10);
+        log.insert_trade(create_test_trade(dec!(100), dec!(0), false));
+        assert_eq!(log.buy_volume, dec!(0));
+        assert!(matches!(
+            log.vwap(1),
+            Err(TradesLogError::ZeroVolume)
+        ));
+    }
+
+    #[test]
+    fn test_insert_trade_momentum() {
+        let mut log = TradesLog::new(3);
+        
+        // First buy trade
+        log.insert_trade(create_test_trade(dec!(100), dec!(1), false));
+        assert_eq!(log.signed_count_momentum(), 1);
+        
+        // Sell trade
+        log.insert_trade(create_test_trade(dec!(101), dec!(1), true));
+        assert_eq!(log.signed_count_momentum(), 0);
+        
+        // Another buy trade
+        log.insert_trade(create_test_trade(dec!(102), dec!(1), false));
+        assert_eq!(log.signed_count_momentum(), 1);
+        
+        // Force eviction of first trade
+        log.insert_trade(create_test_trade(dec!(103), dec!(1), false));
+        assert_eq!(log.signed_count_momentum(), 1); // Evicted buy (-1), added buy (+1)
+    }
+
+    #[test] 
+    fn test_aggressor_ratio_edge_cases() {
+        let mut log = TradesLog::new(10);
+        
+        // Single trade
+        log.insert_trade(create_test_trade(dec!(100), dec!(1), false));
+        assert_eq!(log.aggressor_volume_ratio(1).unwrap(), dec!(1.0));
+        
+        // All buys
+        log.insert_trade(create_test_trade(dec!(101), dec!(2), false));
+        assert_eq!(log.aggressor_volume_ratio(2).unwrap(), dec!(1.0));
+        
+        // All sells
+        let mut sell_log = TradesLog::new(10);
+        sell_log.insert_trade(create_test_trade(dec!(100), dec!(1), true));
+        assert_eq!(sell_log.aggressor_volume_ratio(1).unwrap(), dec!(0.0));
     }
 }

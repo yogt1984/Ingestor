@@ -51,31 +51,33 @@ impl RollingFlowTracker {
     }
 
     pub fn imbalance(&self) -> (Option<Decimal>, Decimal) {
-        let mut bid_pressure = dec!(0);
-        let mut ask_pressure = dec!(0);
-        let now = Instant::now();
-
+        let mut bids = dec!(0);
+        let mut asks = dec!(0);
+        let mut bid_cancel_penalty = dec!(0);
+        let mut ask_cancel_penalty = dec!(0);
+        
         for (time, event) in &self.events {
-            let age_secs = (now - *time).as_secs_f64();
-            let age_weight = 1.0 - (age_secs / self.window.as_secs_f64()).min(1.0);
-            let weight = Decimal::from_f64(age_weight).unwrap_or(dec!(1));
-
+            let age_secs = (Instant::now() - *time).as_secs_f64();
+            let weight = 1.0 - (age_secs / self.window.as_secs_f64()).min(1.0);
+            let weight = Decimal::from_f64(weight).unwrap_or(dec!(1));
+    
             match event {
-                OrderFlowEvent::BidOrder(qty) => bid_pressure += qty * weight,
-                OrderFlowEvent::AskOrder(qty) => ask_pressure += qty * weight,
-                OrderFlowEvent::BidCancel => bid_pressure -= self.cancel_penalty * weight,
-                OrderFlowEvent::AskCancel => ask_pressure -= self.cancel_penalty * weight,
+                OrderFlowEvent::BidOrder(qty) => bids += qty * weight,
+                OrderFlowEvent::AskOrder(qty) => asks += qty * weight,
+                OrderFlowEvent::BidCancel => bid_cancel_penalty += self.cancel_penalty * weight,
+                OrderFlowEvent::AskCancel => ask_cancel_penalty += self.cancel_penalty * weight,
             }
         }
-
-        let total_pressure = bid_pressure + ask_pressure;
-        let imbalance = if total_pressure >= self.min_pressure {
-            Some((bid_pressure - ask_pressure) / total_pressure)
+    
+        let total_pressure = bids + asks;
+        if total_pressure >= self.min_pressure {
+            let net_bids = bids - bid_cancel_penalty;
+            let net_asks = asks - ask_cancel_penalty;
+            let imbalance = (net_bids - net_asks) / total_pressure;
+            (Some(imbalance), total_pressure)
         } else {
-            None
-        };
-
-        (imbalance, total_pressure)
+            (None, total_pressure)
+        }
     }
 }
 
@@ -544,7 +546,120 @@ impl ConcurrentOrderBook {
 
     pub async fn get_snapshot(&self) -> OrderBookSnapshot {
         let book = self.inner.read().await;
-        let (flow_imb, flow_pressure) = book.flow_tracker.imbalance();
+        let (_flow_imb, _) = book.flow_tracker.imbalance();
         book.get_snapshot()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn test_flow_tracker_pruning() {
+        let mut tracker = RollingFlowTracker::new(1); // 1-second window
+        tracker.add_event(OrderFlowEvent::BidOrder(dec!(1.0)));
+        thread::sleep(Duration::from_millis(500));
+        tracker.add_event(OrderFlowEvent::AskOrder(dec!(2.0)));
+        assert_eq!(tracker.events.len(), 2);
+
+        thread::sleep(Duration::from_millis(600)); // Total time > window
+        tracker.prune_old(Instant::now());
+        assert_eq!(tracker.events.len(), 1); // Only the second event remains
+    }
+
+    #[test]
+    fn test_imbalance_calculation() {
+        let mut tracker = RollingFlowTracker::new(10);
+        // Add events with decaying weights
+        tracker.add_event(OrderFlowEvent::BidOrder(dec!(10.0))); // Full weight
+        thread::sleep(Duration::from_millis(100));
+        tracker.add_event(OrderFlowEvent::AskOrder(dec!(5.0)));  // Partial weight
+
+        let (imbalance, pressure) = tracker.imbalance();
+        assert!(pressure >= dec!(7.5)); // Weighted sum between 5 and 15
+        assert!(imbalance.unwrap() > dec!(0)); // More bid pressure
+    }
+
+    #[test]
+    fn test_cancel_penalty() {
+        let mut tracker = RollingFlowTracker::new(10);
+        
+        // Add initial bid
+        tracker.add_event(OrderFlowEvent::BidOrder(dec!(10.0)));
+        let (initial_imb, _) = tracker.imbalance();
+        assert!(
+            (initial_imb.unwrap() - dec!(1.0)).abs() < dec!(0.0001),
+            "Initial imbalance should be ~1.0"
+        );
+        
+        // Add cancel
+        tracker.add_event(OrderFlowEvent::BidCancel);
+        let (new_imb, _) = tracker.imbalance();
+        
+        // Check with more tolerant comparison
+        let expected = dec!(0.965);
+        let actual = new_imb.unwrap();
+        assert!(
+            (actual - expected).abs() < dec!(0.0001),  // Increased tolerance
+            "Imbalance should be ~0.965 after cancel, got {}",
+            actual
+        );
+    }
+
+    #[test]
+    fn test_order_book_snapshot() {
+        let mut book = OrderBook::new();
+        book.apply_snapshot(
+            vec![(dec!(100.0), dec!(2.0)), (dec!(99.0), dec!(1.0))],
+            vec![(dec!(101.0), dec!(3.0)), (dec!(102.0), dec!(4.0))],
+        );
+
+        assert_eq!(book.best_bid(), Some((dec!(100.0), dec!(2.0))));
+        assert_eq!(book.best_ask(), Some((dec!(101.0), dec!(3.0))));
+        assert_eq!(book.spread(), Some(dec!(1.0)));
+    }
+
+    #[test]
+    fn test_delta_updates() {
+        let mut book = OrderBook::new();
+        book.apply_deltas(
+            vec![(dec!(100.0), dec!(1.0))], // Add bid
+            vec![(dec!(101.0), dec!(1.0))],  // Add ask
+        );
+        assert_eq!(book.best_bid(), Some((dec!(100.0), dec!(1.0))));
+
+        book.apply_deltas(
+            vec![(dec!(100.0), dec!(0.0))], // Cancel bid
+            vec![],
+        );
+        assert!(book.best_bid().is_none());
+    }
+
+    #[test]
+    fn test_advanced_metrics() {
+        let mut book = OrderBook::new();
+        book.apply_snapshot(
+            vec![
+                (dec!(99.0), dec!(1.0)),
+                (dec!(98.0), dec!(2.0)),
+                (dec!(97.0), dec!(3.0)),
+            ],
+            vec![
+                (dec!(101.0), dec!(1.0)),
+                (dec!(102.0), dec!(2.0)),
+                (dec!(103.0), dec!(3.0)),
+            ],
+        );
+
+        // Test slope calculation
+        let (bid_slope, ask_slope) = book.slope(3).unwrap();
+        assert!(bid_slope > dec!(0) && bid_slope < dec!(2)); // ~1.0 avg distance
+        assert!(ask_slope > dec!(0) && ask_slope < dec!(2));
+
+        // Test volume imbalance
+        assert_eq!(book.volume_imbalance(), Some(dec!(0.5))); // 6 bids vs 6 asks
     }
 }
