@@ -24,3 +24,4 @@ rust_decimal = "1.29"
 rust_decimal_macros = "1.29"
 polars = { version = "0.33.2", features = ["parquet", "lazy", "json"] }
 num = "0.4" 
+tempfile = "3.3.0"  # Add this line
