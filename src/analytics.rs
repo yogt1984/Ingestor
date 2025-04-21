@@ -189,3 +189,128 @@ pub async fn run_analytics_task(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        orderbook::{ConcurrentOrderBook, OrderBookSnapshot},
+        tradeslog::{ConcurrentTradesLog, Trade, TradeLogSnapshot},
+    };
+    use rust_decimal_macros::dec;
+    use tokio::sync::watch;
+    use std::sync::Arc;
+    use chrono::{TimeZone, Utc};
+
+    // Helper to create a test FeaturesSnapshot without using Default
+    fn create_test_snapshot() -> FeaturesSnapshot {
+        FeaturesSnapshot {
+            timestamp: Utc::now().to_rfc3339(),
+            best_bid: Some(dec!(100.0)),
+            best_ask: Some(dec!(101.0)),
+            mid_price: Some(dec!(100.5)),
+            microprice: Some(dec!(100.3)),
+            spread: Some(dec!(1.0)),
+            imbalance: Some(dec!(0.5)),
+            top_bids: vec![],
+            top_asks: vec![],
+            pwi_1: None,
+            pwi_5: None,
+            pwi_25: None,
+            pwi_50: None,
+            bid_slope: None,
+            ask_slope: None,
+            volume_imbalance_top5: None,
+            bid_depth_ratio: None,
+            ask_depth_ratio: None,
+            bid_volume_001: None,
+            ask_volume_001: None,
+            bid_avg_distance: None,
+            ask_avg_distance: None,
+            last_trade_price: None,
+            trade_imbalance: None,
+            vwap_total: None,
+            price_change: None,
+            avg_trade_size: None,
+            signed_count_momentum: 0,
+            trade_rate_10s: None,
+            order_flow_imbalance: None,
+            order_flow_pressure: dec!(0.0),
+            order_flow_significance: false,
+            vwap_10: None,
+            vwap_50: None,
+            vwap_100: None,
+            vwap_1000: None,
+            aggr_ratio_10: None,
+            aggr_ratio_50: None,
+            aggr_ratio_100: None,
+            aggr_ratio_1000: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_task_shutdown() {
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let order_book = Arc::new(ConcurrentOrderBook::new());
+        let trades_log = Arc::new(ConcurrentTradesLog::new(10));
+
+        let task = tokio::spawn(run_analytics_task(
+            order_book,
+            trades_log,
+            shutdown_rx,
+        ));
+
+        shutdown_tx.send(true).unwrap();
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_trade_processing() {
+        let order_book = Arc::new(ConcurrentOrderBook::new());
+        let trades_log = Arc::new(ConcurrentTradesLog::new(100));
+
+        // Use only known working methods
+        trades_log.insert_trade(Trade {
+            price: dec!(100.0),
+            quantity: dec!(1.0),
+            timestamp: Utc::now().timestamp_millis() as u64,
+            is_buyer_maker: false,
+        }).await;
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let task = tokio::spawn(run_analytics_task(
+            order_book,
+            trades_log.clone(),
+            shutdown_rx,
+        ));
+
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        shutdown_tx.send(true).unwrap();
+        task.await.unwrap();
+
+        let snapshot = trades_log.get_snapshot().await;
+        assert_eq!(snapshot.last_price, Some(dec!(100.0)));
+    }
+
+    #[tokio::test]
+    async fn test_empty_market() {
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let task = tokio::spawn(run_analytics_task(
+            Arc::new(ConcurrentOrderBook::new()),
+            Arc::new(ConcurrentTradesLog::new(10)),
+            shutdown_rx,
+        ));
+
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        shutdown_tx.send(true).unwrap();
+        task.await.unwrap();
+    }
+
+    #[test]
+    fn test_snapshot_serialization() {
+        let snapshot = create_test_snapshot();
+        let serialized = serde_json::to_string(&snapshot).unwrap();
+        assert!(serialized.contains("100.0"));
+        assert!(serialized.contains("101.0"));
+    }
+}
