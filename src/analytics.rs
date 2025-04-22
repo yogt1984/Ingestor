@@ -170,10 +170,14 @@ pub async fn run_analytics_task(
                     snapshot.trade_rate_10s,
                     snapshot.order_flow_imbalance.unwrap_or(dec!(0)),
                 );
-
                 batch.push(snapshot);
                 if batch.len() >= BATCH_SIZE {
-                    if let Err(e) = persistence::save_feature_as_parquet(&batch, &format!("data/features_batch_{:03}.parquet", batch_id)) {
+                    let filename = format!(
+                        "data/features_{}_{:03}.parquet",
+                        chrono::Local::now().format("%Y%m%d_%H%M%S"), 
+                        batch_id
+                    );
+                    if let Err(e) = persistence::save_feature_as_parquet(&batch, &filename) {
                         eprintln!("Failed to save batch {}: {}", batch_id, e);
                     }
                     batch.clear();
