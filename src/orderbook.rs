@@ -11,6 +11,11 @@ use std::time::{Instant, Duration};
 const VOLUME_PERCENTS: [Decimal; 5] = [dec!(0.01), dec!(0.05), dec!(0.1), dec!(0.5), dec!(1.0)];
 const PWI_PERCENTS: [Decimal; 4]    = [dec!(0.01), dec!(0.1), dec!(0.5), dec!(1.0)];
 
+const FLOW_WINDOW_SECS: u64 = 10;                  // Default rolling window (seconds)
+const FLOW_CANCEL_PENALTY: Decimal = dec!(0.35);   // Penalty multiplier for cancellations
+const FLOW_MIN_PRESSURE: Decimal = dec!(2.5);      // Minimum pressure to compute imbalance
+const FLOW_WEIGHT_DECAY: f64 = 1.0;                // Linear decay (1.0 = full weight at t=0)
+
 #[derive(Debug, Clone, Copy)]
 pub enum OrderFlowEvent {
     BidOrder(Decimal),  
@@ -28,21 +33,22 @@ pub struct RollingFlowTracker {
 }
 
 impl RollingFlowTracker {
-    pub fn new(window_secs: u64) -> Self {
+    pub fn new(window_secs: Option<u64>) -> Self {
         Self {
             events: VecDeque::with_capacity(2000),
-            window: Duration::from_secs(window_secs),
-            cancel_penalty: dec!(0.35),
-            min_pressure: dec!(2.5),
+            window: Duration::from_secs(window_secs.unwrap_or(FLOW_WINDOW_SECS)),
+            cancel_penalty: FLOW_CANCEL_PENALTY,
+            min_pressure: FLOW_MIN_PRESSURE,
         }
     }
 
+    /// Adds an event and prunes old entries.
     pub fn add_event(&mut self, event: OrderFlowEvent) {
-        let now = Instant::now();
-        self.prune_old(now);
-        self.events.push_back((now, event));
+        self.prune_old(Instant::now());
+        self.events.push_back((Instant::now(), event));
     }
 
+    /// Removes events older than the rolling window.
     fn prune_old(&mut self, now: Instant) {
         let cutoff = now - self.window;
         while let Some((time, _)) = self.events.front() {
@@ -54,37 +60,71 @@ impl RollingFlowTracker {
         }
     }
 
+    /// Explicitly prunes old events (callable on demand).
+    pub fn prune_old_events(&mut self) {
+        self.prune_old(Instant::now());
+    }
+
+    /// Safer weight calculation with fallback and division guard.
+    fn calculate_weight(&self, age_secs: f64) -> Decimal {
+        let window_secs = self.window.as_secs_f64();
+        let normalized_age = if window_secs > 0.0 {
+            (age_secs / window_secs).min(1.0)
+        } else {
+            0.0  // Fallback if window_secs is 0 (should never happen)
+        };
+        Decimal::from_f64(FLOW_WEIGHT_DECAY * (1.0 - normalized_age))
+            .unwrap_or_else(|| {
+                log::warn!("Weight conversion failed, using fallback");
+                dec!(1)
+            })
+    }
+
+    /// Computes flow imbalance and total pressure.
     pub fn imbalance(&self) -> (Option<Decimal>, Decimal) {
-        let mut bids = dec!(0);
-        let mut asks = dec!(0);
-        let mut bid_cancel_penalty = dec!(0);
-        let mut ask_cancel_penalty = dec!(0);
-        
+        let mut weighted_bids = dec!(0);
+        let mut weighted_asks = dec!(0);
+        let mut bid_cancel_weights = dec!(0);
+        let mut ask_cancel_weights = dec!(0);
+    
+        let now = Instant::now();
         for (time, event) in &self.events {
-            let age_secs = (Instant::now() - *time).as_secs_f64();
-            let weight = 1.0 - (age_secs / self.window.as_secs_f64()).min(1.0);
-            let weight = Decimal::from_f64(weight).unwrap_or(dec!(1));
+            let age_secs = (now - *time).as_secs_f64();
+            let weight = self.calculate_weight(age_secs);
     
             match event {
-                OrderFlowEvent::BidOrder(qty) => bids += qty * weight,
-                OrderFlowEvent::AskOrder(qty) => asks += qty * weight,
-                OrderFlowEvent::BidCancel => bid_cancel_penalty += self.cancel_penalty * weight,
-                OrderFlowEvent::AskCancel => ask_cancel_penalty += self.cancel_penalty * weight,
+                OrderFlowEvent::BidOrder(qty) => weighted_bids += qty * weight,
+                OrderFlowEvent::AskOrder(qty) => weighted_asks += qty * weight,
+                OrderFlowEvent::BidCancel => bid_cancel_weights += weight,
+                OrderFlowEvent::AskCancel => ask_cancel_weights += weight,
             }
         }
     
-        let total_pressure = bids + asks;
-        if total_pressure >= self.min_pressure {
-            let net_bids = bids - bid_cancel_penalty;
-            let net_asks = asks - ask_cancel_penalty;
-            let imbalance = (net_bids - net_asks) / total_pressure;
-            (Some(imbalance), total_pressure)
+        let total_pressure = weighted_bids + weighted_asks;
+    
+        // Only compute imbalance if pressure meets threshold AND is non-zero
+        if total_pressure > dec!(0) && total_pressure >= self.min_pressure {
+            let net_bids = weighted_bids - bid_cancel_weights * self.cancel_penalty;
+            let net_asks = weighted_asks - ask_cancel_weights * self.cancel_penalty;
+            
+            // Inline safe division check
+            let imbalance = if total_pressure != dec!(0) {
+                Some((net_bids - net_asks) / total_pressure)
+            } else {
+                log::warn!(
+                    "Imbalance division failed (net_bids: {}, net_asks: {}, pressure: {})",
+                    net_bids,
+                    net_asks,
+                    total_pressure
+                );
+                None
+            };
+            (imbalance, total_pressure)
         } else {
             (None, total_pressure)
         }
     }
 }
-
 
 #[derive(Debug, Clone)]
 pub struct OrderBook {
@@ -130,7 +170,7 @@ impl OrderBook {
             asks: BTreeMap::new(),
             best_bid: None,
             best_ask: None,
-            flow_tracker: RollingFlowTracker::new(10),  // 10-second window
+            flow_tracker: RollingFlowTracker::new(None), 
         }
     }
 
@@ -696,5 +736,22 @@ mod tests {
 
         // Test volume imbalance
         assert_eq!(book.volume_imbalance(), Some(dec!(0.5))); // 6 bids vs 6 asks
+    }
+
+    #[test]
+    fn test_zero_window_secs() {
+        let mut tracker = RollingFlowTracker::new(Some(0)); // Edge case
+        tracker.add_event(OrderFlowEvent::BidOrder(dec!(1.0)));
+        let (imb, _) = tracker.imbalance();
+        assert!(imb.is_none(), "Imbalance should be None with zero window");
+    }
+
+    #[test]
+    fn test_flow_prune_on_demand() {
+        let mut tracker = RollingFlowTracker::new(Some(1));
+        tracker.add_event(OrderFlowEvent::BidOrder(dec!(1.0)));
+        thread::sleep(Duration::from_millis(1500));
+        tracker.prune_old_events(); // Explicit call
+        assert_eq!(tracker.events.len(), 0);
     }
 }
