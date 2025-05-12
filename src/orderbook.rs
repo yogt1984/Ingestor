@@ -7,6 +7,10 @@ use num::FromPrimitive;
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Instant, Duration};
 
+
+const VOLUME_PERCENTS: [Decimal; 5] = [dec!(0.01), dec!(0.05), dec!(0.1), dec!(0.5), dec!(1.0)];
+const PWI_PERCENTS: [Decimal; 4]    = [dec!(0.01), dec!(0.1), dec!(0.5), dec!(1.0)];
+
 #[derive(Debug, Clone, Copy)]
 pub enum OrderFlowEvent {
     BidOrder(Decimal),  
@@ -409,6 +413,24 @@ impl OrderBook {
         Some(numerator / denominator)
     }
 
+    pub fn volume_vector(&self) -> Vec<(Decimal, (Decimal, Decimal))> {
+        VOLUME_PERCENTS.iter()
+            .filter_map(|&p| {
+                self.volume_within_percent_range(p)
+                    .map(|vol| (p, vol))
+            })
+            .collect()
+    }
+
+    pub fn pwi_vector(&self) -> Vec<(Decimal, Decimal)> {
+        PWI_PERCENTS.iter()
+            .filter_map(|&p| {
+                self.price_weighted_imbalance_percent(p)
+                    .map(|val| (p, val))
+            })
+            .collect()
+    }
+
     pub fn get_snapshot(&self) -> OrderBookSnapshot {
         let best_bid = self.best_bid();
         let best_ask = self.best_ask();
@@ -551,6 +573,16 @@ impl ConcurrentOrderBook {
         let book = self.inner.read().await;
         let (_flow_imb, _) = book.flow_tracker.imbalance();
         book.get_snapshot()
+    }
+
+    pub async fn volume_vector(&self) -> Vec<(Decimal, (Decimal, Decimal))> {
+        let book = self.inner.read().await;
+        book.volume_vector()
+    }
+
+    pub async fn pwi_vector(&self) -> Vec<(Decimal, Decimal)> {
+        let book = self.inner.read().await;
+        book.pwi_vector()
     }
 }
 

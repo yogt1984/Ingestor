@@ -55,6 +55,8 @@ pub struct FeaturesSnapshot {
     pub aggr_ratio_50: Option<Decimal>, 
     pub aggr_ratio_100: Option<Decimal>,
     pub aggr_ratio_1000: Option<Decimal>,
+    pub volume_vector: Vec<(Decimal, (Decimal, Decimal))>,
+    pub pwi_vector: Vec<(Decimal, Decimal)>,
 }
 
 pub async fn run_analytics_task(
@@ -77,6 +79,11 @@ pub async fn run_analytics_task(
                 );
 
                 let (flow_imbalance, flow_pressure) = order_book.get_flow_imbalance().await;
+                
+                let (volume_vector, pwi_vector) = tokio::join!(
+                    order_book.volume_vector(),
+                    order_book.pwi_vector()
+                );
 
                 let snapshot = FeaturesSnapshot {
                     timestamp: Utc::now().to_rfc3339(),
@@ -119,6 +126,8 @@ pub async fn run_analytics_task(
                     order_flow_imbalance: flow_imbalance,
                     order_flow_pressure: flow_pressure,
                     order_flow_significance: flow_pressure >= SIGNIFICANCE_THRESHOLD,
+                    volume_vector,
+                    pwi_vector,
                 };
                 
                 // Simple console output
@@ -126,6 +135,8 @@ pub async fn run_analytics_task(
                     r#"[{}] MID: {:.2} | MICRO: {:.2} (Δ {:.4})
                     VWAP: 10={:.3} | 50={:.3} | 100={:.3} | 1000={:.3}
                     AGGR: 10={:.3} | 50={:.3} | 100={:.3} | 1000={:.3}
+                    VOL_VECTOR: {:?}
+                    PWI_VECTOR: {:?}
                     BID/ASK: {:?}/{:?} | SPRD: {:?} | IMB: {:?}
                     PWI: 1%={:?} 5%={:?} 25%={:?} 50%={:?}
                     SLOPE: B{:?}/A{:?} | VOL_IMB: {:?}
@@ -146,6 +157,8 @@ pub async fn run_analytics_task(
                     snapshot.aggr_ratio_50.unwrap_or(dec!(0)),
                     snapshot.aggr_ratio_100.unwrap_or(dec!(0)),
                     snapshot.aggr_ratio_1000.unwrap_or(dec!(0)),
+                    snapshot.volume_vector,
+                    snapshot.pwi_vector,
                     snapshot.best_bid,
                     snapshot.best_ask,
                     snapshot.spread,
