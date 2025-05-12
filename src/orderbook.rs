@@ -237,31 +237,30 @@ impl OrderBook {
     }
 
     pub fn price_weighted_imbalance_percent(&self, percent: Decimal) -> Option<Decimal> {
-        let mid = self.mid_price()?;
+        let mid   = self.mid_price()?;
         let range = mid * percent / dec!(100);
         let lower = mid - range;
         let upper = mid + range;
     
         let bid_weighted: Decimal = self.bids
             .iter()
-            .filter(|(&price, _)| price >= lower)
+            .filter(|(&price, _)| price >= lower && price <= upper) 
             .map(|(&price, &qty)| price * qty)
             .sum();
     
         let ask_weighted: Decimal = self.asks
             .iter()
-            .filter(|(&price, _)| price <= upper)
+            .filter(|(&price, _)| price >= lower && price <= upper) 
             .map(|(&price, &qty)| price * qty)
             .sum();
     
         let total = bid_weighted + ask_weighted;
         if total > dec!(0) {
-            Some(bid_weighted / total)
+            Some((bid_weighted - ask_weighted) / total)  
         } else {
             None
         }
     }
-    
 
     /// Returns volume at specific price (0 if not present).
     pub fn volume_at_price(&self, price: Decimal, is_bid: bool) -> Decimal {
