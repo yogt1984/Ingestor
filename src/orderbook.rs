@@ -360,23 +360,27 @@ impl OrderBook {
     pub fn volume_within_percent_range(&self, percent: Decimal) -> Option<(Decimal, Decimal)> {
         let mid = self.mid_price()?;
         let range = mid * percent / dec!(100);
-    
         let lower = mid - range;
         let upper = mid + range;
     
-        let bid_volume: Decimal = self.bids
+        // Dereference price comparisons with **p for Decimal comparisons
+        let bid_volume = self.bids
             .iter()
-            .filter(|(&p, _)| p >= lower)
-            .map(|(_, &q)| q)
+            .filter(|(p, _)| (**p >= lower) && (**p <= upper))
+            .map(|(_, q)| *q)
             .sum();
     
-        let ask_volume: Decimal = self.asks
+        let ask_volume = self.asks
             .iter()
-            .filter(|(&p, _)| p <= upper)
-            .map(|(_, &q)| q)
+            .filter(|(p, _)| (**p >= lower) && (**p <= upper))
+            .map(|(_, q)| *q)
             .sum();
     
-        Some((bid_volume, ask_volume))
+        if bid_volume == dec!(0) && ask_volume == dec!(0) {
+            None
+        } else {
+            Some((bid_volume, ask_volume))
+        }
     }
 
     pub fn avg_price_distance(&self, levels: usize) -> Option<(Decimal, Decimal)> {
