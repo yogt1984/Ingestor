@@ -20,8 +20,8 @@ anyhow = "1.0"
 serde_arrow = "0.3.0" # Compatible with Arrow 47
 parquet2 = "0.17"
 arrow2 = { version = "0.17.4", features = ["io_parquet"] }
-rust_decimal = "1.29"
-rust_decimal_macros = "1.29"
+rust_decimal = { version = "1.30", features = ["maths"] }  # <-- Keep this one (underscore)
+rust_decimal_macros = "1.29"  # <-- Optional, but keep if needed
 polars = { version = "0.33.2", features = ["parquet", "lazy", "json"] }
-num = "0.4" 
-tempfile = "3.3.0"  # Add this line
+num = "0.4"
+tempfile = "3.3.0"  

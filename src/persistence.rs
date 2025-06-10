@@ -1,8 +1,15 @@
 use anyhow::{Context, Result};
 use polars::prelude::*;
 use serde_json;
-use crate::analytics::FeaturesSnapshot;
+use serde::Serialize;
+use crate::{
+    analytics::FeaturesSnapshot,
+};
+use crate::illiquidity::IlliquidityMetrics;
 use rust_decimal::prelude::ToPrimitive;
+use crate::illiquidity::IlliquidityMetrics as IlliquiditySnapshot;  
+use crate::tradeslog::TradeLogSnapshot;  
+
 
 /// Save a batch of features to Parquet with comprehensive error handling
 pub fn save_feature_as_parquet(features: &[FeaturesSnapshot], filepath: &str) -> Result<()> {
@@ -72,6 +79,90 @@ pub fn save_feature_as_parquet(features: &[FeaturesSnapshot], filepath: &str) ->
 
     Ok(())
 }
+
+
+fn decimal_to_f64(d: Option<rust_decimal::Decimal>) -> Option<f64> {
+    d.and_then(|d| d.to_f64())
+}
+
+/// Saves illiquidity metrics with identical patterns to feature persistence
+pub fn save_illiquidity_as_parquet(
+    snapshots: &[IlliquidityMetrics],
+    filepath: &str
+) -> Result<()> {
+    let mut df = df! [
+        "timestamp" => snapshots.iter().map(|s| s.timestamp.clone()).collect::<Vec<_>>(),
+        "roll_spread" => snapshots.iter().map(|s| decimal_to_f64(s.roll_spread)).collect::<Vec<_>>(),
+        "hl_volatility" => snapshots.iter().map(|s| decimal_to_f64(s.hl_volatility)).collect::<Vec<_>>(),
+        "corwin_schultz_spread" => snapshots.iter().map(|s| decimal_to_f64(s.corwin_schultz_spread)).collect::<Vec<_>>(),
+        "amihuds_lambda" => snapshots.iter().map(|s| decimal_to_f64(s.amihuds_lambda)).collect::<Vec<_>>(),
+        "kyles_lambda" => snapshots.iter().map(|s| decimal_to_f64(s.kyles_lambda)).collect::<Vec<_>>(),
+        "hasbroucks_lambda" => snapshots.iter().map(|s| decimal_to_f64(s.hasbroucks_lambda)).collect::<Vec<_>>(),
+        "vpin" => snapshots.iter().map(|s| decimal_to_f64(s.vpin)).collect::<Vec<_>>(),
+    ].context("Failed to create illiquidity DataFrame")?;
+
+    // Mirror your exact file handling logic
+    if let Some(parent) = std::path::Path::new(filepath).parent() {
+        std::fs::create_dir_all(parent)
+            .context("Failed to create illiquidity output directory")?;
+    }
+
+    // Same compression and writing configuration
+    ParquetWriter::new(std::fs::File::create(filepath)
+        .context("Failed to create illiquidity output file")?)
+        .with_compression(ParquetCompression::Snappy)
+        .finish(&mut df)
+        .context("Failed to write illiquidity Parquet file")?;
+
+    Ok(())
+}
+
+/// Unified persistence task for both metric types
+pub async fn persist_metrics<T: Serialize>(
+    mut rx: tokio::sync::mpsc::Receiver<T>,
+    batch_size: usize,
+    base_path: &str,
+    file_prefix: &str,
+    save_fn: fn(&[T], &str) -> Result<()>
+) -> Result<()> {
+    let mut batch = Vec::with_capacity(batch_size);
+    let mut batch_counter = 0;
+    
+    while let Some(snapshot) = rx.recv().await {
+        batch.push(snapshot);
+        
+        if batch.len() >= batch_size {
+            let filename = format!(
+                "{}/{}_{}.parquet",
+                base_path,
+                file_prefix,
+                chrono::Local::now().format("%Y%m%d_%H%M%S")
+            );
+            
+            save_fn(&batch, &filename)
+                .context(format!("Failed to save {} batch {}", file_prefix, batch_counter))?;
+                
+            batch.clear();
+            batch_counter += 1;
+        }
+    }
+    
+    // Final flush
+    if !batch.is_empty() {
+        let filename = format!(
+            "{}/{}_{}.parquet",
+            base_path,
+            file_prefix,
+            chrono::Local::now().format("%Y%m%d_%H%M%S")
+        );
+        save_fn(&batch, &filename)
+            .context(format!("Failed to save final {} batch", file_prefix))?;
+    }
+    
+    Ok(())
+}
+
+
 
 #[cfg(test)]
 mod tests {

@@ -1,14 +1,17 @@
 use std::sync::Arc;
-use tokio::{sync::watch, time::{interval, Duration}};
+use tokio::sync::{mpsc, watch};  // Add mpsc here
+use tokio::time::{interval, Duration};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::Serialize;
 use chrono::Utc;
 use crate::{
-    orderbook::ConcurrentOrderBook,
-    tradeslog::ConcurrentTradesLog,
-    persistence,
+    orderbook::{ConcurrentOrderBook, OrderBookSnapshot},
+    tradeslog::{ConcurrentTradesLog, TradeLogSnapshot},
+    illiquidity::{IlliquidityMetrics, IlliquidityEngine, IlliquidityConfig}, 
 };
+use crate::persistence;
+
 
 const SNAPSHOT_INTERVAL_MS: u64 = 100;
 const BATCH_SIZE: usize = 1000;
@@ -57,18 +60,33 @@ pub struct FeaturesSnapshot {
     pub aggr_ratio_1000: Option<Decimal>,
     pub volume_vector: Vec<(Decimal, (Decimal, Decimal))>,
     pub pwi_vector: Vec<(Decimal, Decimal)>,
+    pub roll_spread: Option<Decimal>,
+    pub hl_volatility: Option<Decimal>,
+    pub corwin_schultz_spread: Option<Decimal>,
+    pub amihuds_lambda: Option<Decimal>,
+    pub kyles_lambda: Option<Decimal>,
+    pub hasbroucks_lambda: Option<Decimal>,
+    pub vpin: Option<Decimal>,
 }
 
 pub async fn run_analytics_task(
     order_book: Arc<ConcurrentOrderBook>,
     trades_log: Arc<ConcurrentTradesLog>,
     mut shutdown_rx: watch::Receiver<bool>,
+    illiquidity_tx: Option<mpsc::Sender<IlliquidityMetrics>>,
 ) {
+
     const SIGNIFICANCE_THRESHOLD: Decimal = dec!(10.0);
 
     let mut interval = interval(Duration::from_millis(SNAPSHOT_INTERVAL_MS));
     let mut batch = Vec::with_capacity(BATCH_SIZE);
     let mut batch_id = 0;
+
+    let mut illiquidity_engine = IlliquidityEngine::new(
+        order_book.clone(),
+        trades_log.clone(),
+        Some(IlliquidityConfig::default()) 
+    );
 
     loop {
         tokio::select! {
@@ -84,6 +102,23 @@ pub async fn run_analytics_task(
                     order_book.volume_vector(),
                     order_book.pwi_vector()
                 );
+
+                let illiquidity_metrics = match illiquidity_engine.compute_metrics().await {
+                    Ok(metrics) => metrics,
+                    Err(e) => {
+                        log::error!("Failed to compute illiquidity metrics: {}", e);
+                        IlliquidityMetrics {
+                            timestamp: Utc::now().to_rfc3339(),
+                            roll_spread: None,
+                            hl_volatility: None,
+                            corwin_schultz_spread: None,
+                            amihuds_lambda: None,
+                            kyles_lambda: None,
+                            hasbroucks_lambda: None,
+                            vpin: None,
+                        }
+                    }
+                };
 
                 let snapshot = FeaturesSnapshot {
                     timestamp: Utc::now().to_rfc3339(),
@@ -128,60 +163,88 @@ pub async fn run_analytics_task(
                     order_flow_significance: flow_pressure >= SIGNIFICANCE_THRESHOLD,
                     volume_vector,
                     pwi_vector,
+                    roll_spread: illiquidity_metrics.roll_spread,
+                    hl_volatility: illiquidity_metrics.hl_volatility,
+                    corwin_schultz_spread: illiquidity_metrics.corwin_schultz_spread,
+                    amihuds_lambda: illiquidity_metrics.amihuds_lambda,
+                    kyles_lambda: illiquidity_metrics.kyles_lambda,
+                    hasbroucks_lambda: illiquidity_metrics.hasbroucks_lambda,
+                    vpin: illiquidity_metrics.vpin,
                 };
                 
                 // Simple console output
                 println!(
-                    r#"[{}] MID: {:.2} | MICRO: {:.2} (Δ {:.4})
-                    VWAP: 10={:.3} | 50={:.3} | 100={:.3} | 1000={:.3}
-                    AGGR: 10={:.3} | 50={:.3} | 100={:.3} | 1000={:.3}
-                    VOL_VECTOR: {:?}
-                    PWI_VECTOR: {:?}
-                    BID/ASK: {:?}/{:?} | SPRD: {:?} | IMB: {:?}
-                    PWI: 1%={:?} 5%={:?} 25%={:?} 50%={:?}
-                    SLOPE: B{:?}/A{:?} | VOL_IMB: {:?}
-                    DEPTH: B{:?}/A{:?} | VOL(0.01%): B{:?}/A{:?}
-                    TRADES: LAST={:?} IMB={:?}
-                    VWAP_TOT={:?} ΔPRICE={:?} AVG_SIZE={:?}
-                    MOMENTUM: {} TRADE_RATE={:?}
-                    FLWIMB: {:.3}"#,
+                    r#"
+                [{}] CORE METRICS:
+                  MID: {:.4} | MICRO: {:.4} (Δ {:.4}) | SPRD: {:.4}
+                  BID/ASK: {:.4}/{:.4} | IMB: {:.2}% | PWI: 1%={:.2}% 5%={:.2}% 25%={:.2}% 50%={:.2}%
+                  SLOPE: B{:.4}/A{:.4} | VOL_IMB: {:.2}% | DEPTH: B{:.2}/A{:.2}
+                
+                LIQUIDITY METRICS:
+                  Roll: {:.6} | HL Vol: {:.6} | Corwin-Schultz: {:.6}
+                  Amihud: {:.6e} | Kyle: {:.4} | Hasbrouck: {:.4} | VPIN: {:.2}
+                
+                TRADE METRICS:
+                  LAST: {:.4} | VWAP: TOT={:.4} 10={:.4} 50={:.4} 100={:.4} 1000={:.4}
+                  ΔPRICE: {:.4}% | SIZE: {:.2} | MOMENTUM: {} | RATE: {:.1}/s
+                  AGGR: 10={:.2}% 50={:.2}% 100={:.2}% 1000={:.2}%
+                  FLOW: IMB={:.3} | PRES={:.1} | {}
+                
+                VOLUME STRUCTURE:
+                  VOL(0.01%): B={:.2} A={:.2} | VEC: {:?}
+                  PWI_VEC: {:?}"#,
                     snapshot.timestamp,
+                    // Core metrics
                     snapshot.mid_price.unwrap_or(dec!(0)),
                     snapshot.microprice.unwrap_or(dec!(0)),
-                    snapshot.microprice.unwrap_or(dec!(0)) - snapshot.mid_price.unwrap_or(dec!(0)),  
-                    snapshot.vwap_10.unwrap_or(dec!(0)),  
+                    snapshot.microprice.unwrap_or(dec!(0)) - snapshot.mid_price.unwrap_or(dec!(0)),
+                    snapshot.spread.unwrap_or(dec!(0)),
+                    snapshot.best_bid.unwrap_or(dec!(0)),
+                    snapshot.best_ask.unwrap_or(dec!(0)),
+                    snapshot.imbalance.unwrap_or(dec!(0)) * dec!(100),
+                    snapshot.pwi_1.unwrap_or(dec!(0)) * dec!(100),
+                    snapshot.pwi_5.unwrap_or(dec!(0)) * dec!(100),
+                    snapshot.pwi_25.unwrap_or(dec!(0)) * dec!(100),
+                    snapshot.pwi_50.unwrap_or(dec!(0)) * dec!(100),
+                    snapshot.bid_slope.unwrap_or(dec!(0)),
+                    snapshot.ask_slope.unwrap_or(dec!(0)),
+                    snapshot.volume_imbalance_top5.unwrap_or(dec!(0)) * dec!(100),
+                    snapshot.bid_depth_ratio.unwrap_or(dec!(0)),
+                    snapshot.ask_depth_ratio.unwrap_or(dec!(0)),
+                    
+                    // Illiquidity metrics
+                    snapshot.roll_spread.unwrap_or(dec!(0)),
+                    snapshot.hl_volatility.unwrap_or(dec!(0)),
+                    snapshot.corwin_schultz_spread.unwrap_or(dec!(0)),
+                    snapshot.amihuds_lambda.unwrap_or(dec!(0)),
+                    snapshot.kyles_lambda.unwrap_or(dec!(0)),
+                    snapshot.hasbroucks_lambda.unwrap_or(dec!(0)),
+                    snapshot.vpin.unwrap_or(dec!(0)),
+                    
+                    // Trade metrics
+                    snapshot.last_trade_price.unwrap_or(dec!(0)),
+                    snapshot.vwap_total.unwrap_or(dec!(0)),
+                    snapshot.vwap_10.unwrap_or(dec!(0)),
                     snapshot.vwap_50.unwrap_or(dec!(0)),
                     snapshot.vwap_100.unwrap_or(dec!(0)),
                     snapshot.vwap_1000.unwrap_or(dec!(0)),
-                    snapshot.aggr_ratio_10.unwrap_or(dec!(0)),
-                    snapshot.aggr_ratio_50.unwrap_or(dec!(0)),
-                    snapshot.aggr_ratio_100.unwrap_or(dec!(0)),
-                    snapshot.aggr_ratio_1000.unwrap_or(dec!(0)),
-                    snapshot.volume_vector,
-                    snapshot.pwi_vector,
-                    snapshot.best_bid,
-                    snapshot.best_ask,
-                    snapshot.spread,
-                    snapshot.imbalance,
-                    snapshot.pwi_1,
-                    snapshot.pwi_5,
-                    snapshot.pwi_25,
-                    snapshot.pwi_50,
-                    snapshot.bid_slope,
-                    snapshot.ask_slope,
-                    snapshot.volume_imbalance_top5,
-                    snapshot.bid_depth_ratio,
-                    snapshot.ask_depth_ratio,
-                    snapshot.bid_volume_001,
-                    snapshot.ask_volume_001,
-                    snapshot.last_trade_price,
-                    snapshot.trade_imbalance,
-                    snapshot.vwap_total,
-                    snapshot.price_change,
-                    snapshot.avg_trade_size,
+                    snapshot.price_change.unwrap_or(dec!(0)) * dec!(100),
+                    snapshot.avg_trade_size.unwrap_or(dec!(0)),
                     snapshot.signed_count_momentum,
-                    snapshot.trade_rate_10s,
+                    snapshot.trade_rate_10s.unwrap_or(0.0),
+                    snapshot.aggr_ratio_10.unwrap_or(dec!(0)) * dec!(100),
+                    snapshot.aggr_ratio_50.unwrap_or(dec!(0)) * dec!(100),
+                    snapshot.aggr_ratio_100.unwrap_or(dec!(0)) * dec!(100),
+                    snapshot.aggr_ratio_1000.unwrap_or(dec!(0)) * dec!(100),
                     snapshot.order_flow_imbalance.unwrap_or(dec!(0)),
+                    snapshot.order_flow_pressure,
+                    if snapshot.order_flow_significance { "SIG" } else { "insig" },
+                    
+                    // Volume structure
+                    snapshot.bid_volume_001.unwrap_or(dec!(0)),
+                    snapshot.ask_volume_001.unwrap_or(dec!(0)),
+                    snapshot.volume_vector,
+                    snapshot.pwi_vector
                 );
                 batch.push(snapshot);
                 if batch.len() >= BATCH_SIZE {

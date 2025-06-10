@@ -6,22 +6,25 @@ mod lob_feed_manager;
 mod log_feed_manager;
 mod analytics;
 mod persistence;
+mod illiquidity;
 
 use std::sync::Arc;
-use tokio::{spawn, sync::watch, time::Duration};
+use tokio::{spawn, sync::{watch, mpsc}, time::Duration};
 use crate::{
     orderbook::ConcurrentOrderBook,
     tradeslog::ConcurrentTradesLog,
     lob_feed_manager::LobFeedManager,
-    log_feed_manager::LogFeedManager
+    log_feed_manager::LogFeedManager,
+    illiquidity::{IlliquidityEngine, IlliquidityMetrics, IlliquidityConfig},
+    analytics::run_analytics_task
 };
 
 #[tokio::main]
 async fn main() {
     env_logger::init();
 
-    // Set up shutdown channel - NOTE: Now mutable
-    let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+    // Set up shutdown channel
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     // Set up the order book feed manager
     let lob_manager = LobFeedManager::new(
@@ -39,6 +42,10 @@ async fn main() {
         trades_log,
     );
 
+    // Create channels
+    let (illiq_tx, illiq_rx) = mpsc::channel::<IlliquidityMetrics>(100);
+    let (persistence_tx, persistence_rx) = mpsc::channel::<IlliquidityMetrics>(100);
+
     // Spawn components
     let lob_handle = spawn(async move {
         lob_manager.start().await;
@@ -48,15 +55,42 @@ async fn main() {
         log_manager.start().await;
     });
 
-    let analytics_handle = spawn({
-        let mut shutdown_rx = shutdown_rx.clone(); // Now mutable
+    // Create and spawn illiquidity engine
+    let illiquidity_engine = IlliquidityEngine::new(
+        order_book_arc.clone(),
+        trades_log_arc.clone(),
+        Some(IlliquidityConfig::default()) // Add this line
+    );
+
+    let illiquidity_handle = spawn({
+        let shutdown_rx = shutdown_rx.clone();
         async move {
-            analytics::run_analytics_task(
+            illiquidity_engine.run(shutdown_rx, persistence_tx).await.unwrap();
+        }
+    });
+
+    // Spawn analytics task
+    let analytics_handle = spawn({
+        let shutdown_rx = shutdown_rx.clone();
+        async move {
+            run_analytics_task(
                 order_book_arc,
                 trades_log_arc,
-                shutdown_rx
+                shutdown_rx,
+                Some(illiq_tx)
             ).await;
         }
+    });
+
+    // Spawn persistence task
+    let persistence_handle = spawn(async move {
+        persistence::persist_metrics(
+            persistence_rx,
+            1000,
+            "data/illiquidity",
+            "illiquidity",
+            persistence::save_illiquidity_as_parquet
+        ).await.unwrap();
     });
 
     // Ctrl+C handler
@@ -70,5 +104,7 @@ async fn main() {
         _ = lob_handle => eprintln!("Order book feed crashed"),
         _ = trades_handle => eprintln!("Trade feed crashed"),
         _ = analytics_handle => eprintln!("Analytics task crashed"),
+        _ = illiquidity_handle => eprintln!("Illiquidity engine crashed"),
+        _ = persistence_handle => eprintln!("Persistence task crashed"),
     }
 }
