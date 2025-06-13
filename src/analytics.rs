@@ -169,23 +169,14 @@ pub async fn run_analytics_task(
                 // Simple console output
                 println!(
                     r#"
-                [{}] CORE METRICS:
-                  MID: {:.4} | MICRO: {:.4} (Δ {:.4}) | SPRD: {:.4}
-                  BID/ASK: {:.4}/{:.4} | IMB: {:.2}% | PWI: 1%={:.2}% 5%={:.2}% 25%={:.2}% 50%={:.2}%
-                  SLOPE: B{:.4}/A{:.4} | VOL_IMB: {:.2}% | DEPTH: B{:.2}/A{:.2}
-                
-                LIQUIDITY METRICS:
-                  Roll: {:.6} | Amihud: {:.6e} | Kyle: {:.4} | Hasbrouck: {:.4} | VPIN: {:.2}
-                
-                TRADE METRICS:
-                  LAST: {:.4} | VWAP: TOT={:.4} 10={:.4} 50={:.4} 100={:.4} 1000={:.4}
-                  ΔPRICE: {:.4}% | SIZE: {:.2} | MOMENTUM: {} | RATE: {:.1}/s
-                  AGGR: 10={:.2}% 50={:.2}% 100={:.2}% 1000={:.2}%
-                  FLOW: IMB={:.3} | PRES={:.1} | {}
-                
-                VOLUME STRUCTURE:
-                  VOL(0.01%): B={:.2} A={:.2} | VEC: {:?}
-                  PWI_VEC: {:?}"#,
+                [{}] CORE METRICS: MID: {:.4} | MICRO: {:.4} (Δ {:.4}) | SPRD: {:.4} | BID/ASK: {:.4}/{:.4} | IMB: {:.2}% | 
+                PWI: 1%={:.2}% 5%={:.2}% 25%={:.2}% 50%={:.2}% SLOPE: B{:.4}/A{:.4}  | VOL_IMB: {:.2}% | DEPTH: B{:.2}/A{:.2}
+                LIQUIDITY METRICS: Roll: {:.6} | Amihud: {:.6e} | Kyle: {:.4} | Hasbrouck: {:.4} | VPIN: {:.2}
+                TRADE METRICS: LAST: {:.4} | VWAP: TOT={:.4} 10={:.4} 50={:.4} 100={:.4} 1000={:.4}| ΔPRICE: {:.4}% | SIZE: {:.2} 
+                MOMENTUM: {} | RATE: {:.1}/s | AGGR: 10={:.2}% 50={:.2}% 100={:.2}% 1000={:.2}% | FLOW: IMB={:.3} | PRES={:.1} | {}
+                VOLUME STRUCTURE: VOL(0.01%): B={:.2} A={:.2}  
+                VEC: {:?}
+                PWI_VEC: {:?}"#,
                     snapshot.timestamp,
                     // Core metrics
                     snapshot.mid_price.unwrap_or(dec!(0)),
