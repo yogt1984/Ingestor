@@ -6,9 +6,9 @@ use rust_decimal_macros::dec;
 use serde::{Serialize, Deserialize};
 use chrono::Utc;
 use metrics::{Counter, Histogram, Gauge};
-
 use crate::orderbook::{ConcurrentOrderBook, OrderBookSnapshot};
-use crate::tradeslog::{ConcurrentTradesLog, TradeLogSnapshot};
+use crate::tradeslog::{ConcurrentTradesLog, TradeLogSnapshot, Trade};
+use log;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct IlliquidityConfig {
@@ -16,12 +16,12 @@ pub struct IlliquidityConfig {
     pub snapshot_interval_ms: u64,
     pub min_price_diff: Decimal,
     pub min_observations: usize,
-    pub hl_window_size: usize,
-    pub cs_window_size: usize,
     pub amihud_window: usize,
     pub kyle_min_observations: usize,
     pub kyle_volume_scale: Decimal,
     pub kyle_price_scale: Decimal,
+    pub vpin_bucket_size: Decimal,      // Added
+    pub vpin_window_buckets: usize,     // Added
 }
 
 impl Default for IlliquidityConfig {
@@ -31,26 +31,31 @@ impl Default for IlliquidityConfig {
             snapshot_interval_ms: 100,
             min_price_diff: dec!(0.00000001),
             min_observations: 30,
-            hl_window_size: 5,
-            cs_window_size: 10,
             amihud_window: 20,
             kyle_min_observations: 50,
             kyle_volume_scale: dec!(1),
             kyle_price_scale: dec!(1),
+            vpin_bucket_size: dec!(10),  // 10 BTC per bucket
+            vpin_window_buckets: 50,     // 50-bucket rolling window
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct HistoryBuffer {
+    pub prices: Vec<Decimal>,
+    pub volumes: Vec<Decimal>,
+    pub directions: Vec<i8>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct IlliquidityMetrics {
     pub timestamp: String,
     pub roll_spread: Option<Decimal>,
-    pub hl_volatility: Option<Decimal>,
-    pub corwin_schultz_spread: Option<Decimal>,
     pub amihuds_lambda: Option<Decimal>,
     pub kyles_lambda: Option<Decimal>,
     pub hasbroucks_lambda: Option<Decimal>,
-    pub vpin: Option<Decimal>,
+    pub vpin: Option<Decimal>,          // Added
 }
 
 #[derive(Clone)]
@@ -60,10 +65,71 @@ pub struct IlliquidityEngineMetrics {
     pub window_size: Gauge,
 }
 
-struct HistoryBuffer {
-    prices: Vec<Decimal>,
-    volumes: Vec<Decimal>,
-    directions: Vec<i8>, // 1 for buy, -1 for sell
+struct VPIN {                           // New VPIN struct
+    bucket_size: Decimal,
+    buy_volumes: Vec<Decimal>,
+    sell_volumes: Vec<Decimal>,
+    window_size: usize,
+    current_buy: Decimal,
+    current_sell: Decimal,
+    last_price: Option<Decimal>,
+}
+
+impl VPIN {
+    fn new(bucket_size: Decimal, window_size: usize) -> Self {
+        Self {
+            bucket_size,
+            buy_volumes: Vec::with_capacity(window_size),
+            sell_volumes: Vec::with_capacity(window_size),
+            window_size,
+            current_buy: Decimal::ZERO,
+            current_sell: Decimal::ZERO,
+            last_price: None,
+        }
+    }
+
+    fn update(&mut self, trades: &[Trade]) {
+        for trade in trades {
+            let direction = self.classify_trade(trade);
+            match direction {
+                1 => self.current_buy += trade.quantity,  // Changed from volume to quantity
+                -1 => self.current_sell += trade.quantity, // Changed from volume to quantity
+                _ => {}
+            }
+            if (self.current_buy + self.current_sell) >= self.bucket_size {
+                self.buy_volumes.push(self.current_buy);
+                self.sell_volumes.push(self.current_sell);
+                self.current_buy = Decimal::ZERO;
+                self.current_sell = Decimal::ZERO;
+                if self.buy_volumes.len() > self.window_size {
+                    self.buy_volumes.remove(0);
+                    self.sell_volumes.remove(0);
+                }
+            }
+            self.last_price = Some(trade.price);
+        }
+    }
+    
+    fn classify_trade(&self, trade: &Trade) -> i8 {
+        match (self.last_price, trade.is_buyer_maker) {  // Changed from aggressor to is_buyer_maker
+            (Some(prev), _) if trade.price > prev => 1,
+            (Some(prev), _) if trade.price < prev => -1,
+            (_, false) => 1,   // Not buyer maker means taker is buyer
+            (_, true) => -1,   // Buyer maker means seller was aggressive
+        }
+    }
+
+    fn compute(&self) -> Decimal {
+        if self.buy_volumes.is_empty() {
+            return Decimal::ZERO;
+        }
+
+        let imbalance: Decimal = self.buy_volumes.iter().zip(&self.sell_volumes)
+            .map(|(b, s)| (*b - *s).abs())
+            .sum();
+
+        imbalance / (Decimal::from(self.buy_volumes.len()) * self.bucket_size)
+    }
 }
 
 pub struct IlliquidityEngine {
@@ -72,7 +138,9 @@ pub struct IlliquidityEngine {
     history: Arc<Mutex<HistoryBuffer>>,
     metrics: IlliquidityEngineMetrics,
     config: IlliquidityConfig,
+    vpin: VPIN,                      // Added
 }
+
 
 impl IlliquidityEngine {
     pub fn new(
@@ -81,6 +149,7 @@ impl IlliquidityEngine {
         config: Option<IlliquidityConfig>,
     ) -> Self {
         let config = config.unwrap_or_default();
+        let config_clone = config.clone(); // Clone the config here
         
         Self {
             order_book,
@@ -95,40 +164,9 @@ impl IlliquidityEngine {
                 computation_time: metrics::register_histogram!("illiquidity_computation_time"),
                 window_size: metrics::register_gauge!("illiquidity_window_size"),
             },
-            config,
+            config, // Original config moved here
+            vpin: VPIN::new(config_clone.vpin_bucket_size, config_clone.vpin_window_buckets), // Use clone
         }
-    }
-
-    pub async fn run(
-        mut self,
-        mut shutdown_rx: watch::Receiver<bool>,
-        persistence_tx: mpsc::Sender<IlliquidityMetrics>,
-    ) -> anyhow::Result<()> {
-        let mut interval = tokio::time::interval(
-            std::time::Duration::from_millis(self.config.snapshot_interval_ms)
-        );
-
-        loop {
-            tokio::select! {
-                _ = interval.tick() => {
-                    let start = std::time::Instant::now();
-                    match self.compute_metrics().await {
-                        Ok(metrics) => {
-                            if let Err(e) = persistence_tx.send(metrics).await {
-                                log::error!("Failed to send metrics: {}", e);
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("Failed to compute metrics: {}", e);
-                        }
-                    }
-                    self.metrics.computations.increment(1);
-                    metrics::histogram!("illiquidity_computation_time", start.elapsed());
-                }
-                _ = shutdown_rx.changed() => break,
-            }
-        }
-        Ok(())
     }
 
     pub async fn compute_metrics(&mut self) -> anyhow::Result<IlliquidityMetrics> {
@@ -140,15 +178,17 @@ impl IlliquidityEngine {
         self.update_history(&trade_snap).await;
         let history = self.history.lock().await;
         
+        // Update VPIN with latest trades - changed to last_n_trades
+        let trades = self.trades_log.last_n_trades(self.config.window_size).await;
+        self.vpin.update(&trades);
+        
         Ok(IlliquidityMetrics {
             timestamp: Utc::now().to_rfc3339(),
             roll_spread: Self::compute_roll_spread(&history.prices),
-            hl_volatility: self.compute_hl_volatility(&ob_snap),
-            corwin_schultz_spread: self.compute_corwin_schultz(&ob_snap, &history.prices),
             amihuds_lambda: self.compute_amihud(&history.prices, &history.volumes),
             kyles_lambda: self.compute_kyle(&history.prices, &history.volumes, &history.directions),
             hasbroucks_lambda: self.compute_hasbrouck(&history.prices, &history.volumes, &history.directions),
-            vpin: self.trades_log.vwap(self.config.window_size).await.ok(),
+            vpin: Some(self.vpin.compute()),
         })
     }
 
@@ -190,82 +230,6 @@ impl IlliquidityEngine {
             .checked_div(Decimal::from(price_changes.len() - 1))?;
             
         covariance.abs().checked_mul(dec!(2))?.sqrt()
-    }
-
-    fn compute_hl_volatility(&self, ob_snap: &OrderBookSnapshot) -> Option<Decimal> {
-        let high = ob_snap.best_ask.map(|(p, _)| p)?;
-        let low = ob_snap.best_bid.map(|(p, _)| p)?;
-        
-        if high.checked_sub(low)? < self.config.min_price_diff {
-            return None;
-        }
-        
-        let sum = high.checked_add(low)?;
-        if sum.is_zero() {
-            None
-        } else {
-            high.checked_sub(low)?
-                .checked_div(sum)?
-                .checked_mul(dec!(2))
-        }
-    }
-
-    fn compute_corwin_schultz(&self, ob_snap: &OrderBookSnapshot, prices: &[Decimal]) -> Option<Decimal> {
-        if prices.len() < self.config.min_observations {
-            return None;
-        }
-        
-        let current_high = ob_snap.best_ask.map(|(p, _)| p)?;
-        let current_low = ob_snap.best_bid.map(|(p, _)| p)?;
-        
-        if current_high <= current_low {
-            return None;
-        }
-        
-        let highs_lows: Vec<(Decimal, Decimal)> = prices
-            .windows(self.config.cs_window_size)
-            .filter_map(|w| {
-                let high = *w.iter().max()?;
-                let low = *w.iter().min()?;
-                if high > low {
-                    Some((high, low))
-                } else {
-                    None
-                }
-            })
-            .collect();
-            
-        if highs_lows.len() < 2 {
-            return None;
-        }
-        
-        let (prev_high, prev_low) = highs_lows[highs_lows.len() - 2];
-        let high_low_diff = current_high.checked_sub(current_low)?;
-        let prev_high_low_diff = prev_high.checked_sub(prev_low)?;
-        
-        if high_low_diff <= Decimal::ZERO || prev_high_low_diff <= Decimal::ZERO {
-            return None;
-        }
-        
-        let ln_current = high_low_diff.ln();
-        let ln_prev = prev_high_low_diff.ln();
-        let beta = ln_current + ln_prev;
-        
-        let max_high = current_high.max(prev_high);
-        let min_low = current_low.min(prev_low);
-        let gamma_diff = max_high.checked_sub(min_low)?;
-        
-        if gamma_diff <= Decimal::ZERO {
-            return None;
-        }
-        
-        let gamma = gamma_diff.ln().powi(2);
-        let sqrt_2 = dec!(2).sqrt()?;
-        let sqrt_3 = dec!(3).sqrt()?;
-        let alpha = (sqrt_2.checked_sub(Decimal::ONE)?).checked_div(sqrt_3)?;
-        let spread = (beta.checked_sub(gamma)?).max(Decimal::ZERO);
-        
-        spread.sqrt().and_then(|s| alpha.checked_mul(s))
     }
 
     fn compute_amihud(&self, prices: &[Decimal], volumes: &[Decimal]) -> Option<Decimal> {
@@ -392,5 +356,35 @@ impl IlliquidityEngine {
         } else {
             Some(cov_ret_vol / var_vol)
         }
+    }
+
+    pub async fn run(
+        mut self,
+        mut shutdown_rx: watch::Receiver<bool>,
+        persistence_tx: mpsc::Sender<IlliquidityMetrics>,
+    ) -> anyhow::Result<()> {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(
+            self.config.snapshot_interval_ms,
+        ));
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let metrics = self.compute_metrics().await?;
+                    if let Err(e) = persistence_tx.send(metrics).await {
+                        log::error!("Failed to send metrics: {}", e);
+                        break;
+                    }
+                }
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        log::info!("Shutting down illiquidity engine");
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 }

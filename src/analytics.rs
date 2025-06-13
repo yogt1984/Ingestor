@@ -61,8 +61,6 @@ pub struct FeaturesSnapshot {
     pub volume_vector: Vec<(Decimal, (Decimal, Decimal))>,
     pub pwi_vector: Vec<(Decimal, Decimal)>,
     pub roll_spread: Option<Decimal>,
-    pub hl_volatility: Option<Decimal>,
-    pub corwin_schultz_spread: Option<Decimal>,
     pub amihuds_lambda: Option<Decimal>,
     pub kyles_lambda: Option<Decimal>,
     pub hasbroucks_lambda: Option<Decimal>,
@@ -110,8 +108,6 @@ pub async fn run_analytics_task(
                         IlliquidityMetrics {
                             timestamp: Utc::now().to_rfc3339(),
                             roll_spread: None,
-                            hl_volatility: None,
-                            corwin_schultz_spread: None,
                             amihuds_lambda: None,
                             kyles_lambda: None,
                             hasbroucks_lambda: None,
@@ -164,8 +160,6 @@ pub async fn run_analytics_task(
                     volume_vector,
                     pwi_vector,
                     roll_spread: illiquidity_metrics.roll_spread,
-                    hl_volatility: illiquidity_metrics.hl_volatility,
-                    corwin_schultz_spread: illiquidity_metrics.corwin_schultz_spread,
                     amihuds_lambda: illiquidity_metrics.amihuds_lambda,
                     kyles_lambda: illiquidity_metrics.kyles_lambda,
                     hasbroucks_lambda: illiquidity_metrics.hasbroucks_lambda,
@@ -181,8 +175,7 @@ pub async fn run_analytics_task(
                   SLOPE: B{:.4}/A{:.4} | VOL_IMB: {:.2}% | DEPTH: B{:.2}/A{:.2}
                 
                 LIQUIDITY METRICS:
-                  Roll: {:.6} | HL Vol: {:.6} | Corwin-Schultz: {:.6}
-                  Amihud: {:.6e} | Kyle: {:.4} | Hasbrouck: {:.4} | VPIN: {:.2}
+                  Roll: {:.6} | Amihud: {:.6e} | Kyle: {:.4} | Hasbrouck: {:.4} | VPIN: {:.2}
                 
                 TRADE METRICS:
                   LAST: {:.4} | VWAP: TOT={:.4} 10={:.4} 50={:.4} 100={:.4} 1000={:.4}
@@ -214,8 +207,6 @@ pub async fn run_analytics_task(
                     
                     // Illiquidity metrics
                     snapshot.roll_spread.unwrap_or(dec!(0)),
-                    snapshot.hl_volatility.unwrap_or(dec!(0)),
-                    snapshot.corwin_schultz_spread.unwrap_or(dec!(0)),
                     snapshot.amihuds_lambda.unwrap_or(dec!(0)),
                     snapshot.kyles_lambda.unwrap_or(dec!(0)),
                     snapshot.hasbroucks_lambda.unwrap_or(dec!(0)),

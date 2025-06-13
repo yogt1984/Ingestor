@@ -93,8 +93,6 @@ pub fn save_illiquidity_as_parquet(
     let mut df = df! [
         "timestamp" => snapshots.iter().map(|s| s.timestamp.clone()).collect::<Vec<_>>(),
         "roll_spread" => snapshots.iter().map(|s| decimal_to_f64(s.roll_spread)).collect::<Vec<_>>(),
-        "hl_volatility" => snapshots.iter().map(|s| decimal_to_f64(s.hl_volatility)).collect::<Vec<_>>(),
-        "corwin_schultz_spread" => snapshots.iter().map(|s| decimal_to_f64(s.corwin_schultz_spread)).collect::<Vec<_>>(),
         "amihuds_lambda" => snapshots.iter().map(|s| decimal_to_f64(s.amihuds_lambda)).collect::<Vec<_>>(),
         "kyles_lambda" => snapshots.iter().map(|s| decimal_to_f64(s.kyles_lambda)).collect::<Vec<_>>(),
         "hasbroucks_lambda" => snapshots.iter().map(|s| decimal_to_f64(s.hasbroucks_lambda)).collect::<Vec<_>>(),
