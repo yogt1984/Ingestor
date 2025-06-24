@@ -8,6 +8,7 @@ use serde::Serialize;
 
 #[derive(Debug, Clone)]
 pub struct Trade {
+    pub id: u64,
     pub price: Decimal,
     pub quantity: Decimal,
     pub timestamp: u64,
@@ -19,6 +20,7 @@ pub struct TradesLog {
     trades: VecDeque<Trade>,
     max_len: usize,
     trade_count: usize,
+    next_id: u64,
     buy_volume: Decimal,
     sell_volume: Decimal,
     stats_dirty: bool,
@@ -70,6 +72,7 @@ impl TradesLog {
             trades: VecDeque::with_capacity(max_len),
             max_len,
             trade_count: 0,
+            next_id: 0, 
             buy_volume: dec!(0),
             sell_volume: dec!(0),
             stats_dirty: true,
@@ -117,7 +120,7 @@ impl TradesLog {
         self.stats_dirty = false;
     }
 
-    pub fn insert_trade(&mut self, trade: Trade) {
+    pub fn insert_trade(&mut self, mut trade: Trade) {
         // Handle trade eviction if buffer is full
         if self.trades.len() == self.max_len {
             let removed = self.trades.pop_front().unwrap();
@@ -150,6 +153,8 @@ impl TradesLog {
         }
 
         self.stats_dirty = true;
+        trade.id = self.next_id;
+        self.next_id += 1;
         self.trades.push_back(trade);
     }
 
@@ -347,7 +352,17 @@ impl ConcurrentTradesLog {
         let mut log = self.inner.write().await;
         log.get_snapshot()
     }
+
+    pub async fn trades_since(&self, last_id: u64) -> Vec<Trade> {
+        let log = self.inner.read().await;
+        log.trades
+            .iter()
+            .filter(|t| t.id > last_id)
+            .cloned()
+            .collect()
+    }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;

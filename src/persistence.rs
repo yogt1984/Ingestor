@@ -9,6 +9,7 @@ use crate::illiquidity::IlliquidityMetrics;
 use rust_decimal::prelude::ToPrimitive;
 use crate::illiquidity::IlliquidityMetrics as IlliquiditySnapshot;  
 use crate::tradeslog::TradeLogSnapshot;  
+use crate::entropy::EntropyMetrics;
 
 
 /// Save a batch of features to Parquet with comprehensive error handling
@@ -111,6 +112,41 @@ pub fn save_illiquidity_as_parquet(
         .with_compression(ParquetCompression::Snappy)
         .finish(&mut df)
         .context("Failed to write illiquidity Parquet file")?;
+
+    Ok(())
+}
+
+pub fn save_entropy_as_parquet(
+    snapshots: &[EntropyMetrics],
+    filepath: &str
+) -> Result<()> {
+    let mut df = df! [
+        "timestamp" => snapshots.iter().map(|s| s.timestamp.clone()).collect::<Vec<_>>(),
+        "tick_entropy_1s" => snapshots.iter().map(|s| decimal_to_f64(s.tick_entropy_1s)).collect::<Vec<_>>(),
+        "tick_entropy_5s" => snapshots.iter().map(|s| decimal_to_f64(s.tick_entropy_5s)).collect::<Vec<_>>(),
+        "tick_entropy_10s" => snapshots.iter().map(|s| decimal_to_f64(s.tick_entropy_10s)).collect::<Vec<_>>(),
+        "tick_entropy_15s" => snapshots.iter().map(|s| decimal_to_f64(s.tick_entropy_15s)).collect::<Vec<_>>(),
+        "tick_entropy_30s" => snapshots.iter().map(|s| decimal_to_f64(s.tick_entropy_30s)).collect::<Vec<_>>(),
+        "tick_entropy_1m" => snapshots.iter().map(|s| decimal_to_f64(s.tick_entropy_1m)).collect::<Vec<_>>(),
+        "tick_entropy_15m" => snapshots.iter().map(|s| decimal_to_f64(s.tick_entropy_15m)).collect::<Vec<_>>(),
+        "volume_tick_entropy_1s" => snapshots.iter().map(|s| decimal_to_f64(s.volume_tick_entropy_1s)).collect::<Vec<_>>(),
+        "volume_tick_entropy_5s" => snapshots.iter().map(|s| decimal_to_f64(s.volume_tick_entropy_5s)).collect::<Vec<_>>(),
+        "volume_tick_entropy_10s" => snapshots.iter().map(|s| decimal_to_f64(s.volume_tick_entropy_10s)).collect::<Vec<_>>(),
+        "volume_tick_entropy_15s" => snapshots.iter().map(|s| decimal_to_f64(s.volume_tick_entropy_15s)).collect::<Vec<_>>(),
+        "volume_tick_entropy_30s" => snapshots.iter().map(|s| decimal_to_f64(s.volume_tick_entropy_30s)).collect::<Vec<_>>(),
+        "volume_tick_entropy_1m" => snapshots.iter().map(|s| decimal_to_f64(s.volume_tick_entropy_1m)).collect::<Vec<_>>(),
+        "volume_tick_entropy_15m" => snapshots.iter().map(|s| decimal_to_f64(s.volume_tick_entropy_15m)).collect::<Vec<_>>(),
+    ].context("Failed to create entropy DataFrame")?;
+
+    if let Some(parent) = std::path::Path::new(filepath).parent() {
+        std::fs::create_dir_all(parent).context("Failed to create entropy output directory")?;
+    }
+
+    ParquetWriter::new(std::fs::File::create(filepath)
+        .context("Failed to create entropy output file")?)
+        .with_compression(ParquetCompression::Snappy)
+        .finish(&mut df)
+        .context("Failed to write entropy Parquet file")?;
 
     Ok(())
 }

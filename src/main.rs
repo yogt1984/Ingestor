@@ -7,6 +7,8 @@ mod log_feed_manager;
 mod analytics;
 mod persistence;
 mod illiquidity;
+mod entropy;
+
 
 use std::sync::Arc;
 use tokio::{spawn, sync::{watch, mpsc}, time::Duration};
@@ -16,8 +18,10 @@ use crate::{
     lob_feed_manager::LobFeedManager,
     log_feed_manager::LogFeedManager,
     illiquidity::{IlliquidityEngine, IlliquidityMetrics, IlliquidityConfig},
+    entropy::{EntropyEngine, EntropyMetrics, EntropyConfig},
     analytics::run_analytics_task
 };
+
 
 #[tokio::main]
 async fn main() {
@@ -43,7 +47,9 @@ async fn main() {
     );
 
     // Create channels
-    let (illiq_tx, illiq_rx) = mpsc::channel::<IlliquidityMetrics>(100);
+    let (illiq_tx, illiq_rx)     = mpsc::channel::<IlliquidityMetrics>(100);
+    let (entropy_tx, entropy_rx) = mpsc::channel::<EntropyMetrics>(100);
+
     let (persistence_tx, persistence_rx) = mpsc::channel::<IlliquidityMetrics>(100);
 
     // Spawn components
@@ -69,6 +75,23 @@ async fn main() {
         }
     });
 
+    let entropy_engine = EntropyEngine::new(
+        trades_log_arc.clone(),
+        Some(EntropyConfig {
+            snapshot_interval_ms: 100, 
+        })
+    );
+    
+    let entropy_tx_clone = entropy_tx.clone(); // ← Clone before move
+    
+    let entropy_handle = spawn({
+        let shutdown_rx = shutdown_rx.clone();
+        async move {
+            entropy_engine.run(shutdown_rx, entropy_tx_clone).await.unwrap();
+        }
+    });
+
+
     // Spawn analytics task
     let analytics_handle = spawn({
         let shutdown_rx = shutdown_rx.clone();
@@ -77,12 +100,12 @@ async fn main() {
                 order_book_arc,
                 trades_log_arc,
                 shutdown_rx,
-                Some(illiq_tx)
+                Some(illiq_tx),
+                Some(entropy_tx)
             ).await;
         }
     });
 
-    // Spawn persistence task
     let persistence_handle = spawn(async move {
         persistence::persist_metrics(
             persistence_rx,
@@ -90,6 +113,16 @@ async fn main() {
             "data/illiquidity",
             "illiquidity",
             persistence::save_illiquidity_as_parquet
+        ).await.unwrap();
+    });
+
+    let entropy_persistence_handle = spawn(async move {
+        persistence::persist_metrics(
+            entropy_rx,
+            1000,
+            "data/entropy",
+            "entropy",
+            persistence::save_entropy_as_parquet
         ).await.unwrap();
     });
 
@@ -106,5 +139,7 @@ async fn main() {
         _ = analytics_handle => eprintln!("Analytics task crashed"),
         _ = illiquidity_handle => eprintln!("Illiquidity engine crashed"),
         _ = persistence_handle => eprintln!("Persistence task crashed"),
+        _ = entropy_handle => eprintln!("Entropy engine crashed"),
+        _ = entropy_persistence_handle => eprintln!("Entropy persistence task crashed"),
     }
 }

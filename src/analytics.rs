@@ -9,6 +9,7 @@ use crate::{
     orderbook::{ConcurrentOrderBook, OrderBookSnapshot},
     tradeslog::{ConcurrentTradesLog, TradeLogSnapshot},
     illiquidity::{IlliquidityMetrics, IlliquidityEngine, IlliquidityConfig}, 
+    entropy::{EntropyMetrics, EntropyEngine, EntropyConfig},
 };
 use crate::persistence;
 
@@ -65,6 +66,20 @@ pub struct FeaturesSnapshot {
     pub kyles_lambda: Option<Decimal>,
     pub hasbroucks_lambda: Option<Decimal>,
     pub vpin: Option<Decimal>,
+    pub tick_entropy_1s: Option<Decimal>,
+    pub tick_entropy_5s: Option<Decimal>,
+    pub tick_entropy_10s: Option<Decimal>,
+    pub tick_entropy_15s: Option<Decimal>,
+    pub tick_entropy_30s: Option<Decimal>,
+    pub tick_entropy_1m: Option<Decimal>,
+    pub tick_entropy_15m: Option<Decimal>,
+    pub volume_tick_entropy_1s: Option<Decimal>,
+    pub volume_tick_entropy_5s: Option<Decimal>,
+    pub volume_tick_entropy_10s: Option<Decimal>,
+    pub volume_tick_entropy_15s: Option<Decimal>,
+    pub volume_tick_entropy_30s: Option<Decimal>,
+    pub volume_tick_entropy_1m: Option<Decimal>,
+    pub volume_tick_entropy_15m: Option<Decimal>,
 }
 
 pub async fn run_analytics_task(
@@ -72,6 +87,7 @@ pub async fn run_analytics_task(
     trades_log: Arc<ConcurrentTradesLog>,
     mut shutdown_rx: watch::Receiver<bool>,
     illiquidity_tx: Option<mpsc::Sender<IlliquidityMetrics>>,
+    entropy_tx: Option<mpsc::Sender<EntropyMetrics>>,
 ) {
 
     const SIGNIFICANCE_THRESHOLD: Decimal = dec!(10.0);
@@ -84,6 +100,11 @@ pub async fn run_analytics_task(
         order_book.clone(),
         trades_log.clone(),
         Some(IlliquidityConfig::default()) 
+    );
+
+    let mut entropy_engine = EntropyEngine::new(
+        trades_log.clone(),
+        Some(EntropyConfig { snapshot_interval_ms: SNAPSHOT_INTERVAL_MS })
     );
 
     loop {
@@ -115,6 +136,31 @@ pub async fn run_analytics_task(
                         }
                     }
                 };
+
+                let entropy_metrics = match entropy_engine.compute_metrics().await {
+                    Ok(metrics) => metrics,
+                    Err(e) => {
+                        log::error!("Failed to compute entropy metrics: {}", e);
+                        EntropyMetrics {
+                            timestamp: Utc::now().to_rfc3339(),
+                            tick_entropy_1s: None,
+                            tick_entropy_5s: None,
+                            tick_entropy_10s: None,
+                            tick_entropy_15s: None,
+                            tick_entropy_30s: None,
+                            tick_entropy_1m: None,
+                            tick_entropy_15m: None,
+                            volume_tick_entropy_1s: None,
+                            volume_tick_entropy_5s: None,
+                            volume_tick_entropy_10s: None,
+                            volume_tick_entropy_15s: None,
+                            volume_tick_entropy_30s: None,
+                            volume_tick_entropy_1m: None,
+                            volume_tick_entropy_15m: None,
+                        }
+                    }
+                };
+                
 
                 let snapshot = FeaturesSnapshot {
                     timestamp: Utc::now().to_rfc3339(),
@@ -164,8 +210,22 @@ pub async fn run_analytics_task(
                     kyles_lambda: illiquidity_metrics.kyles_lambda,
                     hasbroucks_lambda: illiquidity_metrics.hasbroucks_lambda,
                     vpin: illiquidity_metrics.vpin,
+                    tick_entropy_1s: entropy_metrics.tick_entropy_1s,
+                    tick_entropy_5s: entropy_metrics.tick_entropy_5s,
+                    tick_entropy_10s: entropy_metrics.tick_entropy_10s,
+                    tick_entropy_15s: entropy_metrics.tick_entropy_15s,
+                    tick_entropy_30s: entropy_metrics.tick_entropy_30s,
+                    tick_entropy_1m: entropy_metrics.tick_entropy_1m,
+                    tick_entropy_15m: entropy_metrics.tick_entropy_15m,
+                    volume_tick_entropy_1s: entropy_metrics.volume_tick_entropy_1s,
+                    volume_tick_entropy_5s: entropy_metrics.volume_tick_entropy_5s,
+                    volume_tick_entropy_10s: entropy_metrics.volume_tick_entropy_10s,
+                    volume_tick_entropy_15s: entropy_metrics.volume_tick_entropy_15s,
+                    volume_tick_entropy_30s: entropy_metrics.volume_tick_entropy_30s,
+                    volume_tick_entropy_1m: entropy_metrics.volume_tick_entropy_1m,
+                    volume_tick_entropy_15m: entropy_metrics.volume_tick_entropy_15m,
                 };
-                
+
                 // Simple console output
                 println!(
                     r#"
@@ -176,7 +236,11 @@ pub async fn run_analytics_task(
                 MOMENTUM: {} | RATE: {:.1}/s | AGGR: 10={:.2}% 50={:.2}% 100={:.2}% 1000={:.2}% | FLOW: IMB={:.3} | PRES={:.1} | {}
                 VOLUME STRUCTURE: VOL(0.01%): B={:.2} A={:.2}  
                 VEC: {:?}
-                PWI_VEC: {:?}"#,
+                PWI_VEC: {:?}
+                ENTROPY METRICS:
+                TICK_ENTROPY: 1s={:.4} 5s={:.4} 10s={:.4} 15s={:.4} 30s={:.4} 1m={:.4} 15m={:.4}
+                VOL_ENTROPY : 1s={:.4} 5s={:.4} 10s={:.4} 15s={:.4} 30s={:.4} 1m={:.4} 15m={:.4}
+                "#,
                     snapshot.timestamp,
                     // Core metrics
                     snapshot.mid_price.unwrap_or(dec!(0)),
@@ -226,7 +290,23 @@ pub async fn run_analytics_task(
                     snapshot.bid_volume_001.unwrap_or(dec!(0)),
                     snapshot.ask_volume_001.unwrap_or(dec!(0)),
                     snapshot.volume_vector,
-                    snapshot.pwi_vector
+                    snapshot.pwi_vector,
+
+                    // Entropy structure
+                    snapshot.tick_entropy_1s.unwrap_or(dec!(0)),
+                    snapshot.tick_entropy_5s.unwrap_or(dec!(0)),
+                    snapshot.tick_entropy_10s.unwrap_or(dec!(0)),
+                    snapshot.tick_entropy_15s.unwrap_or(dec!(0)),
+                    snapshot.tick_entropy_30s.unwrap_or(dec!(0)),
+                    snapshot.tick_entropy_1m.unwrap_or(dec!(0)),
+                    snapshot.tick_entropy_15m.unwrap_or(dec!(0)),
+                    snapshot.volume_tick_entropy_1s.unwrap_or(dec!(0)),
+                    snapshot.volume_tick_entropy_5s.unwrap_or(dec!(0)),
+                    snapshot.volume_tick_entropy_10s.unwrap_or(dec!(0)),
+                    snapshot.volume_tick_entropy_15s.unwrap_or(dec!(0)),
+                    snapshot.volume_tick_entropy_30s.unwrap_or(dec!(0)),
+                    snapshot.volume_tick_entropy_1m.unwrap_or(dec!(0)),
+                    snapshot.volume_tick_entropy_15m.unwrap_or(dec!(0))
                 );
                 batch.push(snapshot);
                 if batch.len() >= BATCH_SIZE {

@@ -123,6 +123,7 @@ impl TryFrom<BinanceTradeUpdate> for Trade {
 
     fn try_from(update: BinanceTradeUpdate) -> Result<Self, Self::Error> {
         Ok(Self {
+            id: 0,
             price: Decimal::from_str(&update.price)
                 .map_err(|_| FeedError::DecimalConversion)?,
             quantity: Decimal::from_str(&update.quantity)
