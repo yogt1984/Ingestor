@@ -24,7 +24,6 @@ pub struct LobFeedManager {
 }
 
 impl LobFeedManager {
-
     pub fn new(hf_uri: String, lf_uri: String) -> Self {
         Self {
             order_book: ConcurrentOrderBook::new(),
@@ -37,75 +36,105 @@ impl LobFeedManager {
         self.order_book.clone()
     }
 
-    pub async fn start(&self) {
+    pub async fn start(&self, shutdown_rx: tokio::sync::watch::Receiver<bool>) {
         let hf_book = self.order_book.clone();
         let lf_book = self.order_book.clone();
-
         let hf_uri = self.hf_uri.clone();
         let lf_uri = self.lf_uri.clone();
-
-        let hf_task = task::spawn(Self::run_feed(hf_uri, hf_book, true));
-        let lf_task = task::spawn(Self::run_feed(lf_uri, lf_book, false));
-
+        let hf_shutdown = shutdown_rx.clone();
+        let lf_shutdown = shutdown_rx.clone();
+        let hf_task = task::spawn(Self::run_feed(hf_uri, hf_book, true, hf_shutdown));
+        let lf_task = task::spawn(Self::run_feed(lf_uri, lf_book, false, lf_shutdown));
         let _ = tokio::join!(hf_task, lf_task);
     }
 
-    async fn run_feed(uri: String, order_book: ConcurrentOrderBook, _is_delta: bool) {
+    async fn run_feed(
+        uri: String,
+        order_book: ConcurrentOrderBook,
+        _is_delta: bool,
+        mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    ) {
         let mut retry_delay = Duration::from_secs(1);
-    
         loop {
-            match connect_async(&uri).await {
-                Ok((ws_stream, _)) => {
-                    info!("Connected to WebSocket at {}", uri);
-                    let (_, mut read) = ws_stream.split();
-    
-                    while let Some(msg) = read.next().await {
-                        match msg {
-                            Ok(Message::Text(text)) => {
-                                if let Ok(parsed) = serde_json::from_str::<BinanceDepthUpdate>(&text) {
-                                    debug!("Parsed Binance depth update (text)");
-                                    let parsed_bids = Self::parse_levels(parsed.bids);
-                                    let parsed_asks = Self::parse_levels(parsed.asks);
-                                    order_book.apply_deltas(parsed_bids, parsed_asks).await;
-                                } else {
-                                    warn!("Failed to parse depth update: {}", text);
-                                }
-                            }
-                            Ok(Message::Binary(bin)) => {
-                                if let Ok(text) = String::from_utf8(bin) {
-                                    if let Ok(parsed) = serde_json::from_str::<BinanceDepthUpdate>(&text) {
-                                        debug!("Parsed Binance depth update (binary)");
-                                        let parsed_bids = Self::parse_levels(parsed.bids);
-                                        let parsed_asks = Self::parse_levels(parsed.asks);
-                                        order_book.apply_deltas(parsed_bids, parsed_asks).await;
-                                    } else {
-                                        warn!("Failed to parse binary depth update: {}", text);
+            tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        info!("Shutting down LOB feed {}", uri);
+                        break;
+                    } else {
+                        continue;
+                    }
+                }
+                connect_result = connect_async(&uri) => {
+                    match connect_result {
+                        Ok((ws_stream, _)) => {
+                            info!("Connected to WebSocket at {}", uri);
+                            let (_, mut read) = ws_stream.split();
+                            loop {
+                                tokio::select! {
+                                    _ = shutdown_rx.changed() => {
+                                        if *shutdown_rx.borrow() {
+                                            info!("Shutting down LOB feed {}", uri);
+                                            return;
+                                        }
+                                    }
+                                    maybe_msg = read.next() => {
+                                        match maybe_msg {
+                                            Some(msg) => {
+                                                match msg {
+                                                    Ok(Message::Text(text)) => {
+                                                        if let Ok(parsed) = serde_json::from_str::<BinanceDepthUpdate>(&text) {
+                                                            debug!("Parsed Binance depth update (text)");
+                                                            let parsed_bids = Self::parse_levels(parsed.bids);
+                                                            let parsed_asks = Self::parse_levels(parsed.asks);
+                                                            order_book.apply_deltas(parsed_bids, parsed_asks).await;
+                                                        } else {
+                                                            warn!("Failed to parse depth update: {}", text);
+                                                        }
+                                                    }
+                                                    Ok(Message::Binary(bin)) => {
+                                                        if let Ok(text) = String::from_utf8(bin) {
+                                                            if let Ok(parsed) = serde_json::from_str::<BinanceDepthUpdate>(&text) {
+                                                                debug!("Parsed Binance depth update (binary)");
+                                                                let parsed_bids = Self::parse_levels(parsed.bids);
+                                                                let parsed_asks = Self::parse_levels(parsed.asks);
+                                                                order_book.apply_deltas(parsed_bids, parsed_asks).await;
+                                                            } else {
+                                                                warn!("Failed to parse binary depth update: {}", text);
+                                                            }
+                                                        }
+                                                    }
+                                                    Ok(_) => {
+                                                        // Ignore other message types
+                                                    }
+                                                    Err(e) => {
+                                                        error!("WebSocket error on {}: {}", uri, e);
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            None => break,
+                                        }
                                     }
                                 }
                             }
-                            Ok(_) => {
-                                // Ignore other message types
-                            }
-                            Err(e) => {
-                                error!("WebSocket error on {}: {}", uri, e);
-                                break;
-                            }
+                            warn!("⚠️ WebSocket stream closed for {}", uri);
+                        }
+                        Err(e) => {
+                            error!("Failed to connect to {}: {}", uri, e);
                         }
                     }
-    
-                    warn!("⚠️ WebSocket stream closed for {}", uri);
-                }
-                Err(e) => {
-                    error!("Failed to connect to {}: {}", uri, e);
                 }
             }
-    
+            if *shutdown_rx.borrow() {
+                break;
+            }
             warn!("Reconnecting to {} in {:?}...", uri, retry_delay);
             sleep(retry_delay).await;
             retry_delay = std::cmp::min(retry_delay * 2, Duration::from_secs(60));
         }
     }
-    
+
     async fn process_binance_update(update: BinanceDepthUpdate, order_book: &ConcurrentOrderBook) {
         let parsed_bids = LobFeedManager::parse_levels(update.bids);
         let parsed_asks = LobFeedManager::parse_levels(update.asks);
@@ -123,4 +152,4 @@ impl LobFeedManager {
             })
             .collect()
     }
-} 
+}

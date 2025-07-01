@@ -12,79 +12,79 @@ use log;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct IlliquidityConfig {
-    pub window_size: usize,
-    pub snapshot_interval_ms: u64,
-    pub min_price_diff: Decimal,
-    pub min_observations: usize,
-    pub amihud_window: usize,
-    pub kyle_min_observations: usize,
-    pub kyle_volume_scale: Decimal,
-    pub kyle_price_scale: Decimal,
-    pub vpin_bucket_size: Decimal,      // Added
-    pub vpin_window_buckets: usize,     // Added
+    pub window_size:            usize,
+    pub snapshot_interval_ms:   u64,
+    pub min_price_diff:         Decimal,
+    pub min_observations:       usize,
+    pub amihud_window:          usize,
+    pub kyle_min_observations:  usize,
+    pub kyle_volume_scale:      Decimal,
+    pub kyle_price_scale:       Decimal,
+    pub vpin_bucket_size:       Decimal,     
+    pub vpin_window_buckets:    usize,     
 }
 
 impl Default for IlliquidityConfig {
     fn default() -> Self {
         Self {
-            window_size: 1000,
-            snapshot_interval_ms: 100,
-            min_price_diff: dec!(0.00000001),
-            min_observations: 30,
-            amihud_window: 20,
-            kyle_min_observations: 50,
-            kyle_volume_scale: dec!(1),
-            kyle_price_scale: dec!(1),
-            vpin_bucket_size: dec!(10),  // 10 BTC per bucket
-            vpin_window_buckets: 50,     // 50-bucket rolling window
+            window_size:            1000,
+            snapshot_interval_ms:   100,
+            min_price_diff:         dec!(0.00000001),
+            min_observations:       30,
+            amihud_window:          20,
+            kyle_min_observations:  50,
+            kyle_volume_scale:      dec!(1),
+            kyle_price_scale:       dec!(1),
+            vpin_bucket_size:       dec!(10),  
+            vpin_window_buckets:    50,     
         }
     }
 }
 
 #[derive(Debug, Clone)]
 struct HistoryBuffer {
-    pub prices: Vec<Decimal>,
-    pub volumes: Vec<Decimal>,
+    pub prices:     Vec<Decimal>,
+    pub volumes:    Vec<Decimal>,
     pub directions: Vec<i8>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct IlliquidityMetrics {
-    pub timestamp: String,
-    pub roll_spread: Option<Decimal>,
-    pub amihuds_lambda: Option<Decimal>,
-    pub kyles_lambda: Option<Decimal>,
-    pub hasbroucks_lambda: Option<Decimal>,
-    pub vpin: Option<Decimal>,          // Added
+    pub timestamp:          String,
+    pub roll_spread:        Option<Decimal>,
+    pub amihuds_lambda:     Option<Decimal>,
+    pub kyles_lambda:       Option<Decimal>,
+    pub hasbroucks_lambda:  Option<Decimal>,
+    pub vpin:               Option<Decimal>,          
 }
 
 #[derive(Clone)]
 pub struct IlliquidityEngineMetrics {
-    pub computations: Counter,
-    pub computation_time: Histogram,
-    pub window_size: Gauge,
+    pub computations:       Counter,
+    pub computation_time:   Histogram,
+    pub window_size:        Gauge,
 }
 
-struct VPIN {                           // New VPIN struct
-    bucket_size: Decimal,
-    buy_volumes: Vec<Decimal>,
-    sell_volumes: Vec<Decimal>,
-    window_size: usize,
-    current_buy: Decimal,
-    current_sell: Decimal,
-    last_price: Option<Decimal>,
+struct VPIN {                           
+    bucket_size:            Decimal,
+    buy_volumes:            Vec<Decimal>,
+    sell_volumes:           Vec<Decimal>,
+    window_size:            usize,
+    current_buy:            Decimal,
+    current_sell:           Decimal,
+    last_price:             Option<Decimal>,
 }
 
 impl VPIN {
     fn new(bucket_size: Decimal, window_size: usize) -> Self {
         Self {
             bucket_size,
-            buy_volumes: Vec::with_capacity(window_size),
-            sell_volumes: Vec::with_capacity(window_size),
+            buy_volumes:    Vec::with_capacity(window_size),
+            sell_volumes:   Vec::with_capacity(window_size),
             window_size,
-            current_buy: Decimal::ZERO,
-            current_sell: Decimal::ZERO,
-            last_price: None,
+            current_buy:    Decimal::ZERO,
+            current_sell:   Decimal::ZERO,
+            last_price:     None,
         }
     }
 
@@ -92,14 +92,14 @@ impl VPIN {
         for trade in trades {
             let direction = self.classify_trade(trade);
             match direction {
-                1 => self.current_buy += trade.quantity,  // Changed from volume to quantity
-                -1 => self.current_sell += trade.quantity, // Changed from volume to quantity
+                1 => self.current_buy   += trade.quantity,  
+                -1 => self.current_sell += trade.quantity, 
                 _ => {}
             }
             if (self.current_buy + self.current_sell) >= self.bucket_size {
                 self.buy_volumes.push(self.current_buy);
                 self.sell_volumes.push(self.current_sell);
-                self.current_buy = Decimal::ZERO;
+                self.current_buy  = Decimal::ZERO;
                 self.current_sell = Decimal::ZERO;
                 if self.buy_volumes.len() > self.window_size {
                     self.buy_volumes.remove(0);
@@ -114,8 +114,8 @@ impl VPIN {
         match (self.last_price, trade.is_buyer_maker) {  // Changed from aggressor to is_buyer_maker
             (Some(prev), _) if trade.price > prev => 1,
             (Some(prev), _) if trade.price < prev => -1,
-            (_, false) => 1,   // Not buyer maker means taker is buyer
-            (_, true) => -1,   // Buyer maker means seller was aggressive
+            (_, false) => 1,   
+            (_, true) => -1,  
         }
     }
 
@@ -133,12 +133,12 @@ impl VPIN {
 }
 
 pub struct IlliquidityEngine {
-    order_book: Arc<ConcurrentOrderBook>,
-    trades_log: Arc<ConcurrentTradesLog>,
-    history: Arc<Mutex<HistoryBuffer>>,
-    metrics: IlliquidityEngineMetrics,
-    config: IlliquidityConfig,
-    vpin: VPIN,                      // Added
+    order_book:     Arc<ConcurrentOrderBook>,
+    trades_log:     Arc<ConcurrentTradesLog>,
+    history:        Arc<Mutex<HistoryBuffer>>,
+    metrics:        IlliquidityEngineMetrics,
+    config:         IlliquidityConfig,
+    vpin:           VPIN,                      
 }
 
 
@@ -146,26 +146,26 @@ impl IlliquidityEngine {
     pub fn new(
         order_book: Arc<ConcurrentOrderBook>,
         trades_log: Arc<ConcurrentTradesLog>,
-        config: Option<IlliquidityConfig>,
+        config:     Option<IlliquidityConfig>,
     ) -> Self {
-        let config = config.unwrap_or_default();
-        let config_clone = config.clone(); // Clone the config here
+        let config       = config.unwrap_or_default();
+        let config_clone = config.clone(); 
         
         Self {
             order_book,
             trades_log,
             history: Arc::new(Mutex::new(HistoryBuffer {
-                prices: Vec::with_capacity(config.window_size),
-                volumes: Vec::with_capacity(config.window_size),
+                prices:     Vec::with_capacity(config.window_size),
+                volumes:    Vec::with_capacity(config.window_size),
                 directions: Vec::with_capacity(config.window_size),
             })),
             metrics: IlliquidityEngineMetrics {
-                computations: metrics::register_counter!("illiquidity_computations"),
-                computation_time: metrics::register_histogram!("illiquidity_computation_time"),
-                window_size: metrics::register_gauge!("illiquidity_window_size"),
+                computations:       metrics::register_counter!("illiquidity_computations"),
+                computation_time:   metrics::register_histogram!("illiquidity_computation_time"),
+                window_size:        metrics::register_gauge!("illiquidity_window_size"),
             },
-            config, // Original config moved here
-            vpin: VPIN::new(config_clone.vpin_bucket_size, config_clone.vpin_window_buckets), // Use clone
+            config, 
+            vpin: VPIN::new(config_clone.vpin_bucket_size, config_clone.vpin_window_buckets), 
         }
     }
 
@@ -183,12 +183,12 @@ impl IlliquidityEngine {
         self.vpin.update(&trades);
         
         Ok(IlliquidityMetrics {
-            timestamp: Utc::now().to_rfc3339(),
-            roll_spread: Self::compute_roll_spread(&history.prices),
-            amihuds_lambda: self.compute_amihud(&history.prices, &history.volumes),
-            kyles_lambda: self.compute_kyle(&history.prices, &history.volumes, &history.directions),
-            hasbroucks_lambda: self.compute_hasbrouck(&history.prices, &history.volumes, &history.directions),
-            vpin: Some(self.vpin.compute()),
+            timestamp:          Utc::now().to_rfc3339(),
+            roll_spread:        Self::compute_roll_spread(&history.prices),
+            amihuds_lambda:     self.compute_amihud(&history.prices, &history.volumes),
+            kyles_lambda:       self.compute_kyle(&history.prices, &history.volumes, &history.directions),
+            hasbroucks_lambda:  self.compute_hasbrouck(&history.prices, &history.volumes, &history.directions),
+            vpin:               Some(self.vpin.compute()),
         })
     }
 
