@@ -96,10 +96,13 @@ pub async fn run_analytics_task(
     let mut batch = Vec::with_capacity(BATCH_SIZE);
     let mut batch_id = 0;
 
+    let illiquidity_tx = illiquidity_tx.expect("Illiquidity transmitter (illiquidity_tx) must be provided");
+
     let mut illiquidity_engine = IlliquidityEngine::new(
         order_book.clone(),
         trades_log.clone(),
-        Some(IlliquidityConfig::default()) 
+        Some(IlliquidityConfig::default()),
+        illiquidity_tx,
     );
 
     let mut entropy_engine = EntropyEngine::new(

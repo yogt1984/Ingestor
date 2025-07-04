@@ -48,7 +48,7 @@ struct HistoryBuffer {
     pub directions: Vec<i8>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct IlliquidityMetrics {
     pub timestamp:          String,
     pub roll_spread:        Option<Decimal>,
@@ -139,6 +139,7 @@ pub struct IlliquidityEngine {
     metrics:        IlliquidityEngineMetrics,
     config:         IlliquidityConfig,
     vpin:           VPIN,                      
+    feature_tx:     mpsc::Sender<IlliquidityMetrics>,
 }
 
 
@@ -147,6 +148,7 @@ impl IlliquidityEngine {
         order_book: Arc<ConcurrentOrderBook>,
         trades_log: Arc<ConcurrentTradesLog>,
         config:     Option<IlliquidityConfig>,
+        feature_tx: mpsc::Sender<IlliquidityMetrics>,
     ) -> Self {
         let config       = config.unwrap_or_default();
         let config_clone = config.clone(); 
@@ -166,6 +168,7 @@ impl IlliquidityEngine {
             },
             config, 
             vpin: VPIN::new(config_clone.vpin_bucket_size, config_clone.vpin_window_buckets), 
+            feature_tx,
         }
     }
 
@@ -371,8 +374,8 @@ impl IlliquidityEngine {
             tokio::select! {
                 _ = interval.tick() => {
                     let metrics = self.compute_metrics().await?;
-                    if let Err(e) = persistence_tx.send(metrics).await {
-                        log::error!("Failed to send metrics: {}", e);
+                    if let Err(e) = self.feature_tx.send(metrics.clone()).await {  
+                        log::error!("IlliquidityEngine: failed to send features: {}", e);
                         break;
                     }
                 }

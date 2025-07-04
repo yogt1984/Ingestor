@@ -34,6 +34,8 @@ async fn main() {
     let (entropy_tx,     entropy_rx)      = mpsc::channel::<EntropyMetrics>(100);
     let (persistence_tx, persistence_rx)  = mpsc::channel::<IlliquidityMetrics>(100);
 
+    let illiq_tx_clone = illiq_tx.clone();
+
     let ctrl_c = async {
         tokio::signal::ctrl_c().await.unwrap();
         shutdown_tx.send(true).unwrap();
@@ -66,7 +68,8 @@ async fn main() {
     let illiquidity_engine = IlliquidityEngine::new(
         order_book_arc.clone(),
         trades_log_arc.clone(),
-        Some(IlliquidityConfig::default()) 
+        Some(IlliquidityConfig::default()),
+        illiq_tx,
     );
 
     let entropy_engine = EntropyEngine::new(
@@ -75,7 +78,6 @@ async fn main() {
         Some(EntropyConfig::default())
     );
 
-    
     let lob_handle = spawn({
         let shutdown_rx = shutdown_rx.clone();
         async move {
@@ -120,6 +122,8 @@ async fn main() {
         }
     });
 
+    
+
     let analytics_handle = spawn({
         let shutdown_rx = shutdown_rx.clone();
         async move {
@@ -127,7 +131,7 @@ async fn main() {
                 order_book_arc,
                 trades_log_arc,
                 shutdown_rx,
-                Some(illiq_tx),
+                Some(illiq_tx_clone),
                 Some(entropy_tx)
             ).await;
         }
