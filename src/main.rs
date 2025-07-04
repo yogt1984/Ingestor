@@ -58,9 +58,7 @@ async fn main() {
 
     let entropy_engine = EntropyEngine::new(
         trades_log_arc.clone(),
-        Some(EntropyConfig {
-            snapshot_interval_ms: 100, 
-        })
+        Some(EntropyConfig::default())
     );
     
     let lob_handle = spawn({

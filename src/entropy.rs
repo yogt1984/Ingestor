@@ -10,9 +10,17 @@ use crate::tradeslog::{ConcurrentTradesLog, Trade};
 use num::FromPrimitive;
 
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct EntropyConfig {
     pub snapshot_interval_ms: u64,
+}
+
+impl Default for EntropyConfig {
+    fn default() -> Self {
+        Self {
+            snapshot_interval_ms: 100, 
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
