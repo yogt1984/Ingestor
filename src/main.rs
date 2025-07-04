@@ -13,7 +13,7 @@ mod entropy;
 use std::sync::Arc;
 use tokio::{spawn, sync::{watch, mpsc}, time::Duration};
 use crate::{
-    orderbook::ConcurrentOrderBook,
+    orderbook::{ConcurrentOrderBook, OrderBookEngine, OrderBookFeatures, OrderBookEngineConfig},
     tradeslog::ConcurrentTradesLog,
     lob_feed_manager::LobFeedManager,
     log_feed_manager::LogFeedManager,
@@ -27,8 +27,8 @@ use crate::{
 async fn main() {
     env_logger::init();
 
-
     let (shutdown_tx,    shutdown_rx)     = watch::channel(false);
+    let (orderbook_tx,   orderbook_rx)    = mpsc::channel::<OrderBookFeatures>(100);
     let (illiq_tx,       illiq_rx)        = mpsc::channel::<IlliquidityMetrics>(100);
     let (entropy_tx,     entropy_rx)      = mpsc::channel::<EntropyMetrics>(100);
     let (persistence_tx, persistence_rx)  = mpsc::channel::<IlliquidityMetrics>(100);
@@ -50,6 +50,12 @@ async fn main() {
     );
     let trades_log_arc = Arc::new(log_manager.get_trades_log());
 
+    let orderbook_engine = OrderBookEngine::new(
+        order_book_arc.clone(),
+        Some(OrderBookEngineConfig::default()),  
+        orderbook_tx,
+    );
+    
     let illiquidity_engine = IlliquidityEngine::new(
         order_book_arc.clone(),
         trades_log_arc.clone(),
@@ -61,6 +67,7 @@ async fn main() {
         trades_log_arc.clone(),
         Some(EntropyConfig::default())
     );
+
     
     let lob_handle = spawn({
         let shutdown_rx = shutdown_rx.clone();
@@ -73,6 +80,13 @@ async fn main() {
         let shutdown_rx = shutdown_rx.clone();
         async move {
             log_manager.start(shutdown_rx).await;
+        }
+    });
+
+    let orderbook_features_handle = spawn({
+        let shutdown_rx = shutdown_rx.clone();
+        async move {
+            orderbook_engine.run(shutdown_rx).await.unwrap();
         }
     });
 

@@ -6,6 +6,7 @@ use serde::Serialize;
 use num::FromPrimitive;
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Instant, Duration};
+use tokio::sync::{mpsc, watch};
 
 
 const VOLUME_PERCENTS: [Decimal; 5] = [dec!(0.01), dec!(0.05), dec!(0.1), dec!(0.5), dec!(1.0)];
@@ -136,7 +137,7 @@ pub struct OrderBook {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct OrderBookSnapshot {
+pub struct  OrderBookFeatures{
     pub best_bid: Option<(Decimal, Decimal)>,
     pub best_ask: Option<(Decimal, Decimal)>,
     pub mid_price: Option<Decimal>,
@@ -471,14 +472,14 @@ impl OrderBook {
             .collect()
     }
 
-    pub fn get_snapshot(&self) -> OrderBookSnapshot {
+    pub fn get_snapshot(&self) -> OrderBookFeatures {
         let best_bid = self.best_bid();
         let best_ask = self.best_ask();
         
         // Get flow metrics from the tracker
         let (flow_imbalance, flow_pressure) = self.flow_tracker.imbalance();
     
-        OrderBookSnapshot {
+        OrderBookFeatures {
             best_bid,
             best_ask,
             mid_price: self.mid_price(),
@@ -609,7 +610,7 @@ impl ConcurrentOrderBook {
         book.flow_tracker.imbalance()
     }
 
-    pub async fn get_snapshot(&self) -> OrderBookSnapshot {
+    pub async fn get_snapshot(&self) -> OrderBookFeatures {
         let book = self.inner.read().await;
         let (_flow_imb, _) = book.flow_tracker.imbalance();
         book.get_snapshot()
@@ -625,6 +626,62 @@ impl ConcurrentOrderBook {
         book.pwi_vector()
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct OrderBookEngineConfig {
+    pub snapshot_interval_ms: u64,
+}
+
+impl Default for OrderBookEngineConfig {
+    fn default() -> Self {
+        Self {
+            snapshot_interval_ms: 100,  // default to 100ms
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct OrderBookEngine {
+    order_book: Arc<ConcurrentOrderBook>,
+    snapshot_interval_ms: u64,
+    tx: mpsc::Sender<OrderBookFeatures>,
+}
+
+impl OrderBookEngine {
+    pub fn new(
+        order_book: Arc<ConcurrentOrderBook>,
+        config: Option<OrderBookEngineConfig>,
+        tx: mpsc::Sender<OrderBookFeatures>,
+    ) -> Self {
+        let config = config.unwrap_or_default();
+        Self {
+            order_book,
+            tx,
+            snapshot_interval_ms: config.snapshot_interval_ms,
+        }
+    }
+
+    pub async fn run(mut self, mut shutdown_rx: watch::Receiver<bool>) -> anyhow::Result<()> {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(self.snapshot_interval_ms));
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let snapshot = self.order_book.get_snapshot().await;
+                    if self.tx.send(snapshot).await.is_err() {
+                        log::warn!("OrderBookEngine: receiver dropped, shutting down engine.");
+                        break;
+                    }
+                }
+                _ = shutdown_rx.changed() => {
+                    log::info!("OrderBookEngine: shutdown signal received.");
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 
 #[cfg(test)]
 mod tests {

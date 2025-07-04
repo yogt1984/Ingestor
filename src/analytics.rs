@@ -6,7 +6,7 @@ use rust_decimal_macros::dec;
 use serde::Serialize;
 use chrono::Utc;
 use crate::{
-    orderbook::{ConcurrentOrderBook, OrderBookSnapshot},
+    orderbook::{ConcurrentOrderBook, OrderBookFeatures},
     tradeslog::{ConcurrentTradesLog, TradeLogSnapshot},
     illiquidity::{IlliquidityMetrics, IlliquidityEngine, IlliquidityConfig}, 
     entropy::{EntropyMetrics, EntropyEngine, EntropyConfig},
