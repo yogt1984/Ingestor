@@ -105,11 +105,15 @@ pub async fn run_analytics_task(
         illiquidity_tx,
     );
 
+    let entropy_tx = entropy_tx.expect("Entropy transmitter (entropy_tx) must be provided");
+
     let mut entropy_engine = EntropyEngine::new(
-        order_book.clone(),                             
-        trades_log.clone(),                             
-        Some(EntropyConfig { snapshot_interval_ms: SNAPSHOT_INTERVAL_MS }),  
-    );
+      order_book.clone(),
+      trades_log.clone(),
+      Some(EntropyConfig { snapshot_interval_ms: SNAPSHOT_INTERVAL_MS }),
+      entropy_tx,  
+      );
+
 
     loop {
         tokio::select! {

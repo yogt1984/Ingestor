@@ -23,7 +23,7 @@ impl Default for EntropyConfig {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct EntropyMetrics {
     pub timestamp:               String,
     pub tick_entropy_1s:         Option<Decimal>,
@@ -164,12 +164,15 @@ pub struct EntropyEngine {
     e60s:       RollingEntropy,
     e900s:      RollingEntropy,
     last_processed_id:  u64,
+    feature_tx: mpsc::Sender<EntropyMetrics>,
 }
 
 impl EntropyEngine {
     pub fn new(order_book: Arc<ConcurrentOrderBook>, 
                trades_log: Arc<ConcurrentTradesLog>, 
-               config:     Option<EntropyConfig>) -> Self {
+               config:     Option<EntropyConfig>,
+               feature_tx: mpsc::Sender<EntropyMetrics>
+            ) -> Self {
         Self {
             order_book,
             trades_log,
@@ -182,6 +185,7 @@ impl EntropyEngine {
             e60s:   RollingEntropy::new(60),
             e900s:  RollingEntropy::new(900),
             last_processed_id: 0,
+            feature_tx,
         }
     }
 
@@ -242,12 +246,11 @@ impl EntropyEngine {
                 _ = interval.tick() => {
                     match self.compute_metrics().await {
                         Ok(metrics) => {
-                            if let Err(e) = persistence_tx.send(metrics).await {
-                                warn!("Failed to send entropy metrics: {}", e);
-                                break;
+                            if let Err(e) = self.feature_tx.send(metrics.clone()).await {
+                                warn!("Failed to send entropy features: {}", e);
                             }
                         }
-                        Err(e) => warn!("Error computing entropy metrics: {}", e),
+                        Err(e) => warn!("Error computing entropy features: {}", e),
                     }
                 }
                 _ = shutdown_rx.changed() => {
