@@ -57,6 +57,7 @@ async fn main() {
     );
 
     let entropy_engine = EntropyEngine::new(
+        order_book_arc.clone(), 
         trades_log_arc.clone(),
         Some(EntropyConfig::default())
     );

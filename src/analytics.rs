@@ -103,8 +103,9 @@ pub async fn run_analytics_task(
     );
 
     let mut entropy_engine = EntropyEngine::new(
-        trades_log.clone(),
-        Some(EntropyConfig { snapshot_interval_ms: SNAPSHOT_INTERVAL_MS })
+        order_book.clone(),                             
+        trades_log.clone(),                             
+        Some(EntropyConfig { snapshot_interval_ms: SNAPSHOT_INTERVAL_MS }),  
     );
 
     loop {

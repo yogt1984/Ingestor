@@ -8,7 +8,7 @@ use chrono::{Utc, DateTime, Duration, NaiveDateTime};
 use log::{info, warn};
 use crate::tradeslog::{ConcurrentTradesLog, Trade};
 use num::FromPrimitive;
-
+use crate::orderbook::ConcurrentOrderBook;
 
 #[derive(Debug, Clone)]
 pub struct EntropyConfig {
@@ -153,6 +153,7 @@ impl RollingEntropy {
 }
 
 pub struct EntropyEngine {
+    order_book: Arc<ConcurrentOrderBook>,
     trades_log: Arc<ConcurrentTradesLog>,
     config:     EntropyConfig,
     e1s:        RollingEntropy,
@@ -166,8 +167,11 @@ pub struct EntropyEngine {
 }
 
 impl EntropyEngine {
-    pub fn new(trades_log: Arc<ConcurrentTradesLog>, config: Option<EntropyConfig>) -> Self {
+    pub fn new(order_book: Arc<ConcurrentOrderBook>, 
+               trades_log: Arc<ConcurrentTradesLog>, 
+               config:     Option<EntropyConfig>) -> Self {
         Self {
+            order_book,
             trades_log,
             config: config.unwrap_or_default(),
             e1s:    RollingEntropy::new(1),
