@@ -27,6 +27,7 @@ use crate::{
 async fn main() {
     env_logger::init();
 
+
     let (shutdown_tx,    shutdown_rx)     = watch::channel(false);
     let (illiq_tx,       illiq_rx)        = mpsc::channel::<IlliquidityMetrics>(100);
     let (entropy_tx,     entropy_rx)      = mpsc::channel::<EntropyMetrics>(100);
@@ -41,14 +42,13 @@ async fn main() {
         "wss://stream.binance.com:9443/ws/btcusdt@depth@100ms".to_string(),
         "wss://stream.binance.com:9443/ws/btcusdt@depth".to_string(),
     );
-    let order_book     = lob_manager.get_order_book();
-    let order_book_arc = Arc::new(order_book);
-    let trades_log     = ConcurrentTradesLog::new(10_000);
-    let trades_log_arc = Arc::new(trades_log.clone());
-    let log_manager    = LogFeedManager::new(
+    let order_book_arc = Arc::new(lob_manager.get_order_book());
+
+    let log_manager = LogFeedManager::new(
         "wss://stream.binance.com:9443/ws/btcusdt@trade".to_string(),
-        trades_log,
+        10_000, 
     );
+    let trades_log_arc = Arc::new(log_manager.get_trades_log());
 
     let illiquidity_engine = IlliquidityEngine::new(
         order_book_arc.clone(),

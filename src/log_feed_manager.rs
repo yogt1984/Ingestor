@@ -47,7 +47,8 @@ pub struct LogFeedManager {
 }
 
 impl LogFeedManager {
-    pub fn new(uri: String, trades_log: ConcurrentTradesLog) -> Self {
+    pub fn new(uri: String, trades_log_capacity: usize) -> Self {
+        let trades_log = ConcurrentTradesLog::new(trades_log_capacity);
         Self {
             trades_log,
             uri,
@@ -139,6 +140,10 @@ impl LogFeedManager {
         self.trades_log.insert_trade(trade).await;
         self.metrics.trades_processed.increment(1);
         Ok(())
+    }
+
+    pub fn get_trades_log(&self) -> ConcurrentTradesLog {
+        self.trades_log.clone()
     }
 }
 
