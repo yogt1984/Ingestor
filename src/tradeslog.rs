@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tokio::sync::{mpsc, watch};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use thiserror::Error;
@@ -360,6 +361,61 @@ impl ConcurrentTradesLog {
             .filter(|t| t.id > last_id)
             .cloned()
             .collect()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TradesLogEngineConfig {
+    pub snapshot_interval_ms: u64,
+}
+
+impl Default for TradesLogEngineConfig {
+    fn default() -> Self {
+        Self {
+            snapshot_interval_ms: 100,  
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TradesLogEngine {
+    trades_log: Arc<ConcurrentTradesLog>,
+    snapshot_interval_ms: u64,
+    tx: mpsc::Sender<TradeLogSnapshot>,
+}
+
+impl TradesLogEngine {
+    pub fn new(
+        trades_log: Arc<ConcurrentTradesLog>,
+        config: Option<TradesLogEngineConfig>,
+        tx: mpsc::Sender<TradeLogSnapshot>,
+    ) -> Self {
+        let cfg = config.unwrap_or_default();
+        Self {
+            trades_log,
+            tx,
+            snapshot_interval_ms: cfg.snapshot_interval_ms,
+        }
+    }
+
+    pub async fn run(mut self, mut shutdown_rx: watch::Receiver<bool>) -> anyhow::Result<()> {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(self.snapshot_interval_ms));
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let snapshot = self.trades_log.get_snapshot().await;
+                    if self.tx.send(snapshot).await.is_err() {
+                        log::warn!("TradesLogEngine: receiver dropped, shutting down engine.");
+                        break;
+                    }
+                }
+                _ = shutdown_rx.changed() => {
+                    log::info!("TradesLogEngine: shutdown signal received.");
+                    break;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
