@@ -7,7 +7,7 @@ use serde::Serialize;
 use chrono::Utc;
 use crate::{
     orderbook::{ConcurrentOrderBook, OrderBookFeatures},
-    tradeslog::{ConcurrentTradesLog, TradeLogSnapshot},
+    tradeslog::{ConcurrentTradesLog, TradesLogFeatures},
     illiquidity::{IlliquidityMetrics, IlliquidityEngine, IlliquidityConfig}, 
     entropy::{EntropyMetrics, EntropyEngine, EntropyConfig},
 };

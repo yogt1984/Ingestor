@@ -7,7 +7,7 @@ use serde::{Serialize, Deserialize};
 use chrono::Utc;
 use metrics::{Counter, Histogram, Gauge};
 use crate::orderbook::{ConcurrentOrderBook, OrderBookFeatures};
-use crate::tradeslog::{ConcurrentTradesLog, TradeLogSnapshot, Trade};
+use crate::tradeslog::{ConcurrentTradesLog, TradesLogFeatures, Trade};
 use log;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -192,7 +192,7 @@ impl IlliquidityEngine {
         })
     }
 
-    async fn update_history(&self, trade_snap: &TradeLogSnapshot) {
+    async fn update_history(&self, trade_snap: &TradesLogFeatures) {
         if let (Some(p), Some(v)) = (trade_snap.last_price, trade_snap.avg_trade_size) {
             if !v.is_zero() {
                 let direction = trade_snap.trade_imbalance.map(|ti| if ti.is_sign_positive() { 1 } else { -1 }).unwrap_or(0);

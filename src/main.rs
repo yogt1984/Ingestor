@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tokio::{spawn, sync::{watch, mpsc}, time::Duration};
 use crate::{
     orderbook::{ConcurrentOrderBook,  OrderBookEngine,   OrderBookFeatures,  OrderBookEngineConfig},
-    tradeslog::{ConcurrentTradesLog,  TradesLogEngine,   TradeLogSnapshot,   TradesLogEngineConfig},     
+    tradeslog::{ConcurrentTradesLog,  TradesLogEngine,   TradesLogFeatures,   TradesLogEngineConfig},     
     lob_feed_manager::LobFeedManager,
     log_feed_manager::LogFeedManager,
     illiquidity::{IlliquidityEngine, IlliquidityMetrics, IlliquidityConfig},
@@ -29,7 +29,7 @@ async fn main() {
 
     let (shutdown_tx,    shutdown_rx)     = watch::channel(false);
     let (orderbook_tx,   orderbook_rx)    = mpsc::channel::<OrderBookFeatures>(100);
-    let (tradeslog_tx,   tradeslog_rx)    = mpsc::channel::<TradeLogSnapshot>(100);
+    let (tradeslog_tx,   tradeslog_rx)    = mpsc::channel::<TradesLogFeatures>(100);
     let (illiq_tx,       illiq_rx)        = mpsc::channel::<IlliquidityMetrics>(100);
     let (entropy_tx,     entropy_rx)      = mpsc::channel::<EntropyMetrics>(100);
     let (persistence_tx, persistence_rx)  = mpsc::channel::<IlliquidityMetrics>(100);

@@ -29,7 +29,7 @@ pub struct TradesLog {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct TradeLogSnapshot {
+pub struct TradesLogFeatures {
     pub last_price: Option<Decimal>,
     pub trade_imbalance: Option<Decimal>,
     pub vwap_total: Option<Decimal>,
@@ -259,10 +259,10 @@ impl TradesLog {
         self.cached_stats.signed_count_momentum
     }
 
-    pub fn get_snapshot(&mut self) -> TradeLogSnapshot {
+    pub fn get_snapshot(&mut self) -> TradesLogFeatures {
         self.update_cached_stats();
         
-        TradeLogSnapshot {
+        TradesLogFeatures {
             last_price: self.last_price(),
             trade_imbalance: self.trade_imbalance(),
             vwap_total: self.vwap_total(),
@@ -349,7 +349,7 @@ impl ConcurrentTradesLog {
         log.signed_count_momentum()
     }
 
-    pub async fn get_snapshot(&self) -> TradeLogSnapshot {
+    pub async fn get_snapshot(&self) -> TradesLogFeatures {
         let mut log = self.inner.write().await;
         log.get_snapshot()
     }
@@ -381,14 +381,14 @@ impl Default for TradesLogEngineConfig {
 pub struct TradesLogEngine {
     trades_log: Arc<ConcurrentTradesLog>,
     snapshot_interval_ms: u64,
-    tx: mpsc::Sender<TradeLogSnapshot>,
+    tx: mpsc::Sender<TradesLogFeatures>,
 }
 
 impl TradesLogEngine {
     pub fn new(
         trades_log: Arc<ConcurrentTradesLog>,
         config: Option<TradesLogEngineConfig>,
-        tx: mpsc::Sender<TradeLogSnapshot>,
+        tx: mpsc::Sender<TradesLogFeatures>,
     ) -> Self {
         let cfg = config.unwrap_or_default();
         Self {

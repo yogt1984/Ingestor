@@ -8,7 +8,7 @@ use crate::{
 use crate::illiquidity::IlliquidityMetrics;
 use rust_decimal::prelude::ToPrimitive;
 use crate::illiquidity::IlliquidityMetrics as IlliquiditySnapshot;  
-use crate::tradeslog::TradeLogSnapshot;  
+use crate::tradeslog::TradesLogFeatures;  
 use crate::entropy::EntropyMetrics;
 
 
