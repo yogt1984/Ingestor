@@ -4,7 +4,7 @@ mod orderbook;
 mod tradeslog;
 mod lob_feed_manager;
 mod log_feed_manager;
-mod analytics;
+mod feature_fusion;
 mod persistence;
 mod illiquidity;
 mod entropy;
@@ -19,7 +19,7 @@ use crate::{
     log_feed_manager::LogFeedManager,
     illiquidity::{IlliquidityEngine, IlliquidityMetrics, IlliquidityConfig},
     entropy::{EntropyEngine,         EntropyMetrics,     EntropyConfig},
-    analytics::run_analytics_task
+    feature_fusion::run_analytics_task
 };
 
 

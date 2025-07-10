@@ -3,7 +3,7 @@ use polars::prelude::*;
 use serde_json;
 use serde::Serialize;
 use crate::{
-    analytics::FeaturesSnapshot,
+    feature_fusion::FeaturesSnapshot,
 };
 use crate::illiquidity::IlliquidityMetrics;
 use rust_decimal::prelude::ToPrimitive;

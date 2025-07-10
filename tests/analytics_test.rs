@@ -1,5 +1,5 @@
 use ingestor::{
-    analytics::run_analytics_task,
+    feature_fusion::run_analytics_task,
     orderbook::ConcurrentOrderBook,
     tradeslog::{ConcurrentTradesLog, Trade},
 };

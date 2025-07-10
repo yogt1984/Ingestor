@@ -1,6 +1,6 @@
 pub mod orderbook;
 pub mod tradeslog;
-pub mod analytics;
+pub mod feature_fusion;
 pub mod persistence;
 pub mod illiquidity;
 pub mod entropy;
