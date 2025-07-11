@@ -1,5 +1,5 @@
 use ingestor::{
-    feature_fusion::run_analytics_task,
+    feature_fusion::FeatureFusion,
     orderbook::ConcurrentOrderBook,
     tradeslog::{ConcurrentTradesLog, Trade},
 };
@@ -21,11 +21,12 @@ async fn test_full_analytics_pipeline() {
         is_buyer_maker: false,
     }).await;
 
-    let handle = tokio::spawn(run_analytics_task(
-        order_book,
-        trades_log.clone(),
-        shutdown_rx,
-    ));
+    let (_ill_tx, ill_rx) = tokio::sync::mpsc::channel(10);
+    let (_ent_tx, ent_rx) = tokio::sync::mpsc::channel(10);
+    let fusion            = FeatureFusion::new(order_book, trades_log.clone(), ill_rx, ent_rx);
+    let handle            = tokio::spawn(async move {
+        fusion.run(shutdown_rx).await;
+    });
 
     sleep(Duration::from_millis(150)).await;
     shutdown_tx.send(true).unwrap();
