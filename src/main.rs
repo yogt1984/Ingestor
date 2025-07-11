@@ -145,16 +145,6 @@ async fn main() {
         ).await.unwrap();
     });
 
-    let entropy_persistence_handle = spawn(async move {
-        persistence::persist_metrics(
-            entropy_rx,
-            1000,
-            "data/entropy",
-            "entropy",
-            persistence::save_entropy_as_parquet
-        ).await.unwrap();
-    });
-
 
     tokio::select! {
         _ = ctrl_c                     => println!("Shutting down..."),
@@ -164,6 +154,5 @@ async fn main() {
         _ = illiquidity_handle         => eprintln!("Illiquidity engine crashed"),
         _ = persistence_handle         => eprintln!("Persistence task crashed"),
         _ = entropy_handle             => eprintln!("Entropy engine crashed"),
-        _ = entropy_persistence_handle => eprintln!("Entropy persistence task crashed"),
     }
 }
