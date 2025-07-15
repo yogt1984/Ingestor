@@ -222,7 +222,7 @@ impl FeatureFusion {
                         volume_tick_entropy_15m: entropy_metrics.volume_tick_entropy_15m,
                     };
 
-                    println!("Snapshot: {:?}", snapshot); // Optionally replace with structured output
+                    print_snapshot(&snapshot);
 
                     batch.push(snapshot);
                     if batch.len() >= BATCH_SIZE {
@@ -256,7 +256,90 @@ impl FeatureFusion {
     } // end run
 }
 
-
+fn print_snapshot(snapshot: &FeaturesSnapshot) {
+    println!(
+        r#"
+[{timestamp}] CORE METRICS:
+  MID:   {mid:.4} | MICRO: {micro:.4} (Δ {micro_delta:.4}) | SPRD: {spread:.4}
+  BID/ASK: {bid:.4}/{ask:.4} | IMB: {imb:.2}%
+  PWI: 1%={pwi1:.2}% 5%={pwi5:.2}% 25%={pwi25:.2}% 50%={pwi50:.2}%
+  SLOPE: B{bid_slope:.4}/A{ask_slope:.4}
+  VOL_IMB: {vol_imb:.2}% | DEPTH: B{bid_depth:.2}/A{ask_depth:.2}
+LIQUIDITY METRICS:
+  Roll: {roll:.6} | Amihud: {amihud:.6e} | Kyle: {kyle:.4} | Hasbrouck: {hasbrouck:.4} | VPIN: {vpin:.2}
+TRADE METRICS:
+  LAST: {last:.4} | VWAP TOT={vwap_tot:.4} 10={vwap10:.4} 50={vwap50:.4} 100={vwap100:.4} 1000={vwap1000:.4}
+  ΔPRICE: {price_change:.4}% | SIZE: {avg_trade:.2}
+  MOMENTUM: {momentum} | RATE: {rate:.1}/s
+  AGGR: 10={aggr10:.2}% 50={aggr50:.2}% 100={aggr100:.2}% 1000={aggr1000:.2}%
+  FLOW: IMB={flow_imb:.3} | PRES={flow_pres:.1} | {flow_sig}
+VOLUME STRUCTURE:
+  VOL(0.01%): B={vol_bid:.2} A={vol_ask:.2}
+  VEC: {volume_vector:?}
+  PWI_VEC: {pwi_vector:?}
+ENTROPY METRICS:
+  TICK_ENTROPY: 1s={te1:.4} 5s={te5:.4} 10s={te10:.4} 15s={te15:.4} 30s={te30:.4} 1m={te1m:.4} 15m={te15m:.4}
+  VOL_ENTROPY : 1s={ve1:.4} 5s={ve5:.4} 10s={ve10:.4} 15s={ve15:.4} 30s={ve30:.4} 1m={ve1m:.4} 15m={ve15m:.4}
+"#,
+        timestamp = snapshot.timestamp,
+        mid = snapshot.mid_price.unwrap_or(dec!(0)),
+        micro = snapshot.microprice.unwrap_or(dec!(0)),
+        micro_delta = snapshot.microprice.unwrap_or(dec!(0)) - snapshot.mid_price.unwrap_or(dec!(0)),
+        spread = snapshot.spread.unwrap_or(dec!(0)),
+        bid = snapshot.best_bid.unwrap_or(dec!(0)),
+        ask = snapshot.best_ask.unwrap_or(dec!(0)),
+        imb = snapshot.imbalance.unwrap_or(dec!(0)) * dec!(100),
+        pwi1 = snapshot.pwi_1.unwrap_or(dec!(0)) * dec!(100),
+        pwi5 = snapshot.pwi_5.unwrap_or(dec!(0)) * dec!(100),
+        pwi25 = snapshot.pwi_25.unwrap_or(dec!(0)) * dec!(100),
+        pwi50 = snapshot.pwi_50.unwrap_or(dec!(0)) * dec!(100),
+        bid_slope = snapshot.bid_slope.unwrap_or(dec!(0)),
+        ask_slope = snapshot.ask_slope.unwrap_or(dec!(0)),
+        vol_imb = snapshot.volume_imbalance_top5.unwrap_or(dec!(0)) * dec!(100),
+        bid_depth = snapshot.bid_depth_ratio.unwrap_or(dec!(0)),
+        ask_depth = snapshot.ask_depth_ratio.unwrap_or(dec!(0)),
+        roll = snapshot.roll_spread.unwrap_or(dec!(0)),
+        amihud = snapshot.amihuds_lambda.unwrap_or(dec!(0)),
+        kyle = snapshot.kyles_lambda.unwrap_or(dec!(0)),
+        hasbrouck = snapshot.hasbroucks_lambda.unwrap_or(dec!(0)),
+        vpin = snapshot.vpin.unwrap_or(dec!(0)),
+        last = snapshot.last_trade_price.unwrap_or(dec!(0)),
+        vwap_tot = snapshot.vwap_total.unwrap_or(dec!(0)),
+        vwap10 = snapshot.vwap_10.unwrap_or(dec!(0)),
+        vwap50 = snapshot.vwap_50.unwrap_or(dec!(0)),
+        vwap100 = snapshot.vwap_100.unwrap_or(dec!(0)),
+        vwap1000 = snapshot.vwap_1000.unwrap_or(dec!(0)),
+        price_change = snapshot.price_change.unwrap_or(dec!(0)) * dec!(100),
+        avg_trade = snapshot.avg_trade_size.unwrap_or(dec!(0)),
+        momentum = snapshot.signed_count_momentum,
+        rate = snapshot.trade_rate_10s.unwrap_or(0.0),
+        aggr10 = snapshot.aggr_ratio_10.unwrap_or(dec!(0)) * dec!(100),
+        aggr50 = snapshot.aggr_ratio_50.unwrap_or(dec!(0)) * dec!(100),
+        aggr100 = snapshot.aggr_ratio_100.unwrap_or(dec!(0)) * dec!(100),
+        aggr1000 = snapshot.aggr_ratio_1000.unwrap_or(dec!(0)) * dec!(100),
+        flow_imb = snapshot.order_flow_imbalance.unwrap_or(dec!(0)),
+        flow_pres = snapshot.order_flow_pressure,
+        flow_sig = if snapshot.order_flow_significance { "SIG" } else { "insig" },
+        vol_bid = snapshot.bid_volume_001.unwrap_or(dec!(0)),
+        vol_ask = snapshot.ask_volume_001.unwrap_or(dec!(0)),
+        volume_vector = snapshot.volume_vector,
+        pwi_vector = snapshot.pwi_vector,
+        te1 = snapshot.tick_entropy_1s.unwrap_or(dec!(0)),
+        te5 = snapshot.tick_entropy_5s.unwrap_or(dec!(0)),
+        te10 = snapshot.tick_entropy_10s.unwrap_or(dec!(0)),
+        te15 = snapshot.tick_entropy_15s.unwrap_or(dec!(0)),
+        te30 = snapshot.tick_entropy_30s.unwrap_or(dec!(0)),
+        te1m = snapshot.tick_entropy_1m.unwrap_or(dec!(0)),
+        te15m = snapshot.tick_entropy_15m.unwrap_or(dec!(0)),
+        ve1 = snapshot.volume_tick_entropy_1s.unwrap_or(dec!(0)),
+        ve5 = snapshot.volume_tick_entropy_5s.unwrap_or(dec!(0)),
+        ve10 = snapshot.volume_tick_entropy_10s.unwrap_or(dec!(0)),
+        ve15 = snapshot.volume_tick_entropy_15s.unwrap_or(dec!(0)),
+        ve30 = snapshot.volume_tick_entropy_30s.unwrap_or(dec!(0)),
+        ve1m = snapshot.volume_tick_entropy_1m.unwrap_or(dec!(0)),
+        ve15m = snapshot.volume_tick_entropy_15m.unwrap_or(dec!(0)),
+    );
+}
 
 #[cfg(test)]
 mod tests {
