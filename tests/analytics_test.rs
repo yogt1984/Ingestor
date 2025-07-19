@@ -1,5 +1,5 @@
 use ingestor::{
-    feature_fusion::FeatureFusion,
+    feature_fusion::{FeatureFusionEngine, FeaturesSnapshot},
     orderbook::ConcurrentOrderBook,
     tradeslog::{ConcurrentTradesLog, Trade},
 };
@@ -23,7 +23,9 @@ async fn test_full_analytics_pipeline() {
 
     let (_ill_tx, ill_rx) = tokio::sync::mpsc::channel(10);
     let (_ent_tx, ent_rx) = tokio::sync::mpsc::channel(10);
-    let fusion            = FeatureFusion::new(order_book, trades_log.clone(), ill_rx, ent_rx);
+    let (_feat_tx, feat_rx) = tokio::sync::mpsc::channel::<FeaturesSnapshot>(10);
+    drop(feat_rx);
+    let fusion            = FeatureFusionEngine::new(order_book, trades_log.clone(), ill_rx, ent_rx, _feat_tx);
     let handle            = tokio::spawn(async move {
         fusion.run(shutdown_rx).await;
     });

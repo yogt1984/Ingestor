@@ -150,48 +150,71 @@ pub fn save_entropy_as_parquet(
 }
 
 /// Unified persistence task for both metric types
-pub async fn persist_metrics<T: Serialize>(
-    mut rx: tokio::sync::mpsc::Receiver<T>,
+pub struct PersistenceEngine<T> {
+    rx: tokio::sync::mpsc::Receiver<T>,
     batch_size: usize,
-    base_path: &str,
-    file_prefix: &str,
-    save_fn: fn(&[T], &str) -> Result<()>
-) -> Result<()> {
-    let mut batch = Vec::with_capacity(batch_size);
-    let mut batch_counter = 0;
-    
-    while let Some(snapshot) = rx.recv().await {
-        batch.push(snapshot);
-        
-        if batch.len() >= batch_size {
+    base_path: String,
+    file_prefix: String,
+    save_fn: fn(&[T], &str) -> Result<()>,
+}
+
+impl<T: Serialize> PersistenceEngine<T> {
+    pub fn new(
+        rx: tokio::sync::mpsc::Receiver<T>,
+        batch_size: usize,
+        base_path: String,
+        file_prefix: String,
+        save_fn: fn(&[T], &str) -> Result<()>,
+    ) -> Self {
+        Self { rx, batch_size, base_path, file_prefix, save_fn }
+    }
+
+    pub async fn run(
+        mut self,
+        mut shutdown_rx: tokio::sync::watch::Receiver<bool>
+    ) -> Result<()> {
+        let mut batch = Vec::with_capacity(self.batch_size);
+        let mut batch_counter = 0;
+
+        loop {
+            tokio::select! {
+                Some(snapshot) = self.rx.recv() => {
+                    batch.push(snapshot);
+
+                    if batch.len() >= self.batch_size {
+                        let filename = format!(
+                            "{}/{}_{}.parquet",
+                            self.base_path,
+                            self.file_prefix,
+                            chrono::Local::now().format("%Y%m%d_%H%M%S")
+                        );
+
+                        (self.save_fn)(&batch, &filename)
+                            .context(format!("Failed to save {} batch {}", self.file_prefix, batch_counter))?;
+
+                        batch.clear();
+                        batch_counter += 1;
+                    }
+                },
+                _ = shutdown_rx.changed() => {
+                    break;
+                }
+            }
+        }
+
+        if !batch.is_empty() {
             let filename = format!(
                 "{}/{}_{}.parquet",
-                base_path,
-                file_prefix,
+                self.base_path,
+                self.file_prefix,
                 chrono::Local::now().format("%Y%m%d_%H%M%S")
             );
             
-            save_fn(&batch, &filename)
-                .context(format!("Failed to save {} batch {}", file_prefix, batch_counter))?;
-                
-            batch.clear();
-            batch_counter += 1;
+            (self.save_fn)(&batch, &filename)
+                .context(format!("Failed to save final {} batch", self.file_prefix))?;
         }
+        Ok(())
     }
-    
-    // Final flush
-    if !batch.is_empty() {
-        let filename = format!(
-            "{}/{}_{}.parquet",
-            base_path,
-            file_prefix,
-            chrono::Local::now().format("%Y%m%d_%H%M%S")
-        );
-        save_fn(&batch, &filename)
-            .context(format!("Failed to save final {} batch", file_prefix))?;
-    }
-    
-    Ok(())
 }
 
 

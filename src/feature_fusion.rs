@@ -11,10 +11,8 @@ use crate::{
     illiquidity::IlliquidityMetrics,
     entropy::EntropyMetrics,
 };
-use crate::persistence;
 
 const SNAPSHOT_INTERVAL_MS: u64 = 100;
-const BATCH_SIZE:         usize = 1000;
 
 #[derive(Debug, Serialize, Clone)]
 pub struct FeaturesSnapshot {
@@ -81,25 +79,28 @@ pub struct FeaturesSnapshot {
     pub volume_tick_entropy_15m: Option<Decimal>,
 }
 
-pub struct FeatureFusion {
+pub struct FeatureFusionEngine {
     order_book:     Arc<ConcurrentOrderBook>,
     trades_log:     Arc<ConcurrentTradesLog>,
     illiquidity_rx: mpsc::Receiver<IlliquidityMetrics>,
     entropy_rx:     mpsc::Receiver<EntropyMetrics>,
+    fused_tx:       mpsc::Sender<FeaturesSnapshot>,
 }
 
-impl FeatureFusion {
+impl FeatureFusionEngine {
     pub fn new(
         order_book: Arc<ConcurrentOrderBook>,
         trades_log: Arc<ConcurrentTradesLog>,
         illiquidity_rx: mpsc::Receiver<IlliquidityMetrics>,
         entropy_rx: mpsc::Receiver<EntropyMetrics>,
+        fused_tx: mpsc::Sender<FeaturesSnapshot>,
     ) -> Self {
         Self {
             order_book,
             trades_log,
             illiquidity_rx,
             entropy_rx,
+            fused_tx,
         }
     }
 
@@ -110,8 +111,6 @@ impl FeatureFusion {
         const SIGNIFICANCE_THRESHOLD: Decimal = dec!(10.0);
 
         let mut interval = interval(Duration::from_millis(SNAPSHOT_INTERVAL_MS));
-        let mut batch = Vec::with_capacity(BATCH_SIZE);
-        let mut batch_id = 0;
 
         let mut latest_illiquidity: Option<IlliquidityMetrics> = None;
         let mut latest_entropy: Option<EntropyMetrics> = None;
@@ -223,19 +222,8 @@ impl FeatureFusion {
                     };
 
                     print_snapshot(&snapshot);
-
-                    batch.push(snapshot);
-                    if batch.len() >= BATCH_SIZE {
-                        let filename = format!(
-                            "data/features_{}_{:03}.parquet",
-                            chrono::Local::now().format("%Y%m%d_%H%M%S"),
-                            batch_id
-                        );
-                        if let Err(e) = persistence::save_feature_as_parquet(&batch, &filename) {
-                            eprintln!("Failed to save batch {}: {}", batch_id, e);
-                        }
-                        batch.clear();
-                        batch_id += 1;
+                    if let Err(e) = self.fused_tx.send(snapshot).await {
+                        eprintln!("Failed to send fused features: {}", e);
                     }
                 },
 
@@ -386,8 +374,11 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (_ill_tx, ill_rx)          = mpsc::channel(10);
         let (_ent_tx, ent_rx)          = mpsc::channel(10);
+        let (_feat_tx, feat_rx)        = mpsc::channel(10);
+        drop(feat_rx);
 
-        let fusion = FeatureFusion::new(order_book, trades_log.clone(), ill_rx, ent_rx);
+        let fusion = FeatureFusionEngine::new(order_book, trades_log.clone(), ill_rx, ent_rx, _feat_tx);
+
         let task   = tokio::spawn(async move {
             fusion.run(shutdown_rx).await;
         });

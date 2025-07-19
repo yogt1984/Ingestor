@@ -19,7 +19,8 @@ use crate::{
     log_feed_manager::LogFeedManager,
     illiquidity::{IlliquidityEngine, IlliquidityMetrics, IlliquidityConfig},
     entropy::{EntropyEngine,         EntropyMetrics,     EntropyConfig},
-    feature_fusion::FeatureFusion
+    feature_fusion::FeatureFusionEngine, FeaturesSnapshot,
+    persistence::PersistenceEngine,
 };
 
 
@@ -32,9 +33,7 @@ async fn main() {
     let (tradeslog_tx,   tradeslog_rx)    = mpsc::channel::<TradesLogFeatures>(100);
     let (illiq_tx,       illiq_rx)        = mpsc::channel::<IlliquidityMetrics>(100);
     let (entropy_tx,     entropy_rx)      = mpsc::channel::<EntropyMetrics>(100);
-    let (persistence_tx, persistence_rx)  = mpsc::channel::<IlliquidityMetrics>(100);
-
-    let entropy_tx_clone                  = entropy_tx.clone(); 
+    let (fused_tx,       fused_rx)        = mpsc::channel::<FeaturesSnapshot>(100);
 
     let ctrl_c = async {
         tokio::signal::ctrl_c().await.unwrap();
@@ -79,11 +78,20 @@ async fn main() {
         entropy_tx,
     );
 
-    let feature_fusion_engine = FeatureFusion::new(
-        order_book_arc.clone(), 
-        trades_log_arc.clone(), 
-        illiq_rx, 
-        entropy_rx
+    let feature_fusion_engine = FeatureFusionEngine::new(
+        order_book_arc.clone(),
+        trades_log_arc.clone(),
+        illiq_rx,
+        entropy_rx,
+        fused_tx,
+    );
+
+    let persistence_engine = PersistenceEngine::new(
+        fused_rx,
+        1000,
+        "data/features".to_string(),
+        "features".to_string(),
+        persistence::save_feature_as_parquet,
     );
 
     let lob_handle = spawn({
@@ -135,14 +143,11 @@ async fn main() {
         }
     });
 
-    let persistence_handle = spawn(async move {
-        persistence::persist_metrics(
-            persistence_rx,
-            1000,
-            "data/illiquidity",
-            "illiquidity",
-            persistence::save_illiquidity_as_parquet
-        ).await.unwrap();
+    let persistence_handle = spawn({
+        let shutdown_rx = shutdown_rx.clone();
+        async move {
+            persistence_engine.run(shutdown_rx).await.unwrap();
+        }
     });
 
 
