@@ -1,10 +1,12 @@
+#![allow(dead_code)]
+
 use std::collections::VecDeque;
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc, watch};
+use tokio::sync::{mpsc, watch};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 use serde::Serialize;
-use chrono::{Utc, DateTime, Duration, NaiveDateTime};
+use chrono::{Utc, DateTime, Duration};
 use log::{info, warn};
 use crate::tradeslog::{ConcurrentTradesLog, Trade};
 use num::FromPrimitive;
@@ -79,11 +81,8 @@ impl RollingEntropy {
             
             self.last_price = Some(trade.price);
             self.buffer.push_back(TradeSample {
-                timestamp: chrono::DateTime::<Utc>::from_utc(
-                    chrono::NaiveDateTime::from_timestamp_millis(trade.timestamp as i64)
-                        .unwrap_or_else(|| chrono::Utc::now().naive_utc()),
-                    chrono::Utc,
-                ),
+                timestamp: chrono::DateTime::<Utc>::from_timestamp_millis(trade.timestamp as i64)
+                    .unwrap_or_else(|| chrono::Utc::now()),
                 direction,
                 volume: trade.quantity,
             });
@@ -236,7 +235,7 @@ impl EntropyEngine {
     pub async fn run(
         mut self,
         mut shutdown_rx: watch::Receiver<bool>,
-        persistence_tx: mpsc::Sender<EntropyMetrics>,
+        _persistence_tx: mpsc::Sender<EntropyMetrics>,
     ) -> anyhow::Result<()> {
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(
             self.config.snapshot_interval_ms,

@@ -6,7 +6,7 @@ use rust_decimal_macros::dec;
 use serde::{Serialize, Deserialize};
 use chrono::Utc;
 use metrics::{Counter, Histogram, Gauge};
-use crate::orderbook::{ConcurrentOrderBook, OrderBookFeatures};
+use crate::orderbook::{ConcurrentOrderBook};
 use crate::tradeslog::{ConcurrentTradesLog, TradesLogFeatures, Trade};
 use log;
 
@@ -136,7 +136,7 @@ pub struct IlliquidityEngine {
     order_book:     Arc<ConcurrentOrderBook>,
     trades_log:     Arc<ConcurrentTradesLog>,
     history:        Arc<Mutex<HistoryBuffer>>,
-    metrics:        IlliquidityEngineMetrics,
+    _metrics:        IlliquidityEngineMetrics,
     config:         IlliquidityConfig,
     vpin:           VPIN,                      
     feature_tx:     mpsc::Sender<IlliquidityMetrics>,
@@ -161,7 +161,7 @@ impl IlliquidityEngine {
                 volumes:    Vec::with_capacity(config.window_size),
                 directions: Vec::with_capacity(config.window_size),
             })),
-            metrics: IlliquidityEngineMetrics {
+            _metrics: IlliquidityEngineMetrics {
                 computations:       metrics::register_counter!("illiquidity_computations"),
                 computation_time:   metrics::register_histogram!("illiquidity_computation_time"),
                 window_size:        metrics::register_gauge!("illiquidity_window_size"),
@@ -173,7 +173,7 @@ impl IlliquidityEngine {
     }
 
     pub async fn compute_metrics(&mut self) -> anyhow::Result<IlliquidityMetrics> {
-        let (ob_snap, trade_snap) = tokio::join!(
+        let (_ob_snap, trade_snap) = tokio::join!(
             self.order_book.get_snapshot(),
             self.trades_log.get_snapshot()
         );
@@ -364,7 +364,7 @@ impl IlliquidityEngine {
     pub async fn run(
         mut self,
         mut shutdown_rx: watch::Receiver<bool>,
-        persistence_tx: mpsc::Sender<IlliquidityMetrics>,
+        _persistence_tx: mpsc::Sender<IlliquidityMetrics>,
     ) -> anyhow::Result<()> {
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(
             self.config.snapshot_interval_ms,

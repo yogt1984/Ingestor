@@ -661,7 +661,7 @@ impl OrderBookEngine {
         }
     }
 
-    pub async fn run(mut self, mut shutdown_rx: watch::Receiver<bool>) -> anyhow::Result<()> {
+    pub async fn run(self, mut shutdown_rx: watch::Receiver<bool>) -> anyhow::Result<()> {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(self.snapshot_interval_ms));
         loop {
             tokio::select! {
