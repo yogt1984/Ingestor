@@ -19,7 +19,7 @@ use crate::{
     log_feed_manager::LogFeedManager,
     illiquidity::{IlliquidityEngine, IlliquidityMetrics, IlliquidityConfig},
     entropy::{EntropyEngine,         EntropyMetrics,     EntropyConfig},
-    feature_fusion::FeatureFusionEngine, FeaturesSnapshot,
+    feature_fusion::{FeatureFusionEngine, FeaturesSnapshot},
     persistence::PersistenceEngine,
 };
 
