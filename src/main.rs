@@ -117,14 +117,14 @@ async fn main() {
     let illiquidity_handle = spawn({
         let shutdown_rx = shutdown_rx.clone();
         async move {
-            illiquidity_engine.run(shutdown_rx, persistence_tx).await.unwrap();
+            illiquidity_engine.run(shutdown_rx).await.unwrap();
         }
     });
 
     let entropy_handle = spawn({
         let shutdown_rx = shutdown_rx.clone();
         async move {
-            entropy_engine.run(shutdown_rx, entropy_tx_clone).await.unwrap();
+            entropy_engine.run(shutdown_rx).await.unwrap();
         }
     });
 

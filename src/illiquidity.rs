@@ -364,7 +364,6 @@ impl IlliquidityEngine {
     pub async fn run(
         mut self,
         mut shutdown_rx: watch::Receiver<bool>,
-        _persistence_tx: mpsc::Sender<IlliquidityMetrics>,
     ) -> anyhow::Result<()> {
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(
             self.config.snapshot_interval_ms,
