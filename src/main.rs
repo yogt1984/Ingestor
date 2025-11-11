@@ -9,7 +9,7 @@ mod persistence;
 mod illiquidity;
 mod entropy;
 
-
+use crossbeam::channel;
 use std::sync::Arc;
 use tokio::{spawn, sync::{watch, mpsc}, time::Duration};
 use crate::{
@@ -24,6 +24,7 @@ use crate::{
 };
 
 
+
 #[tokio::main]
 async fn main() {
     env_logger::init();
@@ -34,6 +35,7 @@ async fn main() {
     let (illiq_tx,       illiq_rx)        = mpsc::channel::<IlliquidityMetrics>(100);
     let (entropy_tx,     entropy_rx)      = mpsc::channel::<EntropyMetrics>(100);
     let (fused_tx,       fused_rx)        = mpsc::channel::<FeaturesSnapshot>(100);
+    let (persist_tx,     persist_rx)      = channel::bounded::<FeaturesSnapshot>(2048);
 
     let ctrl_c = async {
         tokio::signal::ctrl_c().await.unwrap();
@@ -87,11 +89,12 @@ async fn main() {
     );
 
     let persistence_engine = PersistenceEngine::new(
-        fused_rx,
+        persist_rx,
         1000,
-        "data/features".to_string(),
-        "features".to_string(),
-        persistence::save_feature_as_parquet,
+        "data/features",
+        "features",
+        96,
+        persistence::save_feature_as_parquet_path,
     );
 
     let lob_handle = spawn({
@@ -143,12 +146,32 @@ async fn main() {
         }
     });
 
-    let persistence_handle = spawn({
-        let shutdown_rx = shutdown_rx.clone();
-        async move {
-            persistence_engine.run(shutdown_rx).await.unwrap();
-        }
-    });
+    let persistence_handle = tokio::task::spawn_blocking(move || persistence_engine.run());
+
+    let forward_handle = {
+        let mut fused_rx = fused_rx;
+        tokio::spawn(async move {
+            loop {
+                match fused_rx.recv().await {
+                    Some(snapshot) => {
+                        // Non-blocking bridge with backoff if channel is full
+                        let mut snapshot_opt = Some(snapshot);
+                        while let Some(s) = snapshot_opt.take() {
+                            match persist_tx.try_send(s) {
+                                Ok(()) => break,
+                                Err(channel::TrySendError::Full(s)) => {
+                                    snapshot_opt = Some(s);
+                                    tokio::time::sleep(Duration::from_millis(1)).await;
+                                }
+                                Err(channel::TrySendError::Disconnected(_)) => return,
+                            }
+                        }
+                    }
+                    None => break,
+                }
+            }
+        })
+    };
 
 
     tokio::select! {
@@ -157,7 +180,14 @@ async fn main() {
         _ = trades_handle              => eprintln!("Trade feed crashed"),
         _ = analytics_handle           => eprintln!("Analytics task crashed"),
         _ = illiquidity_handle         => eprintln!("Illiquidity engine crashed"),
-        _ = persistence_handle         => eprintln!("Persistence task crashed"),
+        res = persistence_handle        => match res {
+            Ok(Ok(())) => (),
+            Ok(Err(err)) => eprintln!("Persistence task crashed: {err:?}"),
+            Err(err) => eprintln!("Persistence task join error: {err}"),
+        },
+        res = forward_handle            => if let Err(err) = res {
+            eprintln!("Persistence forwarder crashed: {err}");
+        },
         _ = entropy_handle             => eprintln!("Entropy engine crashed"),
     }
 }

@@ -8,10 +8,17 @@ use crate::{
 use crate::illiquidity::IlliquidityMetrics;
 use rust_decimal::prelude::ToPrimitive;
 use crate::entropy::EntropyMetrics;
+use std::path::{Path, PathBuf};
+use std::fs::{self, File};
+use std::collections::VecDeque;
+use std::ffi::OsStr;
+use crossbeam::channel::Receiver;
+use log::warn;
 
 
 /// Save a batch of features to Parquet with comprehensive error handling
-pub fn save_feature_as_parquet(features: &[FeaturesSnapshot], filepath: &str) -> Result<()> {
+pub fn save_feature_as_parquet(features: &[FeaturesSnapshot], filepath: impl AsRef<Path>) -> Result<()> {
+    let filepath = filepath.as_ref();
     // Convert Decimal fields to f64 with proper error handling
     fn decimal_to_f64(d: Option<rust_decimal::Decimal>) -> Option<f64> {
         d.and_then(|d| d.to_f64())
@@ -66,17 +73,22 @@ pub fn save_feature_as_parquet(features: &[FeaturesSnapshot], filepath: &str) ->
     ].context("Failed to create DataFrame")?;
 
     // Create parent directories if they don't exist
-    if let Some(parent) = std::path::Path::new(filepath).parent() {
-        std::fs::create_dir_all(parent).context("Failed to create output directory")?;
+    if let Some(parent) = filepath.parent() {
+        fs::create_dir_all(parent).context("Failed to create output directory")?;
     }
 
     // Write with compression and proper error handling
-    ParquetWriter::new(std::fs::File::create(filepath).context("Failed to create output file")?)
+    ParquetWriter::new(File::create(filepath).context("Failed to create output file")?)
         .with_compression(ParquetCompression::Snappy)
         .finish(&mut df)
         .context("Failed to write Parquet file")?;
 
     Ok(())
+}
+
+/// Wrapper with a concrete `&Path` signature for function pointer usage
+pub fn save_feature_as_parquet_path(features: &[FeaturesSnapshot], filepath: &Path) -> Result<()> {
+    save_feature_as_parquet(features, filepath)
 }
 
 
@@ -87,8 +99,9 @@ fn decimal_to_f64(d: Option<rust_decimal::Decimal>) -> Option<f64> {
 /// Saves illiquidity metrics with identical patterns to feature persistence
 pub fn save_illiquidity_as_parquet(
     snapshots: &[IlliquidityMetrics],
-    filepath: &str
+    filepath: impl AsRef<Path>
 ) -> Result<()> {
+    let filepath = filepath.as_ref();
     let mut df = df! [
         "timestamp" => snapshots.iter().map(|s| s.timestamp.clone()).collect::<Vec<_>>(),
         "roll_spread" => snapshots.iter().map(|s| decimal_to_f64(s.roll_spread)).collect::<Vec<_>>(),
@@ -99,14 +112,12 @@ pub fn save_illiquidity_as_parquet(
     ].context("Failed to create illiquidity DataFrame")?;
 
     // Mirror your exact file handling logic
-    if let Some(parent) = std::path::Path::new(filepath).parent() {
-        std::fs::create_dir_all(parent)
-            .context("Failed to create illiquidity output directory")?;
+    if let Some(parent) = filepath.parent() {
+        fs::create_dir_all(parent).context("Failed to create illiquidity output directory")?;
     }
 
     // Same compression and writing configuration
-    ParquetWriter::new(std::fs::File::create(filepath)
-        .context("Failed to create illiquidity output file")?)
+    ParquetWriter::new(File::create(filepath).context("Failed to create illiquidity output file")?)
         .with_compression(ParquetCompression::Snappy)
         .finish(&mut df)
         .context("Failed to write illiquidity Parquet file")?;
@@ -116,8 +127,9 @@ pub fn save_illiquidity_as_parquet(
 
 pub fn save_entropy_as_parquet(
     snapshots: &[EntropyMetrics],
-    filepath: &str
+    filepath: impl AsRef<Path>
 ) -> Result<()> {
+    let filepath = filepath.as_ref();
     let mut df = df! [
         "timestamp" => snapshots.iter().map(|s| s.timestamp.clone()).collect::<Vec<_>>(),
         "tick_entropy_1s" => snapshots.iter().map(|s| decimal_to_f64(s.tick_entropy_1s)).collect::<Vec<_>>(),
@@ -136,12 +148,11 @@ pub fn save_entropy_as_parquet(
         "volume_tick_entropy_15m" => snapshots.iter().map(|s| decimal_to_f64(s.volume_tick_entropy_15m)).collect::<Vec<_>>(),
     ].context("Failed to create entropy DataFrame")?;
 
-    if let Some(parent) = std::path::Path::new(filepath).parent() {
-        std::fs::create_dir_all(parent).context("Failed to create entropy output directory")?;
+    if let Some(parent) = filepath.parent() {
+        fs::create_dir_all(parent).context("Failed to create entropy output directory")?;
     }
 
-    ParquetWriter::new(std::fs::File::create(filepath)
-        .context("Failed to create entropy output file")?)
+    ParquetWriter::new(File::create(filepath).context("Failed to create entropy output file")?)
         .with_compression(ParquetCompression::Snappy)
         .finish(&mut df)
         .context("Failed to write entropy Parquet file")?;
@@ -149,71 +160,139 @@ pub fn save_entropy_as_parquet(
     Ok(())
 }
 
-/// Unified persistence task for both metric types
+/// Unified persistence task for metric batches with file rotation.
 pub struct PersistenceEngine<T> {
-    rx: tokio::sync::mpsc::Receiver<T>,
+    rx: Receiver<T>,
     batch_size: usize,
-    base_path: String,
+    base_path: PathBuf,
     file_prefix: String,
-    save_fn: fn(&[T], &str) -> Result<()>,
+    max_files: usize,
+    save_fn: fn(&[T], &Path) -> Result<()>,
+    retained_files: VecDeque<PathBuf>,
 }
 
-impl<T: Serialize> PersistenceEngine<T> {
+impl<T> PersistenceEngine<T>
+where
+    T: Serialize + Send + 'static,
+{
     pub fn new(
-        rx: tokio::sync::mpsc::Receiver<T>,
+        rx: Receiver<T>,
         batch_size: usize,
-        base_path: String,
-        file_prefix: String,
-        save_fn: fn(&[T], &str) -> Result<()>,
+        base_path: impl Into<PathBuf>,
+        file_prefix: impl Into<String>,
+        max_files: usize,
+        save_fn: fn(&[T], &Path) -> Result<()>,
     ) -> Self {
-        Self { rx, batch_size, base_path, file_prefix, save_fn }
+        Self {
+            rx,
+            batch_size,
+            base_path: base_path.into(),
+            file_prefix: file_prefix.into(),
+            max_files,
+            save_fn,
+            retained_files: VecDeque::new(),
+        }
     }
 
-    pub async fn run(
-        mut self,
-        mut shutdown_rx: tokio::sync::watch::Receiver<bool>
-    ) -> Result<()> {
+    pub fn run(mut self) -> Result<()> {
+        fs::create_dir_all(&self.base_path)
+            .with_context(|| format!("Failed to create base directory {:?}", self.base_path))?;
+
+        self.bootstrap_retained_files()?;
+
         let mut batch = Vec::with_capacity(self.batch_size);
-        let mut batch_counter = 0;
 
-        loop {
-            tokio::select! {
-                Some(snapshot) = self.rx.recv() => {
-                    batch.push(snapshot);
+        while let Ok(snapshot) = self.rx.recv() {
+            batch.push(snapshot);
 
-                    if batch.len() >= self.batch_size {
-                        let filename = format!(
-                            "{}/{}_{}.parquet",
-                            self.base_path,
-                            self.file_prefix,
-                            chrono::Local::now().format("%Y%m%d_%H%M%S")
-                        );
-
-                        (self.save_fn)(&batch, &filename)
-                            .context(format!("Failed to save {} batch {}", self.file_prefix, batch_counter))?;
-
-                        batch.clear();
-                        batch_counter += 1;
-                    }
-                },
-                _ = shutdown_rx.changed() => {
-                    break;
-                }
+            if batch.len() >= self.batch_size {
+                self.flush_batch(&mut batch)?;
             }
         }
 
         if !batch.is_empty() {
-            let filename = format!(
-                "{}/{}_{}.parquet",
-                self.base_path,
-                self.file_prefix,
-                chrono::Local::now().format("%Y%m%d_%H%M%S")
-            );
-            
-            (self.save_fn)(&batch, &filename)
-                .context(format!("Failed to save final {} batch", self.file_prefix))?;
+            self.flush_batch(&mut batch)?;
         }
+
         Ok(())
+    }
+
+    fn bootstrap_retained_files(&mut self) -> Result<()> {
+        let mut files: Vec<PathBuf> = fs::read_dir(&self.base_path)
+            .with_context(|| format!("Failed to read directory {:?}", self.base_path))?
+            .filter_map(|entry| match entry {
+                Ok(entry) => {
+                    let path = entry.path();
+                    if self.is_managed_file(&path) {
+                        Some(path)
+                    } else {
+                        None
+                    }
+                }
+                Err(err) => {
+                    warn!("Failed to inspect file in persistence directory: {err}");
+                    None
+                }
+            })
+            .collect();
+
+        files.sort();
+        self.retained_files = files.into();
+
+        if self.max_files > 0 {
+            while self.retained_files.len() > self.max_files {
+                if let Some(path) = self.retained_files.pop_front() {
+                    if let Err(err) = fs::remove_file(&path) {
+                        warn!("Failed to remove overflow file {:?}: {err}", path);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn flush_batch(&mut self, batch: &mut Vec<T>) -> Result<()> {
+        if batch.is_empty() {
+            return Ok(());
+        }
+
+        let filename = self.next_file_path();
+        (self.save_fn)(batch, &filename).with_context(|| {
+            format!(
+                "Failed to persist {} batch to {:?}",
+                self.file_prefix, filename
+            )
+        })?;
+
+        self.retained_files.push_back(filename.clone());
+        if self.max_files > 0 {
+            while self.retained_files.len() > self.max_files {
+                if let Some(path) = self.retained_files.pop_front() {
+                    if let Err(err) = fs::remove_file(&path) {
+                        warn!("Failed to remove overflow file {:?}: {err}", path);
+                    }
+                }
+            }
+        }
+
+        batch.clear();
+        Ok(())
+    }
+
+    fn next_file_path(&self) -> PathBuf {
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S_%3f");
+        self.base_path
+            .join(format!("{}_{}.parquet", self.file_prefix, timestamp))
+    }
+
+    fn is_managed_file(&self, path: &Path) -> bool {
+        path.extension() == Some(OsStr::new("parquet"))
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.starts_with(&self.file_prefix))
+                .unwrap_or(false)
     }
 }
 
@@ -226,6 +305,8 @@ mod tests {
     use std::fs;
     use chrono::Utc;
     use rust_decimal_macros::dec;
+    use crossbeam::channel;
+    use std::thread;
 
     fn create_test_snapshot() -> FeaturesSnapshot {
         FeaturesSnapshot {
@@ -279,7 +360,7 @@ mod tests {
         let path = dir.path().join("test.parquet");
         
         let features = vec![create_test_snapshot()];
-        save_feature_as_parquet(&features, path.to_str().unwrap())?;
+        save_feature_as_parquet(&features, &path)?;
 
         assert!(path.exists());
         assert!(path.metadata()?.len() > 0);
@@ -296,7 +377,7 @@ mod tests {
             create_test_snapshot(),
             create_test_snapshot()
         ];
-        save_feature_as_parquet(&features, path.to_str().unwrap())?;
+        save_feature_as_parquet(&features, &path)?;
 
         // Verify we can read back the parquet
         let file = fs::File::open(path)?;
@@ -310,7 +391,7 @@ mod tests {
         let dir = tempdir()?;
         let path = dir.path().join("empty.parquet");
         
-        save_feature_as_parquet(&[], path.to_str().unwrap())?;
+        save_feature_as_parquet(&[], &path)?;
         
         // Empty parquet files are still valid
         assert!(path.exists());
@@ -322,7 +403,7 @@ mod tests {
         let dir = tempdir()?;
         let path = dir.path().join("newdir/test.parquet");
         
-        save_feature_as_parquet(&[create_test_snapshot()], path.to_str().unwrap())?;
+        save_feature_as_parquet(&[create_test_snapshot()], &path)?;
         
         assert!(path.exists());
         Ok(())
@@ -330,10 +411,8 @@ mod tests {
 
     #[test]
     fn test_invalid_path_handling() {
-        let result = save_feature_as_parquet(
-            &[create_test_snapshot()], 
-            "/invalid/path/test.parquet"
-        );
+        let result =
+            save_feature_as_parquet(&[create_test_snapshot()], "/invalid/path/test.parquet");
         assert!(result.is_err());
     }
 
@@ -343,7 +422,7 @@ mod tests {
         let path = dir.path().join("roundtrip.parquet");
         
         let original = create_test_snapshot();
-        save_feature_as_parquet(&[original.clone()], path.to_str().unwrap())?;
+        save_feature_as_parquet(&[original.clone()], &path)?;
 
         // Read back and verify values - UPDATED FOR POLARS COMPATIBILITY:
         let file = fs::File::open(path)?;
@@ -366,7 +445,7 @@ mod tests {
         let path = dir.path().join("complex.parquet");
         
         let features = vec![create_test_snapshot()];
-        save_feature_as_parquet(&features, path.to_str().unwrap())?;
+        save_feature_as_parquet(&features, &path)?;
 
         // Verify top_bids JSON serialization
         let file = fs::File::open(path)?;
@@ -375,6 +454,39 @@ mod tests {
         assert!(json_str.contains("100.50"));
         assert!(json_str.contains("10.0"));
         
+        Ok(())
+    }
+
+    #[test]
+    fn test_persistence_rotation() -> Result<()> {
+        let dir = tempdir()?;
+        let (tx, rx) = channel::bounded(4);
+
+        let engine = PersistenceEngine::new(
+            rx,
+            1,
+            dir.path().to_path_buf(),
+            "features",
+            2,
+            save_feature_as_parquet_path,
+        );
+
+        let handle = thread::spawn(move || engine.run().unwrap());
+
+        tx.send(create_test_snapshot())?;
+        tx.send(create_test_snapshot())?;
+        tx.send(create_test_snapshot())?;
+
+        drop(tx);
+        handle.join().expect("engine thread panicked");
+
+        let parquet_files: Vec<_> = fs::read_dir(dir.path())?
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.path().extension() == Some(OsStr::new("parquet")))
+            .collect();
+
+        assert_eq!(parquet_files.len(), 2);
+
         Ok(())
     }
 }
