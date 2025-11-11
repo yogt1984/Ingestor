@@ -10,6 +10,7 @@ use rust_decimal::prelude::ToPrimitive;
 use crate::entropy::EntropyMetrics;
 use std::path::{Path, PathBuf};
 use std::fs::{self, File};
+use std::io::Write;
 use std::collections::VecDeque;
 use std::ffi::OsStr;
 use crossbeam::channel::Receiver;
@@ -91,6 +92,20 @@ pub fn save_feature_as_parquet_path(features: &[FeaturesSnapshot], filepath: &Pa
     save_feature_as_parquet(features, filepath)
 }
 
+/// Write newline-delimited JSON for human readability
+fn write_jsonl<T: Serialize>(items: &[T], path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).context("Failed to create JSONL output directory")?;
+    }
+    let mut file = File::create(path).with_context(|| format!("Failed to create {:?}", path))?;
+    for item in items {
+        let line = serde_json::to_string(item).context("Failed to serialize item to JSON")?;
+        file.write_all(line.as_bytes()).context("Failed to write JSONL line")?;
+        file.write_all(b"\n").context("Failed to write newline")?;
+    }
+    Ok(())
+}
+
 
 fn decimal_to_f64(d: Option<rust_decimal::Decimal>) -> Option<f64> {
     d.and_then(|d| d.to_f64())
@@ -169,6 +184,7 @@ pub struct PersistenceEngine<T> {
     max_files: usize,
     save_fn: fn(&[T], &Path) -> Result<()>,
     retained_files: VecDeque<PathBuf>,
+    write_jsonl: bool,
 }
 
 impl<T> PersistenceEngine<T>
@@ -191,6 +207,9 @@ where
             max_files,
             save_fn,
             retained_files: VecDeque::new(),
+            write_jsonl: std::env::var("INGESTOR_WRITE_JSONL")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false),
         }
     }
 
@@ -264,6 +283,17 @@ where
                 self.file_prefix, filename
             )
         })?;
+
+        if self.write_jsonl {
+            let mut jsonl_path = filename.clone();
+            jsonl_path.set_extension("jsonl");
+            write_jsonl(batch, &jsonl_path).with_context(|| {
+                format!(
+                    "Failed to write JSONL alongside parquet at {:?}",
+                    jsonl_path
+                )
+            })?;
+        }
 
         self.retained_files.push_back(filename.clone());
         if self.max_files > 0 {
