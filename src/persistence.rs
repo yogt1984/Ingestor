@@ -71,6 +71,31 @@ pub fn save_feature_as_parquet(features: &[FeaturesSnapshot], filepath: impl AsR
         "aggr_ratio_50" => features.iter().map(|f| decimal_to_f64(f.aggr_ratio_50)).collect::<Vec<_>>(),
         "aggr_ratio_100" => features.iter().map(|f| decimal_to_f64(f.aggr_ratio_100)).collect::<Vec<_>>(),
         "aggr_ratio_1000" => features.iter().map(|f| decimal_to_f64(f.aggr_ratio_1000)).collect::<Vec<_>>(),
+        // Illiquidity metrics
+        "roll_spread" => features.iter().map(|f| decimal_to_f64(f.roll_spread)).collect::<Vec<_>>(),
+        "amihuds_lambda" => features.iter().map(|f| decimal_to_f64(f.amihuds_lambda)).collect::<Vec<_>>(),
+        "kyles_lambda" => features.iter().map(|f| decimal_to_f64(f.kyles_lambda)).collect::<Vec<_>>(),
+        "hasbroucks_lambda" => features.iter().map(|f| decimal_to_f64(f.hasbroucks_lambda)).collect::<Vec<_>>(),
+        "vpin" => features.iter().map(|f| decimal_to_f64(f.vpin)).collect::<Vec<_>>(),
+        // Entropy metrics - tick entropy
+        "tick_entropy_1s" => features.iter().map(|f| decimal_to_f64(f.tick_entropy_1s)).collect::<Vec<_>>(),
+        "tick_entropy_5s" => features.iter().map(|f| decimal_to_f64(f.tick_entropy_5s)).collect::<Vec<_>>(),
+        "tick_entropy_10s" => features.iter().map(|f| decimal_to_f64(f.tick_entropy_10s)).collect::<Vec<_>>(),
+        "tick_entropy_15s" => features.iter().map(|f| decimal_to_f64(f.tick_entropy_15s)).collect::<Vec<_>>(),
+        "tick_entropy_30s" => features.iter().map(|f| decimal_to_f64(f.tick_entropy_30s)).collect::<Vec<_>>(),
+        "tick_entropy_1m" => features.iter().map(|f| decimal_to_f64(f.tick_entropy_1m)).collect::<Vec<_>>(),
+        "tick_entropy_15m" => features.iter().map(|f| decimal_to_f64(f.tick_entropy_15m)).collect::<Vec<_>>(),
+        // Entropy metrics - volume tick entropy
+        "volume_tick_entropy_1s" => features.iter().map(|f| decimal_to_f64(f.volume_tick_entropy_1s)).collect::<Vec<_>>(),
+        "volume_tick_entropy_5s" => features.iter().map(|f| decimal_to_f64(f.volume_tick_entropy_5s)).collect::<Vec<_>>(),
+        "volume_tick_entropy_10s" => features.iter().map(|f| decimal_to_f64(f.volume_tick_entropy_10s)).collect::<Vec<_>>(),
+        "volume_tick_entropy_15s" => features.iter().map(|f| decimal_to_f64(f.volume_tick_entropy_15s)).collect::<Vec<_>>(),
+        "volume_tick_entropy_30s" => features.iter().map(|f| decimal_to_f64(f.volume_tick_entropy_30s)).collect::<Vec<_>>(),
+        "volume_tick_entropy_1m" => features.iter().map(|f| decimal_to_f64(f.volume_tick_entropy_1m)).collect::<Vec<_>>(),
+        "volume_tick_entropy_15m" => features.iter().map(|f| decimal_to_f64(f.volume_tick_entropy_15m)).collect::<Vec<_>>(),
+        // Complex vector fields (serialized as JSON)
+        "volume_vector" => features.iter().map(|f| serialize_complex(&f.volume_vector)).collect::<Vec<_>>(),
+        "pwi_vector" => features.iter().map(|f| serialize_complex(&f.pwi_vector)).collect::<Vec<_>>(),
     ].context("Failed to create DataFrame")?;
 
     // Create parent directories if they don't exist
