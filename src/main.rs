@@ -9,7 +9,7 @@ mod persistence;
 mod illiquidity;
 mod entropy;
 
-use crossbeam::channel;
+use crossbeam::channel; 
 use std::sync::Arc;
 use tokio::{spawn, sync::{watch, mpsc}, time::Duration};
 use crate::{
@@ -43,13 +43,13 @@ async fn main() {
     };
 
     let lob_manager    = LobFeedManager::new(
-        "wss://stream.binance.com:9443/ws/btcusdt@depth@100ms".to_string(),
-        "wss://stream.binance.com:9443/ws/btcusdt@depth".to_string(),
+        "wss://stream.binance.com:9443/ws/avaxusdt@depth@100ms".to_string(),
+        "wss://stream.binance.com:9443/ws/avaxusdt@depth".to_string(),
     );
     let order_book_arc = Arc::new(lob_manager.get_order_book());
 
     let log_manager = LogFeedManager::new(
-        "wss://stream.binance.com:9443/ws/btcusdt@trade".to_string(),
+        "wss://stream.binance.com:9443/ws/avaxusdt@trade".to_string(),
         10_000, 
     );
     let trades_log_arc = Arc::new(log_manager.get_trades_log());
