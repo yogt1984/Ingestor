@@ -117,6 +117,53 @@ pub fn save_feature_as_parquet_path(features: &[FeaturesSnapshot], filepath: &Pa
     save_feature_as_parquet(features, filepath)
 }
 
+/// Validates that all FeaturesSnapshot fields are present in the parquet file
+/// Returns a list of missing columns if any
+pub fn validate_parquet_schema(filepath: &Path) -> Result<Vec<String>> {
+    use std::fs::File;
+    
+    let file = File::open(filepath).context("Failed to open parquet file for validation")?;
+    let df = ParquetReader::new(file).finish().context("Failed to read parquet file")?;
+    
+    // Expected columns from FeaturesSnapshot (must match save_feature_as_parquet)
+    let expected_columns = vec![
+        "timestamp",
+        "best_bid", "best_ask", "mid_price", "microprice", "spread", "imbalance",
+        "top_bids", "top_asks",
+        "pwi_1", "pwi_5", "pwi_25", "pwi_50",
+        "bid_slope", "ask_slope",
+        "volume_imbalance_top5",
+        "bid_depth_ratio", "ask_depth_ratio",
+        "bid_volume_001", "ask_volume_001",
+        "bid_avg_distance", "ask_avg_distance",
+        "last_trade_price", "trade_imbalance", "vwap_total", "price_change", "avg_trade_size",
+        "signed_count_momentum", "trade_rate_10s",
+        "order_flow_imbalance", "order_flow_pressure", "order_flow_significance",
+        "vwap_10", "vwap_50", "vwap_100", "vwap_1000",
+        "aggr_ratio_10", "aggr_ratio_50", "aggr_ratio_100", "aggr_ratio_1000",
+        // Illiquidity metrics
+        "roll_spread", "amihuds_lambda", "kyles_lambda", "hasbroucks_lambda", "vpin",
+        // Entropy metrics - tick entropy
+        "tick_entropy_1s", "tick_entropy_5s", "tick_entropy_10s", "tick_entropy_15s",
+        "tick_entropy_30s", "tick_entropy_1m", "tick_entropy_15m",
+        // Entropy metrics - volume tick entropy
+        "volume_tick_entropy_1s", "volume_tick_entropy_5s", "volume_tick_entropy_10s",
+        "volume_tick_entropy_15s", "volume_tick_entropy_30s", "volume_tick_entropy_1m",
+        "volume_tick_entropy_15m",
+        // Complex vector fields
+        "volume_vector", "pwi_vector",
+    ];
+    
+    let actual_columns: Vec<String> = df.get_column_names().iter().map(|s| s.to_string()).collect();
+    let missing: Vec<String> = expected_columns
+        .iter()
+        .filter(|col| !actual_columns.iter().any(|ac| ac == *col))
+        .map(|s| s.to_string())
+        .collect();
+    
+    Ok(missing)
+}
+
 /// Write newline-delimited JSON for human readability
 fn write_jsonl<T: Serialize>(items: &[T], path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
@@ -374,7 +421,6 @@ mod tests {
             imbalance: Some(dec!(0.33)),
             top_bids: vec![(dec!(100.50), dec!(10.0)), (dec!(100.25), dec!(15.0))],
             top_asks: vec![(dec!(101.00), dec!(8.0)), (dec!(101.25), dec!(12.0))],
-            // ... populate all other fields with test values ...
             pwi_1: Some(dec!(100.10)),
             pwi_5: Some(dec!(100.20)),
             pwi_25: Some(dec!(100.30)),
@@ -406,6 +452,31 @@ mod tests {
             aggr_ratio_50: Some(dec!(0.55)),
             aggr_ratio_100: Some(dec!(0.52)),
             aggr_ratio_1000: Some(dec!(0.50)),
+            // Illiquidity metrics
+            roll_spread: Some(dec!(0.0001)),
+            amihuds_lambda: Some(dec!(0.00005)),
+            kyles_lambda: Some(dec!(0.5)),
+            hasbroucks_lambda: Some(dec!(0.3)),
+            vpin: Some(dec!(0.25)),
+            // Entropy metrics - tick entropy
+            tick_entropy_1s: Some(dec!(1.2)),
+            tick_entropy_5s: Some(dec!(1.5)),
+            tick_entropy_10s: Some(dec!(1.8)),
+            tick_entropy_15s: Some(dec!(2.0)),
+            tick_entropy_30s: Some(dec!(2.2)),
+            tick_entropy_1m: Some(dec!(2.5)),
+            tick_entropy_15m: Some(dec!(3.0)),
+            // Entropy metrics - volume tick entropy
+            volume_tick_entropy_1s: Some(dec!(1.1)),
+            volume_tick_entropy_5s: Some(dec!(1.4)),
+            volume_tick_entropy_10s: Some(dec!(1.7)),
+            volume_tick_entropy_15s: Some(dec!(1.9)),
+            volume_tick_entropy_30s: Some(dec!(2.1)),
+            volume_tick_entropy_1m: Some(dec!(2.4)),
+            volume_tick_entropy_15m: Some(dec!(2.9)),
+            // Complex vector fields
+            volume_vector: vec![(dec!(0.01), (dec!(100.0), dec!(50.0)))],
+            pwi_vector: vec![(dec!(0.01), dec!(100.5))],
         }
     }
 
@@ -541,6 +612,51 @@ mod tests {
             .collect();
 
         assert_eq!(parquet_files.len(), 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_all_features_persisted() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("all_features.parquet");
+        
+        let snapshot = create_test_snapshot();
+        save_feature_as_parquet(&[snapshot], &path)?;
+
+        // Validate that all expected columns are present
+        let missing = validate_parquet_schema(&path)?;
+        assert!(missing.is_empty(), "Missing columns in parquet file: {:?}", missing);
+
+        // Verify we can read back all columns
+        let file = fs::File::open(&path)?;
+        let df = ParquetReader::new(file).finish()?;
+        
+        // Check that all entropy fields are present and readable
+        let entropy_columns = vec![
+            "tick_entropy_1s", "tick_entropy_5s", "tick_entropy_10s", "tick_entropy_15s",
+            "tick_entropy_30s", "tick_entropy_1m", "tick_entropy_15m",
+            "volume_tick_entropy_1s", "volume_tick_entropy_5s", "volume_tick_entropy_10s",
+            "volume_tick_entropy_15s", "volume_tick_entropy_30s", "volume_tick_entropy_1m",
+            "volume_tick_entropy_15m",
+        ];
+        
+        for col_name in &entropy_columns {
+            assert!(df.column(col_name).is_ok(), "Missing entropy column: {}", col_name);
+        }
+
+        // Check that all illiquidity fields are present
+        let illiquidity_columns = vec![
+            "roll_spread", "amihuds_lambda", "kyles_lambda", "hasbroucks_lambda", "vpin",
+        ];
+        
+        for col_name in &illiquidity_columns {
+            assert!(df.column(col_name).is_ok(), "Missing illiquidity column: {}", col_name);
+        }
+
+        // Check complex vector fields
+        assert!(df.column("volume_vector").is_ok(), "Missing volume_vector column");
+        assert!(df.column("pwi_vector").is_ok(), "Missing pwi_vector column");
 
         Ok(())
     }
