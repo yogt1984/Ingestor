@@ -25,4 +25,6 @@ rust_decimal = { version = "1.30", features = ["maths"] }  # <-- Keep this one (
 rust_decimal_macros = "1.29"  # <-- Optional, but keep if needed
 polars = { version = "0.33.2", features = ["parquet", "lazy", "json"] }
 num = "0.4"
-tempfile = "3.3.0"  
+tempfile = "3.3.0"
+ratatui = "0.26"
+crossterm = "0.28"  

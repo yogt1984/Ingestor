@@ -8,6 +8,7 @@ mod feature_fusion;
 mod persistence;
 mod illiquidity;
 mod entropy;
+mod tui;
 
 use crossbeam::channel; 
 use std::sync::Arc;
@@ -36,6 +37,7 @@ async fn main() {
     let (entropy_tx,     entropy_rx)      = mpsc::channel::<EntropyMetrics>(100);
     let (fused_tx,       fused_rx)        = mpsc::channel::<FeaturesSnapshot>(100);
     let (persist_tx,     persist_rx)      = channel::bounded::<FeaturesSnapshot>(2048);
+    let (tui_tx,         tui_rx)          = channel::bounded::<FeaturesSnapshot>(100);
 
     let ctrl_c = async {
         tokio::signal::ctrl_c().await.unwrap();
@@ -43,13 +45,13 @@ async fn main() {
     };
 
     let lob_manager    = LobFeedManager::new(
-        "wss://stream.binance.com:9443/ws/avaxusdt@depth@100ms".to_string(),
-        "wss://stream.binance.com:9443/ws/avaxusdt@depth".to_string(),
+        "wss://stream.binance.com:9443/ws/btcusdt@depth@100ms".to_string(),
+        "wss://stream.binance.com:9443/ws/btcusdt@depth".to_string(),
     );
     let order_book_arc = Arc::new(lob_manager.get_order_book());
 
     let log_manager = LogFeedManager::new(
-        "wss://stream.binance.com:9443/ws/avaxusdt@trade".to_string(),
+        "wss://stream.binance.com:9443/ws/btcusdt@trade".to_string(),
         10_000, 
     );
     let trades_log_arc = Arc::new(log_manager.get_trades_log());
@@ -83,6 +85,8 @@ async fn main() {
     let feature_fusion_engine = FeatureFusionEngine::new(
         order_book_arc.clone(),
         trades_log_arc.clone(),
+        orderbook_rx,
+        tradeslog_rx,
         illiq_rx,
         entropy_rx,
         fused_tx,
@@ -148,13 +152,27 @@ async fn main() {
 
     let persistence_handle = tokio::task::spawn_blocking(move || persistence_engine.run());
 
+    // Spawn TUI in a blocking thread
+    let tui_handle = {
+        let tui_rx = tui_rx.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = tui::run_tui(tui_rx) {
+                eprintln!("TUI error: {e:?}");
+            }
+        })
+    };
+
     let forward_handle = {
         let mut fused_rx = fused_rx;
+        let tui_tx = tui_tx.clone();
         tokio::spawn(async move {
             loop {
                 match fused_rx.recv().await {
                     Some(snapshot) => {
-                        // Non-blocking bridge with backoff if channel is full
+                        // Send to TUI (non-blocking, drop if full)
+                        let _ = tui_tx.try_send(snapshot.clone());
+                        
+                        // Non-blocking bridge to persistence with backoff if channel is full
                         let mut snapshot_opt = Some(snapshot);
                         while let Some(s) = snapshot_opt.take() {
                             match persist_tx.try_send(s) {
@@ -190,4 +208,7 @@ async fn main() {
         },
         _ = entropy_handle             => eprintln!("Entropy engine crashed"),
     }
+
+    // TUI will exit when user presses 'q', but we need to wait for it
+    let _ = tui_handle.join();
 }

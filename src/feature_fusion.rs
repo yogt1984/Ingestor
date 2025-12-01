@@ -6,8 +6,8 @@ use rust_decimal_macros::dec;
 use serde::Serialize;
 use chrono::Utc;
 use crate::{
-    orderbook::ConcurrentOrderBook,
-    tradeslog::ConcurrentTradesLog,
+    orderbook::{ConcurrentOrderBook, OrderBookFeatures},
+    tradeslog::{ConcurrentTradesLog, TradesLogFeatures},
     illiquidity::IlliquidityMetrics,
     entropy::EntropyMetrics,
 };
@@ -82,6 +82,8 @@ pub struct FeaturesSnapshot {
 pub struct FeatureFusionEngine {
     order_book:     Arc<ConcurrentOrderBook>,
     trades_log:     Arc<ConcurrentTradesLog>,
+    orderbook_rx:   mpsc::Receiver<OrderBookFeatures>,
+    tradeslog_rx:   mpsc::Receiver<TradesLogFeatures>,
     illiquidity_rx: mpsc::Receiver<IlliquidityMetrics>,
     entropy_rx:     mpsc::Receiver<EntropyMetrics>,
     fused_tx:       mpsc::Sender<FeaturesSnapshot>,
@@ -91,6 +93,8 @@ impl FeatureFusionEngine {
     pub fn new(
         order_book: Arc<ConcurrentOrderBook>,
         trades_log: Arc<ConcurrentTradesLog>,
+        orderbook_rx: mpsc::Receiver<OrderBookFeatures>,
+        tradeslog_rx: mpsc::Receiver<TradesLogFeatures>,
         illiquidity_rx: mpsc::Receiver<IlliquidityMetrics>,
         entropy_rx: mpsc::Receiver<EntropyMetrics>,
         fused_tx: mpsc::Sender<FeaturesSnapshot>,
@@ -98,6 +102,8 @@ impl FeatureFusionEngine {
         Self {
             order_book,
             trades_log,
+            orderbook_rx,
+            tradeslog_rx,
             illiquidity_rx,
             entropy_rx,
             fused_tx,
@@ -110,121 +116,19 @@ impl FeatureFusionEngine {
     ) {
         const SIGNIFICANCE_THRESHOLD: Decimal = dec!(10.0);
 
-        let mut interval = interval(Duration::from_millis(SNAPSHOT_INTERVAL_MS));
-
+        let mut latest_orderbook: Option<OrderBookFeatures> = None;
+        let mut latest_tradeslog: Option<TradesLogFeatures> = None;
         let mut latest_illiquidity: Option<IlliquidityMetrics> = None;
         let mut latest_entropy: Option<EntropyMetrics> = None;
 
         loop {
             tokio::select! {
-                _ = interval.tick() => {
-                    let (ob_snap, trade_snap) = tokio::join!(
-                        self.order_book.get_snapshot(),
-                        self.trades_log.get_snapshot()
-                    );
+                Some(ob_features) = self.orderbook_rx.recv() => {
+                    latest_orderbook = Some(ob_features);
+                },
 
-                    let (flow_imbalance, flow_pressure) = self.order_book.get_flow_imbalance().await;
-
-                    let (volume_vector, pwi_vector) = tokio::join!(
-                        self.order_book.volume_vector(),
-                        self.order_book.pwi_vector()
-                    );
-
-                    let illiquidity_metrics = latest_illiquidity.clone().unwrap_or(IlliquidityMetrics {
-                        timestamp: Utc::now().to_rfc3339(),
-                        roll_spread: None,
-                        amihuds_lambda: None,
-                        kyles_lambda: None,
-                        hasbroucks_lambda: None,
-                        vpin: None,
-                    });
-
-                    let entropy_metrics = latest_entropy.clone().unwrap_or(EntropyMetrics {
-                        timestamp: Utc::now().to_rfc3339(),
-                        tick_entropy_1s: None,
-                        tick_entropy_5s: None,
-                        tick_entropy_10s: None,
-                        tick_entropy_15s: None,
-                        tick_entropy_30s: None,
-                        tick_entropy_1m: None,
-                        tick_entropy_15m: None,
-                        volume_tick_entropy_1s: None,
-                        volume_tick_entropy_5s: None,
-                        volume_tick_entropy_10s: None,
-                        volume_tick_entropy_15s: None,
-                        volume_tick_entropy_30s: None,
-                        volume_tick_entropy_1m: None,
-                        volume_tick_entropy_15m: None,
-                    });
-
-                    let snapshot = FeaturesSnapshot {
-                        timestamp: Utc::now().to_rfc3339(),
-                        best_bid: ob_snap.best_bid.map(|(p, _)| p),
-                        best_ask: ob_snap.best_ask.map(|(p, _)| p),
-                        mid_price: ob_snap.mid_price,
-                        microprice: ob_snap.microprice,
-                        spread: ob_snap.spread,
-                        imbalance: ob_snap.imbalance,
-                        top_bids: ob_snap.top_bids,
-                        top_asks: ob_snap.top_asks,
-                        pwi_1: ob_snap.pwi_1,
-                        pwi_5: ob_snap.pwi_5,
-                        pwi_25: ob_snap.pwi_25,
-                        pwi_50: ob_snap.pwi_50,
-                        bid_slope: ob_snap.bid_slope,
-                        ask_slope: ob_snap.ask_slope,
-                        volume_imbalance_top5: ob_snap.volume_imbalance_top5,
-                        bid_depth_ratio: ob_snap.bid_depth_ratio,
-                        ask_depth_ratio: ob_snap.ask_depth_ratio,
-                        bid_volume_001: ob_snap.bid_volume_001,
-                        ask_volume_001: ob_snap.ask_volume_001,
-                        bid_avg_distance: ob_snap.bid_avg_distance,
-                        ask_avg_distance: ob_snap.ask_avg_distance,
-                        last_trade_price: trade_snap.last_price,
-                        vwap_10: trade_snap.vwap_10,
-                        vwap_50: trade_snap.vwap_50,
-                        vwap_100: trade_snap.vwap_100,
-                        vwap_1000: trade_snap.vwap_1000,
-                        aggr_ratio_10: trade_snap.aggr_ratio_10,
-                        aggr_ratio_50: trade_snap.aggr_ratio_50,
-                        aggr_ratio_100: trade_snap.aggr_ratio_100,
-                        aggr_ratio_1000: trade_snap.aggr_ratio_1000,
-                        trade_imbalance: trade_snap.trade_imbalance,
-                        vwap_total: trade_snap.vwap_total,
-                        price_change: trade_snap.price_change,
-                        avg_trade_size: trade_snap.avg_trade_size,
-                        signed_count_momentum: trade_snap.signed_count_momentum,
-                        trade_rate_10s: trade_snap.trade_rate_10s,
-                        order_flow_imbalance: flow_imbalance,
-                        order_flow_pressure: flow_pressure,
-                        order_flow_significance: flow_pressure >= SIGNIFICANCE_THRESHOLD,
-                        volume_vector,
-                        pwi_vector,
-                        roll_spread: illiquidity_metrics.roll_spread,
-                        amihuds_lambda: illiquidity_metrics.amihuds_lambda,
-                        kyles_lambda: illiquidity_metrics.kyles_lambda,
-                        hasbroucks_lambda: illiquidity_metrics.hasbroucks_lambda,
-                        vpin: illiquidity_metrics.vpin,
-                        tick_entropy_1s: entropy_metrics.tick_entropy_1s,
-                        tick_entropy_5s: entropy_metrics.tick_entropy_5s,
-                        tick_entropy_10s: entropy_metrics.tick_entropy_10s,
-                        tick_entropy_15s: entropy_metrics.tick_entropy_15s,
-                        tick_entropy_30s: entropy_metrics.tick_entropy_30s,
-                        tick_entropy_1m: entropy_metrics.tick_entropy_1m,
-                        tick_entropy_15m: entropy_metrics.tick_entropy_15m,
-                        volume_tick_entropy_1s: entropy_metrics.volume_tick_entropy_1s,
-                        volume_tick_entropy_5s: entropy_metrics.volume_tick_entropy_5s,
-                        volume_tick_entropy_10s: entropy_metrics.volume_tick_entropy_10s,
-                        volume_tick_entropy_15s: entropy_metrics.volume_tick_entropy_15s,
-                        volume_tick_entropy_30s: entropy_metrics.volume_tick_entropy_30s,
-                        volume_tick_entropy_1m: entropy_metrics.volume_tick_entropy_1m,
-                        volume_tick_entropy_15m: entropy_metrics.volume_tick_entropy_15m,
-                    };
-
-                    print_snapshot(&snapshot);
-                    if let Err(e) = self.fused_tx.send(snapshot).await {
-                        eprintln!("Failed to send fused features: {}", e);
-                    }
+                Some(trade_features) = self.tradeslog_rx.recv() => {
+                    latest_tradeslog = Some(trade_features);
                 },
 
                 Some(metrics) = self.illiquidity_rx.recv() => {
@@ -239,11 +143,119 @@ impl FeatureFusionEngine {
                     println!("Analytics task shutting down...");
                     break;
                 }
-            } // end tokio::select!
+            }
+
+            // Create snapshot whenever we have orderbook and tradeslog data
+            if let (Some(ref ob_snap), Some(ref trade_snap)) = (&latest_orderbook, &latest_tradeslog) {
+                let (flow_imbalance, flow_pressure) = self.order_book.get_flow_imbalance().await;
+
+                let (volume_vector, pwi_vector) = tokio::join!(
+                    self.order_book.volume_vector(),
+                    self.order_book.pwi_vector()
+                );
+
+                let illiquidity_metrics = latest_illiquidity.clone().unwrap_or(IlliquidityMetrics {
+                    timestamp: Utc::now().to_rfc3339(),
+                    roll_spread: None,
+                    amihuds_lambda: None,
+                    kyles_lambda: None,
+                    hasbroucks_lambda: None,
+                    vpin: None,
+                });
+
+                let entropy_metrics = latest_entropy.clone().unwrap_or(EntropyMetrics {
+                    timestamp: Utc::now().to_rfc3339(),
+                    tick_entropy_1s: None,
+                    tick_entropy_5s: None,
+                    tick_entropy_10s: None,
+                    tick_entropy_15s: None,
+                    tick_entropy_30s: None,
+                    tick_entropy_1m: None,
+                    tick_entropy_15m: None,
+                    volume_tick_entropy_1s: None,
+                    volume_tick_entropy_5s: None,
+                    volume_tick_entropy_10s: None,
+                    volume_tick_entropy_15s: None,
+                    volume_tick_entropy_30s: None,
+                    volume_tick_entropy_1m: None,
+                    volume_tick_entropy_15m: None,
+                });
+
+                let snapshot = FeaturesSnapshot {
+                    timestamp: Utc::now().to_rfc3339(),
+                    best_bid: ob_snap.best_bid.map(|(p, _)| p),
+                    best_ask: ob_snap.best_ask.map(|(p, _)| p),
+                    mid_price: ob_snap.mid_price,
+                    microprice: ob_snap.microprice,
+                    spread: ob_snap.spread,
+                    imbalance: ob_snap.imbalance,
+                    top_bids: ob_snap.top_bids.clone(),
+                    top_asks: ob_snap.top_asks.clone(),
+                    pwi_1: ob_snap.pwi_1,
+                    pwi_5: ob_snap.pwi_5,
+                    pwi_25: ob_snap.pwi_25,
+                    pwi_50: ob_snap.pwi_50,
+                    bid_slope: ob_snap.bid_slope,
+                    ask_slope: ob_snap.ask_slope,
+                    volume_imbalance_top5: ob_snap.volume_imbalance_top5,
+                    bid_depth_ratio: ob_snap.bid_depth_ratio,
+                    ask_depth_ratio: ob_snap.ask_depth_ratio,
+                    bid_volume_001: ob_snap.bid_volume_001,
+                    ask_volume_001: ob_snap.ask_volume_001,
+                    bid_avg_distance: ob_snap.bid_avg_distance,
+                    ask_avg_distance: ob_snap.ask_avg_distance,
+                    last_trade_price: trade_snap.last_price,
+                    vwap_10: trade_snap.vwap_10,
+                    vwap_50: trade_snap.vwap_50,
+                    vwap_100: trade_snap.vwap_100,
+                    vwap_1000: trade_snap.vwap_1000,
+                    aggr_ratio_10: trade_snap.aggr_ratio_10,
+                    aggr_ratio_50: trade_snap.aggr_ratio_50,
+                    aggr_ratio_100: trade_snap.aggr_ratio_100,
+                    aggr_ratio_1000: trade_snap.aggr_ratio_1000,
+                    trade_imbalance: trade_snap.trade_imbalance,
+                    vwap_total: trade_snap.vwap_total,
+                    price_change: trade_snap.price_change,
+                    avg_trade_size: trade_snap.avg_trade_size,
+                    signed_count_momentum: trade_snap.signed_count_momentum,
+                    trade_rate_10s: trade_snap.trade_rate_10s,
+                    order_flow_imbalance: flow_imbalance,
+                    order_flow_pressure: flow_pressure,
+                    order_flow_significance: flow_pressure >= SIGNIFICANCE_THRESHOLD,
+                    volume_vector,
+                    pwi_vector,
+                    roll_spread: illiquidity_metrics.roll_spread,
+                    amihuds_lambda: illiquidity_metrics.amihuds_lambda,
+                    kyles_lambda: illiquidity_metrics.kyles_lambda,
+                    hasbroucks_lambda: illiquidity_metrics.hasbroucks_lambda,
+                    vpin: illiquidity_metrics.vpin,
+                    tick_entropy_1s: entropy_metrics.tick_entropy_1s,
+                    tick_entropy_5s: entropy_metrics.tick_entropy_5s,
+                    tick_entropy_10s: entropy_metrics.tick_entropy_10s,
+                    tick_entropy_15s: entropy_metrics.tick_entropy_15s,
+                    tick_entropy_30s: entropy_metrics.tick_entropy_30s,
+                    tick_entropy_1m: entropy_metrics.tick_entropy_1m,
+                    tick_entropy_15m: entropy_metrics.tick_entropy_15m,
+                    volume_tick_entropy_1s: entropy_metrics.volume_tick_entropy_1s,
+                    volume_tick_entropy_5s: entropy_metrics.volume_tick_entropy_5s,
+                    volume_tick_entropy_10s: entropy_metrics.volume_tick_entropy_10s,
+                    volume_tick_entropy_15s: entropy_metrics.volume_tick_entropy_15s,
+                    volume_tick_entropy_30s: entropy_metrics.volume_tick_entropy_30s,
+                    volume_tick_entropy_1m: entropy_metrics.volume_tick_entropy_1m,
+                    volume_tick_entropy_15m: entropy_metrics.volume_tick_entropy_15m,
+                };
+
+                // Send snapshot whenever we have new data
+                if let Err(e) = self.fused_tx.send(snapshot).await {
+                    eprintln!("Failed to send fused features: {}", e);
+                    break;
+                }
+            }
         } // end loop
     } // end run
 }
 
+#[allow(dead_code)]
 fn print_snapshot(snapshot: &FeaturesSnapshot) {
     println!(
         r#"
@@ -347,11 +359,13 @@ mod tests {
         let order_book = Arc::new(ConcurrentOrderBook::new());
         let trades_log = Arc::new(ConcurrentTradesLog::new(10));
 
+        let (_ob_tx, ob_rx) = mpsc::channel(10);
+        let (_tl_tx, tl_rx) = mpsc::channel(10);
         let (_ill_tx, ill_rx) = mpsc::channel(10);
         let (_ent_tx, ent_rx) = mpsc::channel(10);
 
         let (_feat_tx, _feat_rx) = mpsc::channel(10);
-        let fusion = FeatureFusionEngine::new(order_book, trades_log.clone(), ill_rx, ent_rx, _feat_tx);
+        let fusion = FeatureFusionEngine::new(order_book, trades_log.clone(), ob_rx, tl_rx, ill_rx, ent_rx, _feat_tx);
         let task = tokio::spawn(async move {
             fusion.run(shutdown_rx).await;
         });
@@ -374,12 +388,14 @@ mod tests {
         }).await;
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (_ob_tx, ob_rx)          = mpsc::channel(10);
+        let (_tl_tx, tl_rx)          = mpsc::channel(10);
         let (_ill_tx, ill_rx)          = mpsc::channel(10);
         let (_ent_tx, ent_rx)          = mpsc::channel(10);
         let (_feat_tx, feat_rx)        = mpsc::channel(10);
         drop(feat_rx);
 
-        let fusion = FeatureFusionEngine::new(order_book, trades_log.clone(), ill_rx, ent_rx, _feat_tx);
+        let fusion = FeatureFusionEngine::new(order_book, trades_log.clone(), ob_rx, tl_rx, ill_rx, ent_rx, _feat_tx);
 
         let task   = tokio::spawn(async move {
             fusion.run(shutdown_rx).await;
@@ -393,3 +409,4 @@ mod tests {
         assert_eq!(snapshot.last_price, Some(dec!(100.0)));
     }
 }
+
