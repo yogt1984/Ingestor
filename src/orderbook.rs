@@ -691,7 +691,7 @@ mod tests {
 
     #[test]
     fn test_flow_tracker_pruning() {
-        let mut tracker = RollingFlowTracker::new(1); // 1-second window
+        let mut tracker = RollingFlowTracker::new(Some(1)); // 1-second window
         tracker.add_event(OrderFlowEvent::BidOrder(dec!(1.0)));
         thread::sleep(Duration::from_millis(500));
         tracker.add_event(OrderFlowEvent::AskOrder(dec!(2.0)));
@@ -704,7 +704,7 @@ mod tests {
 
     #[test]
     fn test_imbalance_calculation() {
-        let mut tracker = RollingFlowTracker::new(10);
+        let mut tracker = RollingFlowTracker::new(Some(10));
         // Add events with decaying weights
         tracker.add_event(OrderFlowEvent::BidOrder(dec!(10.0))); // Full weight
         thread::sleep(Duration::from_millis(100));
@@ -717,7 +717,7 @@ mod tests {
 
     #[test]
     fn test_cancel_penalty() {
-        let mut tracker = RollingFlowTracker::new(10);
+        let mut tracker = RollingFlowTracker::new(Some(10));
         
         // Add initial bid
         tracker.add_event(OrderFlowEvent::BidOrder(dec!(10.0)));

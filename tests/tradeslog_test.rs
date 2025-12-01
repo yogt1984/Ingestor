@@ -12,6 +12,7 @@ async fn test_concurrent_inserts() {
     let log1 = log.clone();
     tokio::spawn(async move {
         log1.insert_trade(Trade {
+            id: 0,
             price: dec!(100),
             quantity: dec!(1),
             timestamp: 1000,
@@ -22,6 +23,7 @@ async fn test_concurrent_inserts() {
     let log2 = log.clone();
     tokio::spawn(async move {
         log2.insert_trade(Trade {
+            id: 0,
             price: dec!(101),
             quantity: dec!(2),
             timestamp: 2000,
@@ -57,6 +59,7 @@ async fn test_vwap_concurrent() {
         let log_clone = log.clone();
         tokio::spawn(async move {
             log_clone.insert_trade(Trade {
+                id: 0,
                 price,
                 quantity: dec!(1),
                 timestamp: i * 1000,
@@ -79,6 +82,7 @@ async fn test_snapshot_concurrent() {
     let barrier = Arc::new(Barrier::new(2)); 
 
     log.insert_trade(Trade {
+        id: 0,
         price: dec!(100),
         quantity: dec!(1),
         timestamp: 1000,
@@ -100,6 +104,7 @@ async fn test_snapshot_concurrent() {
 
     // Insert second trade (guaranteed to happen AFTER snapshot starts)
     log.insert_trade(Trade {
+        id: 0,
         price: dec!(101),
         quantity: dec!(2),
         timestamp: 2000,
@@ -129,6 +134,7 @@ async fn test_aggressor_ratio_concurrent() {
         let log_clone = log.clone();
         tokio::spawn(async move {
             log_clone.insert_trade(Trade {
+                id: 0,
                 price,
                 quantity: qty,
                 timestamp: i * 1000,
@@ -160,6 +166,7 @@ async fn test_zero_volume_trades() {
     let log = ConcurrentTradesLog::new(10);
     
     log.insert_trade(Trade {
+        id: 0,
         price: dec!(100),
         quantity: dec!(0),
         timestamp: 1000,

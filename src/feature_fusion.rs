@@ -350,7 +350,8 @@ mod tests {
         let (_ill_tx, ill_rx) = mpsc::channel(10);
         let (_ent_tx, ent_rx) = mpsc::channel(10);
 
-        let fusion = FeatureFusion::new(order_book, trades_log, ill_rx, ent_rx);
+        let (_feat_tx, _feat_rx) = mpsc::channel(10);
+        let fusion = FeatureFusionEngine::new(order_book, trades_log.clone(), ill_rx, ent_rx, _feat_tx);
         let task = tokio::spawn(async move {
             fusion.run(shutdown_rx).await;
         });
@@ -365,6 +366,7 @@ mod tests {
         let trades_log = Arc::new(ConcurrentTradesLog::new(100));
 
         trades_log.insert_trade(Trade {
+            id: 0,
             price: dec!(100.0),
             quantity: dec!(1.0),
             timestamp: Utc::now().timestamp_millis() as u64,

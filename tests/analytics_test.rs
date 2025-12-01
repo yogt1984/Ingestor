@@ -15,6 +15,7 @@ async fn test_full_analytics_pipeline() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     trades_log.insert_trade(Trade {
+        id: 0, // Auto-assigned
         price: dec!(100.50),
         quantity: dec!(2.0),
         timestamp: 1000,

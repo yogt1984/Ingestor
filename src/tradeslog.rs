@@ -426,6 +426,7 @@ mod tests {
 
     fn create_test_trade(price: Decimal, quantity: Decimal, is_buyer_maker: bool) -> Trade {
         Trade {
+            id: 0, // Auto-assigned
             price,
             quantity,
             timestamp: 0,
@@ -510,18 +511,21 @@ mod tests {
         // Add trades with timestamps
         let now = 100_000; // ms
         log.insert_trade(Trade {
+            id: 0,
             price: dec!(100),
             quantity: dec!(1),
             timestamp: now - 5000,
             is_buyer_maker: false,
         });
         log.insert_trade(Trade {
+            id: 0,
             price: dec!(101),
             quantity: dec!(2),
             timestamp: now - 3000,
             is_buyer_maker: true,
         });
         log.insert_trade(Trade {
+            id: 0,
             price: dec!(102),
             quantity: dec!(3),
             timestamp: now,
