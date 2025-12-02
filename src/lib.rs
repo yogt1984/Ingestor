@@ -8,3 +8,4 @@ pub mod volatility;
 pub mod toxicity;
 pub mod market_maker;
 pub mod mm_simulator;
+pub mod backtest;
