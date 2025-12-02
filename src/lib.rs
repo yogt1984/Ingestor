@@ -6,3 +6,5 @@ pub mod illiquidity;
 pub mod entropy;
 pub mod volatility;
 pub mod toxicity;
+pub mod market_maker;
+pub mod mm_simulator;

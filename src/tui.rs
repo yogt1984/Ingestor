@@ -22,6 +22,8 @@ use ratatui::{
 };
 
 use crate::feature_fusion::FeaturesSnapshot;
+use crate::market_maker::{MarketMakerEngine, MMConfig, MarketRegime};
+use crate::mm_simulator::{PaperTradingEngine, SimulatorConfig};
 
 type Term = Terminal<CrosstermBackend<io::Stdout>>;
 
@@ -33,7 +35,22 @@ const UPDATE_INTERVAL_MS: u64 = 1000; // 1Hz update rate
 enum AppMode {
     Menu,
     Live,
+    LiveMM,  // Live with Market Maker
     Features,
+}
+
+/// Settings for the application
+#[derive(Clone)]
+pub struct TuiSettings {
+    pub persist_features: bool,
+}
+
+impl Default for TuiSettings {
+    fn default() -> Self {
+        Self {
+            persist_features: true, // Default to persisting
+        }
+    }
 }
 
 /// Full feature accumulator for 1-second averaging
@@ -424,7 +441,8 @@ fn get_feature_descriptions() -> Vec<(&'static str, &'static str, &'static str)>
 }
 
 /// Run the TUI with menu system
-pub fn run_tui(rx: Receiver<FeaturesSnapshot>, symbol: String) -> anyhow::Result<()> {
+/// Returns the settings chosen by the user (including persistence option)
+pub fn run_tui(rx: Receiver<FeaturesSnapshot>, symbol: String) -> anyhow::Result<TuiSettings> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -432,7 +450,8 @@ pub fn run_tui(rx: Receiver<FeaturesSnapshot>, symbol: String) -> anyhow::Result
     let mut terminal = Term::new(backend)?;
     terminal.clear()?;
 
-    let res = main_loop(&mut terminal, rx, symbol);
+    let settings = TuiSettings::default();
+    let res = main_loop(&mut terminal, rx, symbol, settings);
 
     disable_raw_mode()?;
     execute!(
@@ -445,19 +464,33 @@ pub fn run_tui(rx: Receiver<FeaturesSnapshot>, symbol: String) -> anyhow::Result
     res
 }
 
-fn main_loop(terminal: &mut Term, rx: Receiver<FeaturesSnapshot>, symbol: String) -> anyhow::Result<()> {
+fn main_loop(
+    terminal: &mut Term,
+    rx: Receiver<FeaturesSnapshot>,
+    symbol: String,
+    mut settings: TuiSettings,
+) -> anyhow::Result<TuiSettings> {
     let mut mode = AppMode::Menu;
     let mut scroll_offset: u16 = 0;
     let mut last_update = Instant::now();
     let mut accumulator = FeatureAccumulator::default();
     let mut current_features = AveragedFeatures::default();
     let mut has_data = false;
+    let mut last_snapshot: Option<FeaturesSnapshot> = None;
 
     // History for sparklines
     let mut microprice_hist: VecDeque<f64> = VecDeque::with_capacity(MAX_HISTORY);
     let mut pwi50_hist: VecDeque<f64> = VecDeque::with_capacity(MAX_HISTORY);
     let mut entropy_hist: VecDeque<f64> = VecDeque::with_capacity(MAX_HISTORY);
     let mut volatility_hist: VecDeque<f64> = VecDeque::with_capacity(MAX_HISTORY);
+
+    // Market maker state
+    let mm_config = MMConfig::default();
+    let sim_config = SimulatorConfig::default();
+    let mut paper_trading = PaperTradingEngine::new(
+        MarketMakerEngine::new(mm_config),
+        sim_config,
+    );
 
     loop {
         // Handle input
@@ -466,15 +499,27 @@ fn main_loop(terminal: &mut Term, rx: Receiver<FeaturesSnapshot>, symbol: String
                 match mode {
                     AppMode::Menu => match key.code {
                         KeyCode::Char('0') => mode = AppMode::Live,
-                        KeyCode::Char('1') => {
+                        KeyCode::Char('1') => mode = AppMode::LiveMM,
+                        KeyCode::Char('2') => {
                             mode = AppMode::Features;
                             scroll_offset = 0;
                         }
-                        KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                        KeyCode::Char('p') => {
+                            settings.persist_features = !settings.persist_features;
+                        }
+                        KeyCode::Char('q') | KeyCode::Esc => return Ok(settings),
                         _ => {}
                     },
                     AppMode::Live => match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => mode = AppMode::Menu,
+                        _ => {}
+                    },
+                    AppMode::LiveMM => match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => mode = AppMode::Menu,
+                        KeyCode::Char('r') => {
+                            // Reset MM state
+                            paper_trading.reset();
+                        }
                         _ => {}
                     },
                     AppMode::Features => match key.code {
@@ -501,6 +546,7 @@ fn main_loop(terminal: &mut Term, rx: Receiver<FeaturesSnapshot>, symbol: String
         while let Ok(snap) = rx.try_recv() {
             accumulator.add(&snap);
             has_data = true;
+            last_snapshot = Some(snap);
         }
 
         // Update averages every second
@@ -528,6 +574,41 @@ fn main_loop(terminal: &mut Term, rx: Receiver<FeaturesSnapshot>, symbol: String
                     volatility_hist.pop_front();
                 }
 
+                // Update MM engine with latest features
+                if mode == AppMode::LiveMM {
+                    if let Some(ref snap) = last_snapshot {
+                        let microprice = snap.microprice.unwrap_or(snap.mid_price.unwrap_or_default());
+                        let mid_price = snap.mid_price.unwrap_or_default();
+                        let volatility = snap.realized_volatility_100.unwrap_or(0.001);
+
+                        // Compute entropy score from tick entropies
+                        let entropy_score = paper_trading.mm.compute_entropy_score(
+                            snap.tick_entropy_1s,
+                            snap.tick_entropy_5s,
+                            snap.tick_entropy_10s,
+                        );
+
+                        // Compute flow imbalance from aggressor ratios
+                        let buy_vol = snap.aggr_ratio_100.unwrap_or(Decimal::new(5, 1)); // 0.5 default
+                        let sell_vol = Decimal::ONE - buy_vol;
+                        let flow_imbalance = paper_trading.mm.compute_flow_imbalance(buy_vol, sell_vol);
+
+                        let timestamp_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_millis() as u64;
+
+                        paper_trading.on_features(
+                            microprice,
+                            mid_price,
+                            volatility,
+                            entropy_score,
+                            flow_imbalance,
+                            timestamp_ms,
+                        );
+                    }
+                }
+
                 accumulator.reset();
             }
             last_update = Instant::now();
@@ -536,7 +617,7 @@ fn main_loop(terminal: &mut Term, rx: Receiver<FeaturesSnapshot>, symbol: String
         // Draw based on mode
         match mode {
             AppMode::Menu => {
-                terminal.draw(|f| draw_menu(f, &symbol))?;
+                terminal.draw(|f| draw_menu(f, &symbol, &settings))?;
             }
             AppMode::Live => {
                 terminal.draw(|f| {
@@ -547,6 +628,15 @@ fn main_loop(terminal: &mut Term, rx: Receiver<FeaturesSnapshot>, symbol: String
                     }
                 })?;
             }
+            AppMode::LiveMM => {
+                terminal.draw(|f| {
+                    if !has_data {
+                        draw_waiting(f);
+                    } else {
+                        draw_live_mm(f, &symbol, &current_features, &paper_trading);
+                    }
+                })?;
+            }
             AppMode::Features => {
                 terminal.draw(|f| draw_features(f, &mut scroll_offset))?;
             }
@@ -554,8 +644,11 @@ fn main_loop(terminal: &mut Term, rx: Receiver<FeaturesSnapshot>, symbol: String
     }
 }
 
-fn draw_menu(f: &mut ratatui::Frame, symbol: &str) {
+fn draw_menu(f: &mut ratatui::Frame, symbol: &str, settings: &TuiSettings) {
     let size = f.size();
+
+    let persist_status = if settings.persist_features { "ON " } else { "OFF" };
+    let persist_color = if settings.persist_features { Color::Green } else { Color::Red };
 
     let lines = vec![
         Line::from(""),
@@ -570,11 +663,22 @@ fn draw_menu(f: &mut ratatui::Frame, symbol: &str) {
         Line::from(""),
         Line::from(vec![
             Span::styled("  [0] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::raw("Run Live Dashboard"),
+            Span::raw("Live Dashboard"),
         ]),
         Line::from(vec![
             Span::styled("  [1] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::raw("Show Feature Descriptions"),
+            Span::raw("Live Dashboard + Market Maker (paper trading)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  [2] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw("Feature Descriptions"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  Settings:", Style::default().fg(Color::Yellow))),
+        Line::from(vec![
+            Span::styled("  [p] ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+            Span::raw("Persist features to disk: "),
+            Span::styled(persist_status, Style::default().fg(persist_color).add_modifier(Modifier::BOLD)),
         ]),
         Line::from(""),
         Line::from(vec![
@@ -875,6 +979,245 @@ fn draw_live(
         .style(Style::default().fg(Color::Yellow))
         .data(&vol_data);
     f.render_widget(vol_spark, spark_cols[3]);
+}
+
+fn draw_live_mm(
+    f: &mut ratatui::Frame,
+    symbol: &str,
+    feat: &AveragedFeatures,
+    paper_trading: &PaperTradingEngine,
+) {
+    let size = f.size();
+    let state = paper_trading.state();
+
+    // Layout: title + MM panel + PnL panel + Quotes panel + Market Data (condensed)
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(1),   // Title
+            Constraint::Length(8),   // MM State & Regime
+            Constraint::Length(6),   // PnL & Position
+            Constraint::Length(5),   // Current Quotes
+            Constraint::Length(5),   // Simulator Stats
+            Constraint::Min(4),      // Market data summary
+        ])
+        .split(size);
+
+    // Title
+    let now = chrono::Local::now().format("%H:%M:%S");
+    let title = format!(
+        " {} | {} | MARKET MAKER (paper) | [r] reset [q] menu ",
+        symbol.to_uppercase(), now
+    );
+    let title_para = Paragraph::new(Line::from(Span::styled(
+        title,
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+    )));
+    f.render_widget(title_para, rows[0]);
+
+    // MM State & Regime Panel
+    // Get regime from last quotes
+    let regime = state.last_quotes.as_ref().map(|q| q.regime).unwrap_or(MarketRegime::MediumEntropy);
+    let regime_str = match regime {
+        MarketRegime::HighEntropy => ("HIGH ENTROPY", Color::Green),
+        MarketRegime::MediumEntropy => ("MEDIUM ENTROPY", Color::Yellow),
+        MarketRegime::LowEntropy => ("LOW ENTROPY", Color::Red),
+    };
+
+    let inv_color = if state.mm_state.inventory.is_zero() {
+        Color::Gray
+    } else if state.mm_state.inventory.is_sign_positive() {
+        Color::Green
+    } else {
+        Color::Red
+    };
+
+    let max_inventory = paper_trading.mm.config().max_inventory;
+
+    let mm_lines = vec![
+        Line::from(vec![
+            Span::styled("REGIME ", Style::default().fg(Color::Yellow)),
+            Span::styled(regime_str.0, Style::default().fg(regime_str.1).add_modifier(Modifier::BOLD)),
+            Span::raw("  "),
+            Span::styled("ENTROPY ", Style::default().fg(Color::Magenta)),
+            Span::raw(format!("{:.3}", feat.tick_entropy_5s)),
+        ]),
+        Line::from(vec![
+            Span::styled("FAIR VALUE ", Style::default().fg(Color::Cyan)),
+            Span::raw(format!("{:.2}", state.last_quotes.as_ref().map(|q| q.fair_value).unwrap_or_default())),
+            Span::raw("  "),
+            Span::styled("HALF SPREAD ", Style::default().fg(Color::Yellow)),
+            Span::raw(format!("{:.2}", state.last_quotes.as_ref().map(|q| q.half_spread).unwrap_or_default())),
+            Span::raw("  "),
+            Span::styled("SKEW ", Style::default().fg(Color::Gray)),
+            Span::raw(format!("{:.2}", state.last_quotes.as_ref().map(|q| q.skew).unwrap_or_default())),
+        ]),
+        Line::from(vec![
+            Span::styled("INVENTORY ", Style::default().fg(inv_color)),
+            Span::raw(format!("{:+.6}", state.mm_state.inventory)),
+            Span::raw("  "),
+            Span::styled("AVG ENTRY ", Style::default().fg(Color::Gray)),
+            Span::raw(format!("{:.2}", state.mm_state.avg_entry_price)),
+            Span::raw("  "),
+            Span::styled("MAX ", Style::default().fg(Color::DarkGray)),
+            Span::raw(format!("{:.4}", max_inventory)),
+        ]),
+        Line::from(vec![
+            Span::styled("VOLATILITY ", Style::default().fg(Color::Yellow)),
+            Span::raw(format!("{:.6}", feat.realized_volatility_100)),
+            Span::raw("  "),
+            Span::styled("TOXICITY ", Style::default().fg(Color::Red)),
+            Span::raw(format!("{:.2}", feat.toxicity_index)),
+        ]),
+    ];
+
+    let mm_para = Paragraph::new(mm_lines).block(
+        Block::default()
+            .title(" MARKET MAKER STATE ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
+    f.render_widget(mm_para, rows[1]);
+
+    // PnL Panel
+    let pnl = &state.mm_state.pnl;
+    let realized_color = if pnl.realized_pnl.is_sign_positive() { Color::Green } else { Color::Red };
+    let unrealized_color = if pnl.unrealized_pnl.is_sign_positive() { Color::Green } else { Color::Red };
+    let total_color = if pnl.total_pnl.is_sign_positive() { Color::Green } else { Color::Red };
+
+    let pnl_lines = vec![
+        Line::from(vec![
+            Span::styled("REALIZED ", Style::default().fg(realized_color)),
+            Span::raw(format!("{:+.4}", pnl.realized_pnl)),
+            Span::raw("  "),
+            Span::styled("UNREALIZED ", Style::default().fg(unrealized_color)),
+            Span::raw(format!("{:+.4}", pnl.unrealized_pnl)),
+            Span::raw("  "),
+            Span::styled("TOTAL ", Style::default().fg(total_color).add_modifier(Modifier::BOLD)),
+            Span::raw(format!("{:+.4}", pnl.total_pnl)),
+        ]),
+        Line::from(vec![
+            Span::styled("FEES PAID ", Style::default().fg(Color::Red)),
+            Span::raw(format!("{:.6}", pnl.fees_paid)),
+            Span::raw("  "),
+            Span::styled("TRADES ", Style::default().fg(Color::Gray)),
+            Span::raw(format!("{}", pnl.num_trades)),
+            Span::raw("  "),
+            Span::styled("VOLUME ", Style::default().fg(Color::Gray)),
+            Span::raw(format!("{:.4}", pnl.total_volume)),
+        ]),
+    ];
+
+    let pnl_para = Paragraph::new(pnl_lines).block(
+        Block::default()
+            .title(" P&L ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Green)),
+    );
+    f.render_widget(pnl_para, rows[2]);
+
+    // Quotes Panel
+    let quotes = state.last_quotes.as_ref();
+    let bid_price = quotes.and_then(|q| q.bid.as_ref()).map(|b| format!("{:.2}", b.price)).unwrap_or_else(|| "---".to_string());
+    let bid_size = quotes.and_then(|q| q.bid.as_ref()).map(|b| format!("{:.4}", b.size)).unwrap_or_else(|| "---".to_string());
+    let ask_price = quotes.and_then(|q| q.ask.as_ref()).map(|a| format!("{:.2}", a.price)).unwrap_or_else(|| "---".to_string());
+    let ask_size = quotes.and_then(|q| q.ask.as_ref()).map(|a| format!("{:.4}", a.size)).unwrap_or_else(|| "---".to_string());
+
+    let quote_lines = vec![
+        Line::from(vec![
+            Span::styled("  BID ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw(format!("{} x {}", bid_price, bid_size)),
+            Span::raw("      "),
+            Span::styled("ASK ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::raw(format!("{} x {}", ask_price, ask_size)),
+        ]),
+        Line::from(vec![
+            Span::styled("  MID ", Style::default().fg(Color::Cyan)),
+            Span::raw(format!("{:.2}", feat.mid_price)),
+            Span::raw("  "),
+            Span::styled("MICRO ", Style::default().fg(Color::Cyan)),
+            Span::raw(format!("{:.2}", feat.microprice)),
+            Span::raw("  "),
+            Span::styled("SPREAD ", Style::default().fg(Color::Yellow)),
+            Span::raw(format!("{:.2}", feat.spread)),
+        ]),
+    ];
+
+    let quote_para = Paragraph::new(quote_lines).block(
+        Block::default()
+            .title(" QUOTES ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow)),
+    );
+    f.render_widget(quote_para, rows[3]);
+
+    // Simulator Stats Panel
+    let sim = &state.sim_stats;
+    let fill_rate = paper_trading.simulator.fill_rate() * 100.0;
+
+    let sim_lines = vec![
+        Line::from(vec![
+            Span::styled("TRADES SEEN ", Style::default().fg(Color::Gray)),
+            Span::raw(format!("{}", sim.trades_seen)),
+            Span::raw("  "),
+            Span::styled("BID FILLS ", Style::default().fg(Color::Green)),
+            Span::raw(format!("{}", sim.bid_fills)),
+            Span::raw("  "),
+            Span::styled("ASK FILLS ", Style::default().fg(Color::Red)),
+            Span::raw(format!("{}", sim.ask_fills)),
+            Span::raw("  "),
+            Span::styled("FILL RATE ", Style::default().fg(Color::Magenta)),
+            Span::raw(format!("{:.1}%", fill_rate)),
+        ]),
+        Line::from(vec![
+            Span::styled("BID MISSES ", Style::default().fg(Color::DarkGray)),
+            Span::raw(format!("{}", sim.bid_misses)),
+            Span::raw("  "),
+            Span::styled("ASK MISSES ", Style::default().fg(Color::DarkGray)),
+            Span::raw(format!("{}", sim.ask_misses)),
+            Span::raw("  "),
+            Span::styled("FILL VOL ", Style::default().fg(Color::Cyan)),
+            Span::raw(format!("{:.4}", sim.total_fill_volume)),
+        ]),
+    ];
+
+    let sim_para = Paragraph::new(sim_lines).block(
+        Block::default()
+            .title(" SIMULATOR ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Magenta)),
+    );
+    f.render_widget(sim_para, rows[4]);
+
+    // Condensed Market Data
+    let mkt_lines = vec![
+        Line::from(vec![
+            Span::styled("IMB ", Style::default().fg(Color::Yellow)),
+            Span::raw(format!("{:+.1}%", feat.imbalance * 100.0)),
+            Span::raw("  "),
+            Span::styled("PWI ", Style::default().fg(Color::Blue)),
+            Span::raw(format!("{:+.1}%", feat.pwi_50 * 100.0)),
+            Span::raw("  "),
+            Span::styled("FLOW ", Style::default().fg(Color::Magenta)),
+            Span::raw(format!("{:+.2}", feat.order_flow_imbalance)),
+            Span::raw("  "),
+            Span::styled("ENT ", Style::default().fg(Color::Magenta)),
+            Span::raw(format!("{:.2} / {:.2} / {:.2}",
+                feat.tick_entropy_1s, feat.tick_entropy_5s, feat.tick_entropy_10s)),
+            Span::raw("  "),
+            Span::styled("VPIN ", Style::default().fg(Color::Red)),
+            Span::raw(format!("{:.2}", feat.vpin)),
+        ]),
+    ];
+
+    let mkt_para = Paragraph::new(mkt_lines).block(
+        Block::default()
+            .title(" MARKET ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
+    f.render_widget(mkt_para, rows[5]);
 }
 
 fn draw_features(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
