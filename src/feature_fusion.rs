@@ -94,7 +94,6 @@ pub struct FeaturesSnapshot {
 
 pub struct FeatureFusionEngine {
     order_book:     Arc<ConcurrentOrderBook>,
-    trades_log:     Arc<ConcurrentTradesLog>,
     orderbook_rx:   mpsc::Receiver<OrderBookFeatures>,
     tradeslog_rx:   mpsc::Receiver<TradesLogFeatures>,
     illiquidity_rx: mpsc::Receiver<IlliquidityMetrics>,
@@ -107,7 +106,7 @@ pub struct FeatureFusionEngine {
 impl FeatureFusionEngine {
     pub fn new(
         order_book: Arc<ConcurrentOrderBook>,
-        trades_log: Arc<ConcurrentTradesLog>,
+        _trades_log: Arc<ConcurrentTradesLog>,
         orderbook_rx: mpsc::Receiver<OrderBookFeatures>,
         tradeslog_rx: mpsc::Receiver<TradesLogFeatures>,
         illiquidity_rx: mpsc::Receiver<IlliquidityMetrics>,
@@ -118,7 +117,6 @@ impl FeatureFusionEngine {
     ) -> Self {
         Self {
             order_book,
-            trades_log,
             orderbook_rx,
             tradeslog_rx,
             illiquidity_rx,
