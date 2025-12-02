@@ -5,15 +5,12 @@
 use std::path::PathBuf;
 
 use rust_decimal::Decimal;
-use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
 
-use crate::feature_fusion::FeaturesSnapshot;
 use crate::market_maker::{MarketMakerEngine, MMConfig, MMQuotes, Fill, QuoteSide};
 use crate::mm_simulator::{MMSimulator, SimulatorConfig};
-use crate::tradeslog::Trade;
 
 use super::replay::{ParquetReplay, ReplayConfig, ReplayEvent};
 use super::metrics::{
@@ -276,7 +273,7 @@ impl BacktestEngine {
     /// we assume we got filled.
     fn simulate_fills_from_movement(
         &mut self,
-        last_mid: Decimal,
+        _last_mid: Decimal,
         current_mid: Decimal,
         quotes: &MMQuotes,
         timestamp_ms: u64,

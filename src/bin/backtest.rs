@@ -28,7 +28,7 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use anyhow::Result;
 
-use ingestor::backtest::{BacktestEngine, BacktestConfig, BacktestResults};
+use ingestor::backtest::{BacktestEngine, BacktestConfig};
 use ingestor::backtest::replay::ReplayConfig;
 use ingestor::market_maker::MMConfig;
 use ingestor::mm_simulator::SimulatorConfig;
