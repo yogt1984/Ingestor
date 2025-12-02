@@ -4,6 +4,8 @@ use ingestor::{
     tradeslog::{ConcurrentTradesLog, Trade, TradesLogFeatures},
     illiquidity::IlliquidityMetrics,
     entropy::EntropyMetrics,
+    volatility::VolatilityMetrics,
+    toxicity::ToxicityMetrics,
 };
 
 use rust_decimal_macros::dec;
@@ -28,6 +30,8 @@ async fn test_full_analytics_pipeline() {
     let (_tl_tx, tl_rx) = mpsc::channel::<TradesLogFeatures>(10);
     let (_ill_tx, ill_rx) = mpsc::channel::<IlliquidityMetrics>(10);
     let (_ent_tx, ent_rx) = mpsc::channel::<EntropyMetrics>(10);
+    let (_vol_tx, vol_rx) = mpsc::channel::<VolatilityMetrics>(10);
+    let (_tox_tx, tox_rx) = mpsc::channel::<ToxicityMetrics>(10);
     let (_feat_tx, feat_rx) = mpsc::channel::<FeaturesSnapshot>(10);
     drop(feat_rx);
 
@@ -38,6 +42,8 @@ async fn test_full_analytics_pipeline() {
         tl_rx,
         ill_rx,
         ent_rx,
+        vol_rx,
+        tox_rx,
         _feat_tx,
     );
     let handle = tokio::spawn(async move {

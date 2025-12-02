@@ -77,6 +77,20 @@ fn create_complete_snapshot() -> FeaturesSnapshot {
         // Complex vector fields
         volume_vector: vec![(dec!(0.01), (dec!(100.0), dec!(50.0)))],
         pwi_vector: vec![(dec!(0.01), dec!(100.5))],
+        // Volatility metrics
+        realized_volatility_100: Some(0.001),
+        realized_volatility_1000: Some(0.0008),
+        bipower_variation_100: Some(0.0009),
+        jump_indicator: Some(1.5),
+        vol_of_vol: Some(0.0002),
+        // Toxicity metrics
+        toxic_flow_ratio_micro: Some(dec!(0.25)),
+        toxic_flow_ratio_mid: Some(dec!(0.22)),
+        adverse_selection_micro: Some(dec!(0.001)),
+        adverse_selection_mid: Some(dec!(0.0008)),
+        arrival_asymmetry: Some(dec!(0.15)),
+        size_toxicity_ratio: Some(dec!(1.2)),
+        toxicity_index: Some(dec!(0.28)),
     }
 }
 

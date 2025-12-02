@@ -8,18 +8,22 @@ mod feature_fusion;
 mod persistence;
 mod illiquidity;
 mod entropy;
+mod volatility;
+mod toxicity;
 mod tui;
 
-use crossbeam::channel; 
+use crossbeam::channel;
 use std::sync::Arc;
 use tokio::{spawn, sync::{watch, mpsc}, time::Duration};
 use crate::{
     orderbook::{ConcurrentOrderBook,  OrderBookEngine,   OrderBookFeatures,  OrderBookEngineConfig},
-    tradeslog::{ConcurrentTradesLog,  TradesLogEngine,   TradesLogFeatures,   TradesLogEngineConfig},     
+    tradeslog::{ConcurrentTradesLog,  TradesLogEngine,   TradesLogFeatures,   TradesLogEngineConfig},
     lob_feed_manager::LobFeedManager,
     log_feed_manager::LogFeedManager,
     illiquidity::{IlliquidityEngine, IlliquidityMetrics, IlliquidityConfig},
     entropy::{EntropyEngine,         EntropyMetrics,     EntropyConfig},
+    volatility::{VolatilityEngine,   VolatilityMetrics,  VolatilityConfig},
+    toxicity::{ToxicityEngine,       ToxicityMetrics,    ToxicityConfig},
     feature_fusion::{FeatureFusionEngine, FeaturesSnapshot},
     persistence::PersistenceEngine,
 };
@@ -30,11 +34,16 @@ use crate::{
 async fn main() {
     env_logger::init();
 
+    // Trading pair symbol (e.g., BTCUSDT, ETHUSDT, AVAXUSDT)
+    const SYMBOL: &str = "BTCUSDT";
+
     let (shutdown_tx,    shutdown_rx)     = watch::channel(false);
     let (orderbook_tx,   orderbook_rx)    = mpsc::channel::<OrderBookFeatures>(100);
     let (tradeslog_tx,   tradeslog_rx)    = mpsc::channel::<TradesLogFeatures>(100);
     let (illiq_tx,       illiq_rx)        = mpsc::channel::<IlliquidityMetrics>(100);
     let (entropy_tx,     entropy_rx)      = mpsc::channel::<EntropyMetrics>(100);
+    let (volatility_tx,  volatility_rx)   = mpsc::channel::<VolatilityMetrics>(100);
+    let (toxicity_tx,    toxicity_rx)     = mpsc::channel::<ToxicityMetrics>(100);
     let (fused_tx,       fused_rx)        = mpsc::channel::<FeaturesSnapshot>(100);
     let (persist_tx,     persist_rx)      = channel::bounded::<FeaturesSnapshot>(2048);
     let (tui_tx,         tui_rx)          = channel::bounded::<FeaturesSnapshot>(100);
@@ -44,16 +53,10 @@ async fn main() {
         shutdown_tx.send(true).unwrap();
     };
 
-    let lob_manager    = LobFeedManager::new(
-        "wss://stream.binance.com:9443/ws/btcusdt@depth@100ms".to_string(),
-        "wss://stream.binance.com:9443/ws/btcusdt@depth".to_string(),
-    );
+    let lob_manager    = LobFeedManager::new(SYMBOL);
     let order_book_arc = Arc::new(lob_manager.get_order_book());
 
-    let log_manager = LogFeedManager::new(
-        "wss://stream.binance.com:9443/ws/btcusdt@trade".to_string(),
-        10_000, 
-    );
+    let log_manager = LogFeedManager::new(SYMBOL, 10_000);
     let trades_log_arc = Arc::new(log_manager.get_trades_log());
 
     let orderbook_engine = OrderBookEngine::new(
@@ -76,10 +79,23 @@ async fn main() {
     );
 
     let entropy_engine = EntropyEngine::new(
-        order_book_arc.clone(), 
+        order_book_arc.clone(),
         trades_log_arc.clone(),
         Some(EntropyConfig::default()),
         entropy_tx,
+    );
+
+    let volatility_engine = VolatilityEngine::new(
+        trades_log_arc.clone(),
+        Some(VolatilityConfig::default()),
+        volatility_tx,
+    );
+
+    let toxicity_engine = ToxicityEngine::new(
+        order_book_arc.clone(),
+        trades_log_arc.clone(),
+        Some(ToxicityConfig::default()),
+        toxicity_tx,
     );
 
     let feature_fusion_engine = FeatureFusionEngine::new(
@@ -89,6 +105,8 @@ async fn main() {
         tradeslog_rx,
         illiq_rx,
         entropy_rx,
+        volatility_rx,
+        toxicity_rx,
         fused_tx,
     );
 
@@ -143,6 +161,20 @@ async fn main() {
         }
     });
 
+    let volatility_handle = spawn({
+        let shutdown_rx = shutdown_rx.clone();
+        async move {
+            volatility_engine.run(shutdown_rx).await.unwrap();
+        }
+    });
+
+    let toxicity_handle = spawn({
+        let shutdown_rx = shutdown_rx.clone();
+        async move {
+            toxicity_engine.run(shutdown_rx).await.unwrap();
+        }
+    });
+
     let analytics_handle = spawn({
         let shutdown_rx = shutdown_rx.clone();
         async move {
@@ -155,8 +187,9 @@ async fn main() {
     // Spawn TUI in a blocking thread
     let tui_handle = {
         let tui_rx = tui_rx.clone();
+        let symbol = SYMBOL.to_string();
         std::thread::spawn(move || {
-            if let Err(e) = tui::run_tui(tui_rx) {
+            if let Err(e) = tui::run_tui(tui_rx, symbol) {
                 eprintln!("TUI error: {e:?}");
             }
         })
@@ -198,6 +231,8 @@ async fn main() {
         _ = trades_handle              => eprintln!("Trade feed crashed"),
         _ = analytics_handle           => eprintln!("Analytics task crashed"),
         _ = illiquidity_handle         => eprintln!("Illiquidity engine crashed"),
+        _ = volatility_handle          => eprintln!("Volatility engine crashed"),
+        _ = toxicity_handle            => eprintln!("Toxicity engine crashed"),
         res = persistence_handle        => match res {
             Ok(Ok(())) => (),
             Ok(Err(err)) => eprintln!("Persistence task crashed: {err:?}"),

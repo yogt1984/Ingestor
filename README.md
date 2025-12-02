@@ -4,7 +4,7 @@ Real-time market microstructure feature extraction pipeline for algorithmic trad
 
 ## Overview
 
-This system connects to Binance WebSocket API (BTC/USDT) and computes **50+ market microstructure features** in real-time, persisting them to Apache Parquet files for backtesting and ML model training.
+This system connects to Binance WebSocket API (BTC/USDT) and computes **60+ market microstructure features** in real-time, persisting them to Apache Parquet files for backtesting and ML model training.
 
 ## Quick Start
 
@@ -58,9 +58,15 @@ The application provides an interactive menu-driven TUI:
 ┌─ ENTROPY ────────────────────────────────────────────┐
 │ TICK 1s=0.892 5s=0.934 10s=0.956 30s=0.978 1m=0.989  │
 └──────────────────────────────────────────────────────┘
-┌─ MICROPRICE ─────────┐┌─ ENTROPY 1m ─────────────────┐
-│ ▁▂▃▄▅▆▇█▇▆▅▄▃▂▁▂▃▄▅▆ ││ ▁▂▃▄▅▆▇█▇▆▅▄▃▂▁▂▃▄▅▆▇█▇▆▅▄ │
-└──────────────────────┘└──────────────────────────────┘
+┌─ VOLATILITY ─────────────────────────────────────────┐
+│ RV_100 0.000234  RV_1K 0.000198  BV 0.000201  JUMP 1.23│
+└──────────────────────────────────────────────────────┘
+┌─ TOXICITY ───────────────────────────────────────────┐
+│ TOXIC M=23.4% m=21.2%  ADV 0.0012  ASYM +0.15  IDX 0.28│
+└──────────────────────────────────────────────────────┘
+┌─ MICRO ────┐┌─ PWI ──────┐┌─ ENT ──────┐┌─ VOL ──────┐
+│ ▁▂▃▄▅▆▇█▇▆ ││ ▁▂▃▄▅▆▇█▇▆ ││ ▁▂▃▄▅▆▇█▇▆ ││ ▁▂▃▄▅▆▇█▇▆ │
+└────────────┘└────────────┘└────────────┘└────────────┘
 ```
 
 ---
@@ -120,6 +126,26 @@ The application provides an interactive menu-driven TUI:
 | **Volume Entropy** | Volume-weighted H | Trade significance adjusted |
 | **Time Windows** | 1s, 5s, 10s, 15s, 30s, 1m, 15m | Multi-scale regime detection |
 
+### Volatility Metrics
+
+| Feature | Formula | Description |
+|---------|---------|-------------|
+| **Realized Volatility** | RV = √(Σr²/n) | Sum of squared returns (Andersen et al., 2003) |
+| **RV Windows** | 100 and 1000 trades | Multi-scale volatility measurement |
+| **Bipower Variation** | BV = (π/2)×Σ\|r_t\|\|r_{t-1}\| | Jump-robust volatility (Barndorff-Nielsen & Shephard, 2004) |
+| **Jump Indicator** | Z = (RV-BV)/√Var(BV) | Jump test statistic; Z > 3 = significant jump |
+| **Vol-of-Vol** | σ(σ_t) | Second-order uncertainty; regime instability |
+
+### Toxicity Metrics
+
+| Feature | Formula | Description |
+|---------|---------|-------------|
+| **Toxic Flow Ratio** | Toxic Vol / Total Vol | Informed trading proportion (Easley et al., 2012) |
+| **Adverse Selection** | E[cost to informed] | Expected loss to informed traders |
+| **Arrival Asymmetry** | (buys-sells)/total | Buy/sell rate imbalance |
+| **Size Toxicity** | Large/Small toxic ratio | Large trade informativeness |
+| **Toxicity Index** | Composite [0,1] | Weighted toxicity score |
+
 ---
 
 ## Architecture
@@ -128,11 +154,14 @@ The application provides an interactive menu-driven TUI:
 Binance WebSocket
         │
         ├─→ Order Book Stream ─→ ConcurrentOrderBook ─→ OrderBookEngine
+        │                              │                       │
+        │                              └─→ ToxicityEngine ─────┤
         │                                                      │
         └─→ Trade Stream ─────→ ConcurrentTradesLog ─→ TradesLogEngine
                                         │                      │
                                         ├─→ EntropyEngine ─────┤
-                                        └─→ IlliquidityEngine ─┤
+                                        ├─→ IlliquidityEngine ─┤
+                                        └─→ VolatilityEngine ──┤
                                                                │
                                                                ▼
                                                     FeatureFusionEngine
@@ -147,7 +176,7 @@ Binance WebSocket
 
 Features are persisted to Apache Parquet files in `data/features/`:
 - Columnar format for efficient analytical queries
-- 50+ feature columns per snapshot
+- 60+ feature columns per snapshot
 - Automatic file rotation
 
 ## Configuration
@@ -170,12 +199,15 @@ Features are persisted to Apache Parquet files in `data/features/`:
 ## References
 
 - Amihud, Y. (2002). Illiquidity and stock returns
+- Andersen, T., et al. (2003). Modeling and forecasting realized volatility
+- Barndorff-Nielsen, O. & Shephard, N. (2004). Power and bipower variation with stochastic volatility and jumps
 - Biais, B., et al. (1995). An empirical analysis of the limit order book
 - Bouchaud, J.P., et al. (2002). Statistical properties of stock order books
 - Cartea, A., et al. (2015). Algorithmic and High-Frequency Trading
 - Cont, R., et al. (2014). The price impact of order book events
-- Easley, D., et al. (2012). Flow toxicity and liquidity
+- Easley, D., et al. (2012). Flow toxicity and liquidity in a high-frequency world
 - Gatheral, J. & Oomen, R. (2010). Zero-intelligence realized variance estimation
+- Glosten, L. & Milgrom, P. (1985). Bid, ask and transaction prices
 - Gould, M., et al. (2013). Limit order books
 - Harris, L. (2003). Trading and Exchanges
 - Hasbrouck, J. (2009). Trading costs and returns

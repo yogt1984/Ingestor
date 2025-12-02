@@ -102,6 +102,22 @@ struct FeatureAccumulator {
     volume_tick_entropy_1m: f64,
     volume_tick_entropy_15m: f64,
 
+    // Volatility
+    realized_volatility_100: f64,
+    realized_volatility_1000: f64,
+    bipower_variation_100: f64,
+    jump_indicator: f64,
+    vol_of_vol: f64,
+
+    // Toxicity
+    toxic_flow_ratio_micro: f64,
+    toxic_flow_ratio_mid: f64,
+    adverse_selection_micro: f64,
+    adverse_selection_mid: f64,
+    arrival_asymmetry: f64,
+    size_toxicity_ratio: f64,
+    toxicity_index: f64,
+
     count: usize,
 }
 
@@ -165,6 +181,22 @@ impl FeatureAccumulator {
         self.volume_tick_entropy_1m += dec_to_f64(snap.volume_tick_entropy_1m);
         self.volume_tick_entropy_15m += dec_to_f64(snap.volume_tick_entropy_15m);
 
+        // Volatility
+        self.realized_volatility_100 += snap.realized_volatility_100.unwrap_or(0.0);
+        self.realized_volatility_1000 += snap.realized_volatility_1000.unwrap_or(0.0);
+        self.bipower_variation_100 += snap.bipower_variation_100.unwrap_or(0.0);
+        self.jump_indicator += snap.jump_indicator.unwrap_or(0.0);
+        self.vol_of_vol += snap.vol_of_vol.unwrap_or(0.0);
+
+        // Toxicity
+        self.toxic_flow_ratio_micro += dec_to_f64(snap.toxic_flow_ratio_micro);
+        self.toxic_flow_ratio_mid += dec_to_f64(snap.toxic_flow_ratio_mid);
+        self.adverse_selection_micro += dec_to_f64(snap.adverse_selection_micro);
+        self.adverse_selection_mid += dec_to_f64(snap.adverse_selection_mid);
+        self.arrival_asymmetry += dec_to_f64(snap.arrival_asymmetry);
+        self.size_toxicity_ratio += dec_to_f64(snap.size_toxicity_ratio);
+        self.toxicity_index += dec_to_f64(snap.toxicity_index);
+
         self.count += 1;
     }
 
@@ -224,6 +256,20 @@ impl FeatureAccumulator {
             volume_tick_entropy_30s: self.volume_tick_entropy_30s / n,
             volume_tick_entropy_1m: self.volume_tick_entropy_1m / n,
             volume_tick_entropy_15m: self.volume_tick_entropy_15m / n,
+            // Volatility
+            realized_volatility_100: self.realized_volatility_100 / n,
+            realized_volatility_1000: self.realized_volatility_1000 / n,
+            bipower_variation_100: self.bipower_variation_100 / n,
+            jump_indicator: self.jump_indicator / n,
+            vol_of_vol: self.vol_of_vol / n,
+            // Toxicity
+            toxic_flow_ratio_micro: self.toxic_flow_ratio_micro / n,
+            toxic_flow_ratio_mid: self.toxic_flow_ratio_mid / n,
+            adverse_selection_micro: self.adverse_selection_micro / n,
+            adverse_selection_mid: self.adverse_selection_mid / n,
+            arrival_asymmetry: self.arrival_asymmetry / n,
+            size_toxicity_ratio: self.size_toxicity_ratio / n,
+            toxicity_index: self.toxicity_index / n,
             samples: self.count,
         }
     }
@@ -292,6 +338,20 @@ struct AveragedFeatures {
     volume_tick_entropy_30s: f64,
     volume_tick_entropy_1m: f64,
     volume_tick_entropy_15m: f64,
+    // Volatility
+    realized_volatility_100: f64,
+    realized_volatility_1000: f64,
+    bipower_variation_100: f64,
+    jump_indicator: f64,
+    vol_of_vol: f64,
+    // Toxicity
+    toxic_flow_ratio_micro: f64,
+    toxic_flow_ratio_mid: f64,
+    adverse_selection_micro: f64,
+    adverse_selection_mid: f64,
+    arrival_asymmetry: f64,
+    size_toxicity_ratio: f64,
+    toxicity_index: f64,
     samples: usize,
 }
 
@@ -344,6 +404,22 @@ fn get_feature_descriptions() -> Vec<(&'static str, &'static str, &'static str)>
         ("Tick Entropy", "H = -Σp*log(p)", "Shannon entropy of price tick directions (up/down/unchanged). Range [0, log₂(3)]. Higher = more random (Shannon, 1948)."),
         ("Volume Entropy", "Volume-weighted H", "Entropy weighted by trade volume; accounts for trade significance."),
         ("Time Windows", "1s to 15m", "Multi-scale entropy captures regime changes at different frequencies."),
+
+        // Volatility Metrics
+        ("VOLATILITY METRICS", "", ""),
+        ("Realized Volatility", "RV = √(Σr²/n)", "Sum of squared returns over window. Standard volatility estimator for quadratic variation."),
+        ("RV Windows", "100 and 1000 trades", "Short (100) and long (1000) trade windows for multi-scale volatility."),
+        ("Bipower Variation", "BV = (π/2)×Σ|r_t||r_{t-1}|", "Jump-robust volatility estimator using adjacent absolute returns (Barndorff-Nielsen & Shephard, 2004)."),
+        ("Jump Indicator", "Z = (RV-BV)/√Var(BV)", "Statistical test for price jumps. Z > 3 indicates significant jump at 99.7% confidence."),
+        ("Vol-of-Vol", "σ(σ_t)", "Volatility of volatility; measures regime instability and second-order uncertainty."),
+
+        // Toxicity Metrics
+        ("TOXICITY METRICS", "", ""),
+        ("Toxic Flow Ratio", "Toxic Vol / Total Vol", "Proportion of volume that trades against fair value. Higher = more informed flow (Easley et al., 2012)."),
+        ("Adverse Selection", "E[cost to informed]", "Expected loss per unit traded to informed traders. In price units."),
+        ("Arrival Asymmetry", "(buys-sells)/total", "Normalized difference between buy and sell arrival rates. Directional pressure indicator."),
+        ("Size Toxicity", "Large/Small toxic ratio", "Compares toxicity of large vs small trades. > 1 means large trades more informed."),
+        ("Toxicity Index", "Composite score [0,1]", "Weighted combination of toxicity measures. Higher = more toxic trading environment."),
     ]
 }
 
@@ -381,6 +457,7 @@ fn main_loop(terminal: &mut Term, rx: Receiver<FeaturesSnapshot>, symbol: String
     let mut microprice_hist: VecDeque<f64> = VecDeque::with_capacity(MAX_HISTORY);
     let mut pwi50_hist: VecDeque<f64> = VecDeque::with_capacity(MAX_HISTORY);
     let mut entropy_hist: VecDeque<f64> = VecDeque::with_capacity(MAX_HISTORY);
+    let mut volatility_hist: VecDeque<f64> = VecDeque::with_capacity(MAX_HISTORY);
 
     loop {
         // Handle input
@@ -446,6 +523,11 @@ fn main_loop(terminal: &mut Term, rx: Receiver<FeaturesSnapshot>, symbol: String
                     entropy_hist.pop_front();
                 }
 
+                volatility_hist.push_back(current_features.realized_volatility_100);
+                if volatility_hist.len() > MAX_HISTORY {
+                    volatility_hist.pop_front();
+                }
+
                 accumulator.reset();
             }
             last_update = Instant::now();
@@ -461,7 +543,7 @@ fn main_loop(terminal: &mut Term, rx: Receiver<FeaturesSnapshot>, symbol: String
                     if !has_data {
                         draw_waiting(f);
                     } else {
-                        draw_live(f, &symbol, &current_features, &microprice_hist, &pwi50_hist, &entropy_hist);
+                        draw_live(f, &symbol, &current_features, &microprice_hist, &pwi50_hist, &entropy_hist, &volatility_hist);
                     }
                 })?;
             }
@@ -528,10 +610,11 @@ fn draw_live(
     microprice_hist: &VecDeque<f64>,
     pwi50_hist: &VecDeque<f64>,
     entropy_hist: &VecDeque<f64>,
+    volatility_hist: &VecDeque<f64>,
 ) {
     let size = f.size();
 
-    // Layout: title + 4 panels + sparklines
+    // Layout: title + 6 panels + sparklines
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
@@ -541,6 +624,8 @@ fn draw_live(
             Constraint::Length(6),   // Trades
             Constraint::Length(4),   // Illiquidity
             Constraint::Length(4),   // Entropy
+            Constraint::Length(4),   // Volatility
+            Constraint::Length(4),   // Toxicity
             Constraint::Min(4),      // Sparklines
         ])
         .split(size);
@@ -677,15 +762,66 @@ fn draw_live(
     );
     f.render_widget(entropy_para, rows[4]);
 
-    // Sparklines - 3 columns for microprice, PWI50, entropy
+    // Volatility Panel
+    let jump_color = if feat.jump_indicator.abs() > 3.0 { Color::Red } else if feat.jump_indicator.abs() > 2.0 { Color::Yellow } else { Color::Gray };
+    let vol_lines = vec![
+        Line::from(vec![
+            Span::styled("RV_100 ", Style::default().fg(Color::Yellow)),
+            Span::raw(format!("{:.6}", feat.realized_volatility_100)),
+            Span::raw("  "),
+            Span::styled("RV_1K ", Style::default().fg(Color::Yellow)),
+            Span::raw(format!("{:.6}", feat.realized_volatility_1000)),
+            Span::raw("  "),
+            Span::styled("BV ", Style::default().fg(Color::Gray)),
+            Span::raw(format!("{:.6}", feat.bipower_variation_100)),
+            Span::raw("  "),
+            Span::styled("JUMP ", Style::default().fg(jump_color)),
+            Span::raw(format!("{:.2}", feat.jump_indicator)),
+            Span::raw("  "),
+            Span::styled("VOV ", Style::default().fg(Color::Gray)),
+            Span::raw(format!("{:.6}", feat.vol_of_vol)),
+        ]),
+    ];
+    let vol_para = Paragraph::new(vol_lines).block(
+        Block::default().title(" VOLATILITY ").borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray)),
+    );
+    f.render_widget(vol_para, rows[5]);
+
+    // Toxicity Panel
+    let tox_color = if feat.toxicity_index > 0.5 { Color::Red } else if feat.toxicity_index > 0.3 { Color::Yellow } else { Color::Green };
+    let tox_lines = vec![
+        Line::from(vec![
+            Span::styled("TOXIC ", Style::default().fg(Color::Red)),
+            Span::raw(format!("M={:.2}% m={:.2}%", feat.toxic_flow_ratio_micro * 100.0, feat.toxic_flow_ratio_mid * 100.0)),
+            Span::raw("  "),
+            Span::styled("ADV ", Style::default().fg(Color::Gray)),
+            Span::raw(format!("{:.4}", feat.adverse_selection_micro)),
+            Span::raw("  "),
+            Span::styled("ASYM ", Style::default().fg(Color::Gray)),
+            Span::raw(format!("{:+.2}", feat.arrival_asymmetry)),
+            Span::raw("  "),
+            Span::styled("SIZE ", Style::default().fg(Color::Gray)),
+            Span::raw(format!("{:.2}", feat.size_toxicity_ratio)),
+            Span::raw("  "),
+            Span::styled("IDX ", Style::default().fg(tox_color)),
+            Span::raw(format!("{:.2}", feat.toxicity_index)),
+        ]),
+    ];
+    let tox_para = Paragraph::new(tox_lines).block(
+        Block::default().title(" TOXICITY ").borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray)),
+    );
+    f.render_widget(tox_para, rows[6]);
+
+    // Sparklines - 4 columns for microprice, PWI50, entropy, volatility
     let spark_cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(34),
-            Constraint::Percentage(33),
-            Constraint::Percentage(33),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
         ])
-        .split(rows[5]);
+        .split(rows[7]);
 
     fn normalize_spark(buf: &VecDeque<f64>) -> Vec<u64> {
         if buf.is_empty() { return vec![]; }
@@ -699,7 +835,7 @@ fn draw_live(
     let micro_data = normalize_spark(microprice_hist);
     let micro_spark = Sparkline::default()
         .block(Block::default()
-            .title(format!(" MICROPRICE {:.2} ", feat.microprice))
+            .title(format!(" MICRO {:.0} ", feat.microprice))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray)))
         .style(Style::default().fg(Color::Cyan))
@@ -711,7 +847,7 @@ fn draw_live(
     let pwi_color = if feat.pwi_50 > 0.0 { Color::Green } else if feat.pwi_50 < 0.0 { Color::Red } else { Color::Yellow };
     let pwi_spark = Sparkline::default()
         .block(Block::default()
-            .title(format!(" PWI50 {:+.2}% ", feat.pwi_50 * 100.0))
+            .title(format!(" PWI {:+.1}% ", feat.pwi_50 * 100.0))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray)))
         .style(Style::default().fg(pwi_color))
@@ -722,12 +858,23 @@ fn draw_live(
     let ent_data = normalize_spark(entropy_hist);
     let ent_spark = Sparkline::default()
         .block(Block::default()
-            .title(format!(" ENTROPY {:.3} ", feat.tick_entropy_1m))
+            .title(format!(" ENT {:.2} ", feat.tick_entropy_1m))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray)))
         .style(Style::default().fg(Color::Magenta))
         .data(&ent_data);
     f.render_widget(ent_spark, spark_cols[2]);
+
+    // Volatility sparkline
+    let vol_data = normalize_spark(volatility_hist);
+    let vol_spark = Sparkline::default()
+        .block(Block::default()
+            .title(format!(" VOL {:.4} ", feat.realized_volatility_100))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)))
+        .style(Style::default().fg(Color::Yellow))
+        .data(&vol_data);
+    f.render_widget(vol_spark, spark_cols[3]);
 }
 
 fn draw_features(f: &mut ratatui::Frame, scroll_offset: &mut u16) {

@@ -1,6 +1,5 @@
 use std::sync::Arc;
-use tokio::sync::{mpsc, watch};  
-use tokio::time::{interval, Duration};
+use tokio::sync::{mpsc, watch};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::Serialize;
@@ -10,9 +9,9 @@ use crate::{
     tradeslog::{ConcurrentTradesLog, TradesLogFeatures},
     illiquidity::IlliquidityMetrics,
     entropy::EntropyMetrics,
+    volatility::VolatilityMetrics,
+    toxicity::ToxicityMetrics,
 };
-
-const SNAPSHOT_INTERVAL_MS: u64 = 100;
 
 #[derive(Debug, Serialize, Clone)]
 pub struct FeaturesSnapshot {
@@ -77,6 +76,20 @@ pub struct FeaturesSnapshot {
     pub volume_tick_entropy_30s: Option<Decimal>,
     pub volume_tick_entropy_1m: Option<Decimal>,
     pub volume_tick_entropy_15m: Option<Decimal>,
+    // Volatility metrics
+    pub realized_volatility_100: Option<f64>,
+    pub realized_volatility_1000: Option<f64>,
+    pub bipower_variation_100: Option<f64>,
+    pub jump_indicator: Option<f64>,
+    pub vol_of_vol: Option<f64>,
+    // Toxicity metrics
+    pub toxic_flow_ratio_micro: Option<Decimal>,
+    pub toxic_flow_ratio_mid: Option<Decimal>,
+    pub adverse_selection_micro: Option<Decimal>,
+    pub adverse_selection_mid: Option<Decimal>,
+    pub arrival_asymmetry: Option<Decimal>,
+    pub size_toxicity_ratio: Option<Decimal>,
+    pub toxicity_index: Option<Decimal>,
 }
 
 pub struct FeatureFusionEngine {
@@ -86,6 +99,8 @@ pub struct FeatureFusionEngine {
     tradeslog_rx:   mpsc::Receiver<TradesLogFeatures>,
     illiquidity_rx: mpsc::Receiver<IlliquidityMetrics>,
     entropy_rx:     mpsc::Receiver<EntropyMetrics>,
+    volatility_rx:  mpsc::Receiver<VolatilityMetrics>,
+    toxicity_rx:    mpsc::Receiver<ToxicityMetrics>,
     fused_tx:       mpsc::Sender<FeaturesSnapshot>,
 }
 
@@ -97,6 +112,8 @@ impl FeatureFusionEngine {
         tradeslog_rx: mpsc::Receiver<TradesLogFeatures>,
         illiquidity_rx: mpsc::Receiver<IlliquidityMetrics>,
         entropy_rx: mpsc::Receiver<EntropyMetrics>,
+        volatility_rx: mpsc::Receiver<VolatilityMetrics>,
+        toxicity_rx: mpsc::Receiver<ToxicityMetrics>,
         fused_tx: mpsc::Sender<FeaturesSnapshot>,
     ) -> Self {
         Self {
@@ -106,12 +123,14 @@ impl FeatureFusionEngine {
             tradeslog_rx,
             illiquidity_rx,
             entropy_rx,
+            volatility_rx,
+            toxicity_rx,
             fused_tx,
         }
     }
 
     pub async fn run(
-        mut self, 
+        mut self,
         mut shutdown_rx: watch::Receiver<bool>
     ) {
         const SIGNIFICANCE_THRESHOLD: Decimal = dec!(10.0);
@@ -120,6 +139,8 @@ impl FeatureFusionEngine {
         let mut latest_tradeslog: Option<TradesLogFeatures> = None;
         let mut latest_illiquidity: Option<IlliquidityMetrics> = None;
         let mut latest_entropy: Option<EntropyMetrics> = None;
+        let mut latest_volatility: Option<VolatilityMetrics> = None;
+        let mut latest_toxicity: Option<ToxicityMetrics> = None;
 
         loop {
             tokio::select! {
@@ -137,6 +158,14 @@ impl FeatureFusionEngine {
 
                 Some(metrics) = self.entropy_rx.recv() => {
                     latest_entropy = Some(metrics);
+                },
+
+                Some(metrics) = self.volatility_rx.recv() => {
+                    latest_volatility = Some(metrics);
+                },
+
+                Some(metrics) = self.toxicity_rx.recv() => {
+                    latest_toxicity = Some(metrics);
                 },
 
                 _ = shutdown_rx.changed() => {
@@ -180,6 +209,9 @@ impl FeatureFusionEngine {
                     volume_tick_entropy_1m: None,
                     volume_tick_entropy_15m: None,
                 });
+
+                let volatility_metrics = latest_volatility.clone().unwrap_or_default();
+                let toxicity_metrics = latest_toxicity.clone().unwrap_or_default();
 
                 let snapshot = FeaturesSnapshot {
                     timestamp: Utc::now().to_rfc3339(),
@@ -243,6 +275,20 @@ impl FeatureFusionEngine {
                     volume_tick_entropy_30s: entropy_metrics.volume_tick_entropy_30s,
                     volume_tick_entropy_1m: entropy_metrics.volume_tick_entropy_1m,
                     volume_tick_entropy_15m: entropy_metrics.volume_tick_entropy_15m,
+                    // Volatility metrics
+                    realized_volatility_100: volatility_metrics.realized_volatility_100,
+                    realized_volatility_1000: volatility_metrics.realized_volatility_1000,
+                    bipower_variation_100: volatility_metrics.bipower_variation_100,
+                    jump_indicator: volatility_metrics.jump_indicator,
+                    vol_of_vol: volatility_metrics.vol_of_vol,
+                    // Toxicity metrics
+                    toxic_flow_ratio_micro: toxicity_metrics.toxic_flow_ratio_micro,
+                    toxic_flow_ratio_mid: toxicity_metrics.toxic_flow_ratio_mid,
+                    adverse_selection_micro: toxicity_metrics.adverse_selection_micro,
+                    adverse_selection_mid: toxicity_metrics.adverse_selection_mid,
+                    arrival_asymmetry: toxicity_metrics.arrival_asymmetry,
+                    size_toxicity_ratio: toxicity_metrics.size_toxicity_ratio,
+                    toxicity_index: toxicity_metrics.toxicity_index,
                 };
 
                 // Send snapshot whenever we have new data
@@ -350,6 +396,7 @@ mod tests {
     };
     use rust_decimal_macros::dec;
     use tokio::sync::{watch, mpsc};
+    use tokio::time::Duration;
     use std::sync::Arc;
     use chrono::Utc;
 
@@ -363,9 +410,11 @@ mod tests {
         let (_tl_tx, tl_rx) = mpsc::channel(10);
         let (_ill_tx, ill_rx) = mpsc::channel(10);
         let (_ent_tx, ent_rx) = mpsc::channel(10);
+        let (_vol_tx, vol_rx) = mpsc::channel(10);
+        let (_tox_tx, tox_rx) = mpsc::channel(10);
 
         let (_feat_tx, _feat_rx) = mpsc::channel(10);
-        let fusion = FeatureFusionEngine::new(order_book, trades_log.clone(), ob_rx, tl_rx, ill_rx, ent_rx, _feat_tx);
+        let fusion = FeatureFusionEngine::new(order_book, trades_log.clone(), ob_rx, tl_rx, ill_rx, ent_rx, vol_rx, tox_rx, _feat_tx);
         let task = tokio::spawn(async move {
             fusion.run(shutdown_rx).await;
         });
@@ -392,10 +441,12 @@ mod tests {
         let (_tl_tx, tl_rx)          = mpsc::channel(10);
         let (_ill_tx, ill_rx)          = mpsc::channel(10);
         let (_ent_tx, ent_rx)          = mpsc::channel(10);
+        let (_vol_tx, vol_rx)          = mpsc::channel(10);
+        let (_tox_tx, tox_rx)          = mpsc::channel(10);
         let (_feat_tx, feat_rx)        = mpsc::channel(10);
         drop(feat_rx);
 
-        let fusion = FeatureFusionEngine::new(order_book, trades_log.clone(), ob_rx, tl_rx, ill_rx, ent_rx, _feat_tx);
+        let fusion = FeatureFusionEngine::new(order_book, trades_log.clone(), ob_rx, tl_rx, ill_rx, ent_rx, vol_rx, tox_rx, _feat_tx);
 
         let task   = tokio::spawn(async move {
             fusion.run(shutdown_rx).await;
