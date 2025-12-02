@@ -1,10 +1,15 @@
-# Binance WebSocket Market Data Ingestor
+# Ingestor: Market Microstructure & Algorithmic Trading Platform
 
-Real-time market microstructure feature extraction pipeline for algorithmic trading research.
+Real-time market microstructure feature extraction and market making simulation for algorithmic trading research.
 
 ## Overview
 
-This system connects to Binance WebSocket API (BTC/USDT) and computes **60+ market microstructure features** in real-time, persisting them to Apache Parquet files for backtesting and ML model training.
+This system connects to Binance WebSocket API and computes **60+ market microstructure features** in real-time, with:
+- **Paper trading market maker** with entropy-based regime detection
+- **Persistence to Apache Parquet** for backtesting and ML training
+- **Interactive TUI** for live monitoring
+
+---
 
 ## Quick Start
 
@@ -12,62 +17,292 @@ This system connects to Binance WebSocket API (BTC/USDT) and computes **60+ mark
 # Build and run
 cargo run --release
 
-# Run tests
+# Run tests (106 tests)
 cargo test
 ```
 
+---
+
 ## Terminal UI
 
-The application provides an interactive menu-driven TUI:
+```
+┌─ MAIN MENU ─────────────────────────────────────────────┐
+│                                                          │
+│  INGESTOR - Real-Time Market Microstructure Features     │
+│                                                          │
+│  Symbol: BTCUSDT                                         │
+│                                                          │
+│  Select an option:                                       │
+│                                                          │
+│  [0] Live Dashboard                                      │
+│  [1] Live Dashboard + Market Maker (paper trading)       │
+│  [2] Feature Descriptions                                │
+│                                                          │
+│  Settings:                                               │
+│  [p] Persist features to disk: ON                        │
+│                                                          │
+│  [q] Quit                                                │
+└──────────────────────────────────────────────────────────┘
+```
+
+### Market Maker Dashboard
 
 ```
-┌─ MAIN MENU ─────────────────────────────────────────┐
-│                                                      │
-│  INGESTOR - Real-Time Market Microstructure Features │
-│                                                      │
-│  Symbol: BTCUSDT                                     │
-│                                                      │
-│  Select an option:                                   │
-│                                                      │
-│  [0] Run Live Dashboard                              │
-│  [1] Show Feature Descriptions                       │
-│                                                      │
-│  [q] Quit                                            │
-└──────────────────────────────────────────────────────┘
+ BTCUSDT | 14:32:15 | MARKET MAKER (paper) | [r] reset [q] menu
+┌─ MARKET MAKER STATE ────────────────────────────────────┐
+│ REGIME HIGH ENTROPY   ENTROPY 0.923                     │
+│ FAIR VALUE 97234.82  HALF SPREAD 4.50  SKEW +0.02       │
+│ INVENTORY +0.005200  AVG ENTRY 97230.00  MAX 0.1000     │
+│ VOLATILITY 0.000234  TOXICITY 0.28                      │
+└─────────────────────────────────────────────────────────┘
+┌─ P&L ───────────────────────────────────────────────────┐
+│ REALIZED +0.0234  UNREALIZED +0.0012  TOTAL +0.0246     │
+│ FEES PAID 0.000045  TRADES 12  VOLUME 0.0520            │
+└─────────────────────────────────────────────────────────┘
+┌─ QUOTES ────────────────────────────────────────────────┐
+│   BID 97230.32 x 0.0010      ASK 97239.32 x 0.0010      │
+│   MID 97234.75  MICRO 97234.82  SPREAD 0.50             │
+└─────────────────────────────────────────────────────────┘
+┌─ SIMULATOR ─────────────────────────────────────────────┐
+│ TRADES SEEN 1234  BID FILLS 6  ASK FILLS 6  FILL 12.5%  │
+│ BID MISSES 42  ASK MISSES 38  FILL VOL 0.0120           │
+└─────────────────────────────────────────────────────────┘
 ```
 
-### Live Dashboard (1Hz updates, 1-second averages)
+---
+
+## Market Making Engine
+
+### Architecture
+
+The market maker implements an **Avellaneda-Stoikov** style quoting strategy with entropy-based regime control:
 
 ```
- BTCUSDT | 14:32:15 | 10 samples/sec | [q] menu
-┌─ ORDER BOOK ─────────────────────────────────────────┐
-│ BID 97234.50  ASK 97235.00  SPREAD 0.50              │
-│ MID 97234.75  MICRO 97234.82  IMB +2.34%             │
-│ PWI 1%=+0.12% 5%=+0.45% 25%=+1.23% 50%=+2.34%       │
-│ SLOPE B=-0.0012 A=0.0015  VOL_IMB +5.67%             │
-│ DEPTH B=0.45 A=0.38  VOL_001 B=12.50 A=8.30          │
-└──────────────────────────────────────────────────────┘
-┌─ TRADES & FLOW ──────────────────────────────────────┐
-│ LAST 97234.80  VWAP 97234.65  SIZE 0.0234            │
-│ VWAP 10=97234.70 50=97234.55 100=97234.40 1000=...   │
-│ MOM +15  RATE 8.5/s  FLOW I=+0.23 P=12.5             │
-└──────────────────────────────────────────────────────┘
-┌─ ILLIQUIDITY ────────────────────────────────────────┐
-│ ROLL 0.000123  AMIHUD 1.23e-08  KYLE 0.0045  VPIN 0.32│
-└──────────────────────────────────────────────────────┘
-┌─ ENTROPY ────────────────────────────────────────────┐
-│ TICK 1s=0.892 5s=0.934 10s=0.956 30s=0.978 1m=0.989  │
-└──────────────────────────────────────────────────────┘
-┌─ VOLATILITY ─────────────────────────────────────────┐
-│ RV_100 0.000234  RV_1K 0.000198  BV 0.000201  JUMP 1.23│
-└──────────────────────────────────────────────────────┘
-┌─ TOXICITY ───────────────────────────────────────────┐
-│ TOXIC M=23.4% m=21.2%  ADV 0.0012  ASYM +0.15  IDX 0.28│
-└──────────────────────────────────────────────────────┘
-┌─ MICRO ────┐┌─ PWI ──────┐┌─ ENT ──────┐┌─ VOL ──────┐
-│ ▁▂▃▄▅▆▇█▇▆ ││ ▁▂▃▄▅▆▇█▇▆ ││ ▁▂▃▄▅▆▇█▇▆ ││ ▁▂▃▄▅▆▇█▇▆ │
-└────────────┘└────────────┘└────────────┘└────────────┘
+FeaturesSnapshot ──→ MarketMakerEngine ──→ MMQuotes (bid/ask)
+                            │
+                            ├─→ Entropy Score ──→ MarketRegime
+                            ├─→ Volatility ──────→ Spread Adjustment
+                            ├─→ Inventory ───────→ Quote Skew
+                            └─→ Flow Imbalance ──→ Directional Lean
+
+                    MMSimulator (Paper Trading)
+                            │
+                            └─→ Trade Stream ──→ Simulated Fills ──→ PnL
 ```
+
+### Regime Detection
+
+| Regime | Entropy Score | Spread Mult | Behavior |
+|--------|---------------|-------------|----------|
+| **High Entropy** | ≥ 0.7 | 1.0x | Random flow, tight quotes, aggressive |
+| **Medium Entropy** | 0.4 - 0.7 | 1.5x | Uncertain, widen slightly |
+| **Low Entropy** | < 0.4 | 3.0x | One-sided flow, wide spreads, reduce size |
+
+### Key Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `base_spread_bps` | 2.0 | Base half-spread in basis points |
+| `inventory_skew_factor` | 0.5 | How much to skew per unit inventory |
+| `max_inventory` | 0.1 BTC | Position limit |
+| `quote_size` | 0.001 BTC | Base order size |
+| `risk_aversion` | 0.1 | Gamma in Avellaneda-Stoikov |
+
+---
+
+## Development Roadmap
+
+### 10 hrs/week × 6 months = 260 hours to MVP
+
+#### Phase 1: Foundation (Weeks 1-4, ~40 hrs) ✅ COMPLETE
+- [x] Real-time order book ingestion
+- [x] Trade stream processing
+- [x] 60+ microstructure features
+- [x] Entropy-based regime detection
+- [x] Volatility metrics (RV, BV, jumps)
+- [x] Toxicity metrics (VPIN, adverse selection)
+- [x] Parquet persistence
+- [x] Basic MM engine with paper trading
+- [x] Interactive TUI
+
+#### Phase 2: Backtesting Infrastructure (Weeks 5-8, ~40 hrs)
+- [ ] Historical data replay from Parquet
+- [ ] Fill simulation with realistic queue model
+- [ ] Slippage and latency modeling
+- [ ] Performance metrics suite (Sharpe, drawdown, fill rate)
+- [ ] Parameter sensitivity analysis
+- [ ] Walk-forward validation framework
+
+#### Phase 3: Strategy Optimization (Weeks 9-14, ~60 hrs)
+- [ ] Grid search for MM parameters
+- [ ] Bayesian optimization (Optuna integration)
+- [ ] Multi-objective optimization (Sharpe vs drawdown)
+- [ ] Regime-specific parameter sets
+- [ ] Out-of-sample validation
+- [ ] Statistical significance testing
+
+#### Phase 4: RL Integration (Weeks 15-20, ~60 hrs)
+- [ ] Gymnasium environment wrapper
+- [ ] State space design (features → state vector)
+- [ ] Reward shaping (PnL, inventory penalty, risk-adjusted)
+- [ ] PPO/SAC baseline training
+- [ ] Curriculum learning (easy → hard regimes)
+- [ ] Policy comparison vs rule-based
+
+#### Phase 5: Live Trading Preparation (Weeks 21-24, ~40 hrs)
+- [ ] Paper trading validation (minimum 4 weeks)
+- [ ] Risk management layer (kill switches, limits)
+- [ ] Order management system (OMS)
+- [ ] Execution quality monitoring
+- [ ] Live/paper mode switching
+- [ ] Alerting and logging
+
+#### Phase 6: Production & Evolution (Ongoing, ~20 hrs)
+- [ ] Multi-symbol support
+- [ ] Cross-exchange arbitrage signals
+- [ ] Ensemble of strategies
+- [ ] Continuous retraining pipeline
+- [ ] Performance attribution
+
+---
+
+## Methodology: Path to Consistent Profits
+
+### The Scientific Approach
+
+```
+        ┌─────────────────────────────────────────────────────┐
+        │                 HYPOTHESIS                          │
+        │   "Entropy-based regime detection allows            │
+        │    profitable market making by avoiding             │
+        │    adverse selection in low-entropy regimes"        │
+        └───────────────────────┬─────────────────────────────┘
+                                │
+        ┌───────────────────────▼─────────────────────────────┐
+        │                 DATA COLLECTION                      │
+        │   - Collect 3+ months of tick data                  │
+        │   - Compute all 60+ features                        │
+        │   - Label regime transitions                        │
+        └───────────────────────┬─────────────────────────────┘
+                                │
+        ┌───────────────────────▼─────────────────────────────┐
+        │                 BACKTESTING                          │
+        │   - Walk-forward validation                         │
+        │   - 1000+ simulated trades minimum                  │
+        │   - Multiple market conditions                      │
+        └───────────────────────┬─────────────────────────────┘
+                                │
+        ┌───────────────────────▼─────────────────────────────┐
+        │                 PAPER TRADING                        │
+        │   - Minimum 4 weeks live simulation                 │
+        │   - Compare to backtest expectations                │
+        │   - Identify execution gaps                         │
+        └───────────────────────┬─────────────────────────────┘
+                                │
+        ┌───────────────────────▼─────────────────────────────┐
+        │                 LIVE (tiny size)                     │
+        │   - Start with 0.1x target position                 │
+        │   - Scale up over 2-4 weeks                         │
+        │   - Continuous monitoring                           │
+        └─────────────────────────────────────────────────────┘
+```
+
+### What "Works" Means
+
+A strategy "works" when it demonstrates:
+
+1. **Statistical Edge**: Sharpe > 2.0 over 1000+ trades
+2. **Robustness**: Profitable in 70%+ of monthly periods
+3. **Drawdown Control**: Max drawdown < 20% of annual return
+4. **Fill Rate**: > 15% of quotes get filled
+5. **Inventory Mean-Reversion**: Position returns to zero within reasonable time
+6. **Execution Feasibility**: Latency budget achievable with your infrastructure
+
+### Metaheuristic Optimization Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    STRATEGY ENSEMBLE                         │
+│                                                             │
+│   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
+│   │ Strategy A  │  │ Strategy B  │  │ Strategy C  │        │
+│   │ (Tight MM)  │  │ (Wide MM)   │  │ (Adaptive)  │        │
+│   │ High entropy│  │ Low entropy │  │ RL-based    │        │
+│   └─────────────┘  └─────────────┘  └─────────────┘        │
+│          │                │                │                │
+│          └────────────────┼────────────────┘                │
+│                           │                                 │
+│                           ▼                                 │
+│                  ┌─────────────────┐                        │
+│                  │  Meta-Optimizer │                        │
+│                  │  (Optuna/DEAP)  │                        │
+│                  └─────────────────┘                        │
+│                           │                                 │
+│          ┌────────────────┼────────────────┐                │
+│          ▼                ▼                ▼                │
+│   ┌───────────┐    ┌───────────┐    ┌───────────┐          │
+│   │  Params   │    │  Weights  │    │  Regime   │          │
+│   │  Tuning   │    │ Allocation│    │ Switching │          │
+│   └───────────┘    └───────────┘    └───────────┘          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Success Criteria at Each Phase
+
+| Phase | Hours | Success Metric |
+|-------|-------|----------------|
+| Foundation | 40 | Features computed in <10ms, 60+ metrics |
+| Backtesting | 80 | Backtest matches paper within 20% |
+| Optimization | 140 | Found parameters with Sharpe > 1.5 |
+| RL | 200 | RL policy beats rule-based by 10%+ |
+| Live Prep | 240 | Paper trading Sharpe > 1.0 for 4 weeks |
+| Production | 260 | Ready for live with 0.1x size |
+
+---
+
+## Required Reading
+
+### Essential (Read First)
+
+1. **Avellaneda & Stoikov (2008)** - "High-frequency trading in a limit order book"
+   - THE foundational paper for market making
+   - Optimal quoting under inventory risk
+
+2. **Guéant, Lehalle, Fernandez-Tapia (2013)** - "Dealing with the Inventory Risk"
+   - Practical extensions to Avellaneda-Stoikov
+   - Closed-form solutions
+
+3. **Cartea, Jaimungal, Penalva (2015)** - "Algorithmic and High-Frequency Trading"
+   - Textbook covering everything
+   - Mathematical rigor + practical insights
+
+### RL for Trading
+
+4. **Spooner et al. (2018)** - "Market Making via Reinforcement Learning"
+   - First serious RL application to MM
+   - Reward shaping insights
+
+5. **Sadighian (2019)** - "Deep Reinforcement Learning for Market Making"
+   - Handles illiquid markets
+   - Practical architecture
+
+6. **Ganesh et al. (2019)** - "Reinforcement Learning for Market Making in Lit and Dark Pools"
+   - Multi-venue considerations
+   - State space design
+
+### Microstructure
+
+7. **Cont, Kukanov, Stoikov (2014)** - "The Price Impact of Order Book Events"
+   - Understanding when you get filled
+   - Queue position matters
+
+8. **Easley et al. (2012)** - "Flow Toxicity and Liquidity in a High-Frequency World"
+   - VPIN and informed trading
+   - When to pull quotes
+
+9. **Lehalle & Laruelle (2018)** - "Market Microstructure in Practice"
+   - Real-world implementation issues
+   - Latency, execution quality
 
 ---
 
@@ -77,78 +312,39 @@ The application provides an interactive menu-driven TUI:
 
 | Feature | Formula | Description |
 |---------|---------|-------------|
-| **Best Bid/Ask** | Top-of-book | Highest bid and lowest ask prices (Kyle, 1985) |
-| **Mid Price** | (bid + ask) / 2 | Fair value estimate (Harris, 2003) |
-| **Microprice** | mid + spread × imbalance | Volume-weighted mid price (Gatheral & Oomen, 2010) |
-| **Spread** | ask - bid | Transaction cost measure (Roll, 1984) |
-| **Imbalance** | (Vb-Va)/(Vb+Va) | Predicts short-term price direction (Cont et al., 2014) |
-| **PWI 1%/5%/25%/50%** | Cumulative imbalance | Price-weighted imbalance at depth percentiles (Cartea et al., 2015) |
-| **Bid/Ask Slope** | dV/dP regression | Order book resilience (Bouchaud et al., 2002) |
-| **Volume Imbalance Top 5** | Extended imbalance | Deeper book dynamics |
-| **Depth Ratio** | Top3/Top10 volume | Liquidity concentration (Gould et al., 2013) |
-| **Volume 0.01%** | Volume within 1bp | Immediate available liquidity |
-
-### Trade Features
-
-| Feature | Formula | Description |
-|---------|---------|-------------|
-| **Last Trade Price** | Most recent execution | Current market activity |
-| **Trade Imbalance** | Buy/Sell ratio | Aggression direction (Lee & Ready, 1991) |
-| **VWAP** | Σ(P×V)/ΣV | Execution quality benchmark (Berkowitz et al., 1988) |
-| **Price Change** | P(t) - P(t-1) | Tick-to-tick movement |
-| **Avg Trade Size** | Mean quantity | Institutional activity indicator |
-| **Signed Momentum** | Net buy/sell count | Directional pressure |
-| **Trade Rate** | Trades/second | Market intensity |
-| **Aggressor Ratio** | Taker/Total | Directional conviction (Biais et al., 1995) |
-
-### Order Flow Features
-
-| Feature | Formula | Description |
-|---------|---------|-------------|
-| **Flow Imbalance** | Placements - Cancels | Real-time pressure indicator |
-| **Flow Pressure** | Cumulative flow | Sustained pressure predictor |
-
-### Illiquidity Metrics
-
-| Feature | Formula | Description |
-|---------|---------|-------------|
-| **Roll Spread** | 2√(-cov) | Effective spread from autocovariance (Roll, 1984) |
-| **Amihud Lambda** | \|r\|/V | Price impact per volume (Amihud, 2002) |
-| **Kyle Lambda** | dP/dQ slope | Permanent price impact (Kyle, 1985) |
-| **Hasbrouck Lambda** | Trade impact | Effective spread estimator (Hasbrouck, 2009) |
-| **VPIN** | Volume-sync PIN | Informed trading probability (Easley et al., 2012) |
+| **Microprice** | mid + spread × imbalance | Volume-weighted fair value (Gatheral & Oomen, 2010) |
+| **PWI 1%/5%/25%/50%** | Cumulative imbalance | Depth-weighted order flow |
+| **Bid/Ask Slope** | dV/dP regression | Order book resilience |
+| **Depth Ratio** | Top3/Top10 volume | Liquidity concentration |
 
 ### Entropy Metrics
 
-| Feature | Formula | Description |
+| Feature | Windows | Description |
 |---------|---------|-------------|
-| **Tick Entropy** | H = -Σp×log(p) | Price direction randomness (Shannon, 1948) |
-| **Volume Entropy** | Volume-weighted H | Trade significance adjusted |
-| **Time Windows** | 1s, 5s, 10s, 15s, 30s, 1m, 15m | Multi-scale regime detection |
+| **Tick Entropy** | 1s, 5s, 10s, 15s, 30s, 1m, 15m | Price direction randomness |
+| **Volume Entropy** | Same windows | Trade-size weighted |
+
+High entropy (≈1.0) = random, good for MM
+Low entropy (≈0.3) = directional, avoid MM
 
 ### Volatility Metrics
 
 | Feature | Formula | Description |
 |---------|---------|-------------|
-| **Realized Volatility** | RV = √(Σr²/n) | Sum of squared returns (Andersen et al., 2003) |
-| **RV Windows** | 100 and 1000 trades | Multi-scale volatility measurement |
-| **Bipower Variation** | BV = (π/2)×Σ\|r_t\|\|r_{t-1}\| | Jump-robust volatility (Barndorff-Nielsen & Shephard, 2004) |
-| **Jump Indicator** | Z = (RV-BV)/√Var(BV) | Jump test statistic; Z > 3 = significant jump |
-| **Vol-of-Vol** | σ(σ_t) | Second-order uncertainty; regime instability |
+| **Realized Volatility** | √(Σr²/n) | Standard volatility |
+| **Bipower Variation** | (π/2)×Σ\|r_t\|\|r_{t-1}\| | Jump-robust (Barndorff-Nielsen, 2004) |
+| **Jump Indicator** | (RV-BV)/√Var | Z-score for jumps |
 
 ### Toxicity Metrics
 
-| Feature | Formula | Description |
-|---------|---------|-------------|
-| **Toxic Flow Ratio** | Toxic Vol / Total Vol | Informed trading proportion (Easley et al., 2012) |
-| **Adverse Selection** | E[cost to informed] | Expected loss to informed traders |
-| **Arrival Asymmetry** | (buys-sells)/total | Buy/sell rate imbalance |
-| **Size Toxicity** | Large/Small toxic ratio | Large trade informativeness |
-| **Toxicity Index** | Composite [0,1] | Weighted toxicity score |
+| Feature | Range | Description |
+|---------|-------|-------------|
+| **VPIN** | 0-1 | Informed trading probability |
+| **Toxicity Index** | 0-1 | Composite adverse selection |
 
 ---
 
-## Architecture
+## System Architecture
 
 ```
 Binance WebSocket
@@ -166,18 +362,17 @@ Binance WebSocket
                                                                ▼
                                                     FeatureFusionEngine
                                                                │
-                                              ┌────────────────┼────────────────┐
-                                              ▼                ▼                ▼
-                                        TUI (1Hz)      PersistenceEngine   Analysis
-                                                        (Parquet files)
+                              ┌────────────────────────────────┼────────────────┐
+                              │                                │                │
+                              ▼                                ▼                ▼
+                    MarketMakerEngine                    TUI (1Hz)      PersistenceEngine
+                              │                                              (Parquet)
+                              ▼
+                       MMSimulator
+                       (Paper Trading)
 ```
 
-## Data Storage
-
-Features are persisted to Apache Parquet files in `data/features/`:
-- Columnar format for efficient analytical queries
-- 60+ feature columns per snapshot
-- Automatic file rotation
+---
 
 ## Configuration
 
@@ -187,6 +382,10 @@ Features are persisted to Apache Parquet files in `data/features/`:
 | Feature Rate | 100ms | Internal computation rate |
 | TUI Update | 1000ms | Display refresh rate |
 | Parquet Batch | 1000 | Rows per file write |
+| MM Base Spread | 2 bps | Per-side spread |
+| MM Max Inventory | 0.1 BTC | Position limit |
+
+---
 
 ## Dependencies
 
@@ -195,27 +394,33 @@ Features are persisted to Apache Parquet files in `data/features/`:
 - **polars** - DataFrame/Parquet I/O
 - **rust_decimal** - Precise arithmetic
 - **crossbeam** - Lock-free channels
+- **serde** - Serialization
 
-## References
-
-- Amihud, Y. (2002). Illiquidity and stock returns
-- Andersen, T., et al. (2003). Modeling and forecasting realized volatility
-- Barndorff-Nielsen, O. & Shephard, N. (2004). Power and bipower variation with stochastic volatility and jumps
-- Biais, B., et al. (1995). An empirical analysis of the limit order book
-- Bouchaud, J.P., et al. (2002). Statistical properties of stock order books
-- Cartea, A., et al. (2015). Algorithmic and High-Frequency Trading
-- Cont, R., et al. (2014). The price impact of order book events
-- Easley, D., et al. (2012). Flow toxicity and liquidity in a high-frequency world
-- Gatheral, J. & Oomen, R. (2010). Zero-intelligence realized variance estimation
-- Glosten, L. & Milgrom, P. (1985). Bid, ask and transaction prices
-- Gould, M., et al. (2013). Limit order books
-- Harris, L. (2003). Trading and Exchanges
-- Hasbrouck, J. (2009). Trading costs and returns
-- Kyle, A.S. (1985). Continuous auctions and insider trading
-- Lee, C. & Ready, M. (1991). Inferring trade direction
-- Roll, R. (1984). A simple implicit measure of the effective bid-ask spread
-- Shannon, C. (1948). A mathematical theory of communication
+---
 
 ## License
 
 MIT
+
+---
+
+## References
+
+### Market Making
+- Avellaneda, M. & Stoikov, S. (2008). High-frequency trading in a limit order book
+- Guéant, O., Lehalle, C.A. & Fernandez-Tapia, J. (2013). Dealing with inventory risk
+- Guéant, O. (2017). Optimal Market Making
+
+### Microstructure
+- Cont, R., Kukanov, A. & Stoikov, S. (2014). The price impact of order book events
+- Easley, D., López de Prado, M. & O'Hara, M. (2012). Flow toxicity and liquidity
+- Kyle, A.S. (1985). Continuous auctions and insider trading
+
+### Volatility
+- Andersen, T., Bollerslev, T., Diebold, F. & Labys, P. (2003). Realized volatility
+- Barndorff-Nielsen, O. & Shephard, N. (2004). Power and bipower variation
+
+### RL for Trading
+- Spooner, T. et al. (2018). Market making via reinforcement learning
+- Sadighian, J. (2019). Deep reinforcement learning for market making
+- Ganesh, S. et al. (2019). RL for market making in lit and dark pools
