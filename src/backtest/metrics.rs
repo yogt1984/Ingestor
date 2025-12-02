@@ -6,7 +6,6 @@ use rust_decimal::Decimal;
 use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
 
 /// A single trade record
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -307,7 +306,7 @@ impl PerformanceMetrics {
         }
 
         let returns = equity_curve.returns();
-        let log_returns = equity_curve.log_returns();
+        let _log_returns = equity_curve.log_returns();
 
         // Time info
         let start_time = equity_curve.points.first().map(|p| p.timestamp_ms).unwrap_or(0);

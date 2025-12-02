@@ -4,7 +4,6 @@
 //! as a time-ordered stream for backtesting.
 
 use std::path::{Path, PathBuf};
-use std::collections::BinaryHeap;
 use std::cmp::Ordering;
 
 use polars::prelude::*;
