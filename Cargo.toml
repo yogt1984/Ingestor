@@ -27,4 +27,5 @@ polars = { version = "0.33.2", features = ["parquet", "lazy", "json"] }
 num = "0.4"
 tempfile = "3.3.0"
 ratatui = "0.26"
-crossterm = "0.28"  
+crossterm = "0.28"
+clap = { version = "4", features = ["derive"] }  

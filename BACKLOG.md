@@ -1,30 +1,63 @@
 # Development Backlog
 
-## Current Status: Phase 1 Complete ✅
+## Current Status: Phase 2 In Progress 🔄
 
-**Completed**: Real-time feature extraction, paper trading MM, TUI, persistence
+**Completed**: Real-time feature extraction, paper trading MM, TUI, persistence, basic backtesting
 
 ---
 
-## Phase 2: Backtesting Infrastructure (Next)
+## Session Notes: 2025-12-02
 
-### Priority 1: Replay Engine [NEXT]
-- [ ] `src/backtest/replay.rs` - Read Parquet files and replay as time-ordered stream
-- [ ] `src/backtest/mod.rs` - Backtest harness
-- [ ] Time simulation (accelerated replay)
-- [ ] Event ordering (features + trades)
+### What Was Done Today
+1. **Wired up backtesting module** - Added `pub mod backtest` to lib.rs, added `clap` dependency
+2. **Fixed FeaturesSnapshot struct mismatch** - Updated replay.rs to match current struct (timestamp as String, added missing fields)
+3. **Fixed timestamp parsing** - Changed from `timestamp_ms: i64` to parsing RFC3339 strings with chrono
+4. **Fixed critical data bug** - Events with `mid_price = None` were becoming 0, causing bogus fills. Added validation to skip invalid events.
+5. **Fixed per-trade PnL calculation** - Was returning `None` for all trades, now properly calculates realized PnL on position closes.
 
-### Priority 2: Fill Simulation
-- [ ] Realistic queue-position model
+### Current Backtest Results (with fixes)
+```
+Best Parameters (1bps spread, 0.3 skew):
+- Sharpe: +0.44
+- Return: +52% over 47 days
+- Win Rate: 63%
+- Max DD: 0.54%
+- Trades: 2,113
+```
+
+### Known Issues / Next Steps
+1. **Fill model too optimistic** - Current model assumes fill when mid-price crosses quote. Real MM needs queue position.
+   - 52% return over 47 days is unrealistic
+   - Investigate why tight spreads (1bps) show such high returns
+
+2. **Data quality issues** - Some Parquet files have missing `mid_price` values (now filtered, but should fix at source)
+
+3. **Debug logging to clean up** - Remove temporary `log::info!` statements in harness.rs
+
+---
+
+## Phase 2: Backtesting Infrastructure (In Progress)
+
+### Priority 1: Replay Engine ✅ DONE
+- [x] `src/backtest/replay.rs` - Read Parquet files and replay as time-ordered stream
+- [x] `src/backtest/mod.rs` - Backtest harness
+- [x] Time simulation (accelerated replay)
+- [x] Event ordering (features + trades)
+
+### Priority 2: Fill Simulation ⚠️ PARTIAL
+- [ ] **Realistic queue-position model** ← NEXT PRIORITY
+  - Current: Fill if mid crosses quote (too aggressive)
+  - Need: Model queue position, partial fills, adverse selection
 - [ ] Slippage estimation
 - [ ] Latency modeling (configurable delay)
 
-### Priority 3: Performance Metrics
-- [ ] Sharpe ratio (annualized)
-- [ ] Maximum drawdown
-- [ ] Fill rate analysis
-- [ ] Inventory distribution
-- [ ] PnL attribution (spread capture vs directional)
+### Priority 3: Performance Metrics ✅ DONE
+- [x] Sharpe ratio (annualized)
+- [x] Maximum drawdown
+- [x] Fill rate analysis
+- [x] Inventory distribution
+- [x] PnL attribution (spread capture vs directional)
+- [x] Win rate, profit factor, Sortino, Calmar
 
 ### Priority 4: Validation Framework
 - [ ] Walk-forward validation
@@ -229,6 +262,8 @@ Model:  LSTM/GRU or Transformer
 | 2024-12-02 | Start with backtesting, not RL | Need baseline validation first |
 | 2024-12-02 | Supervised ML before RL | Clearer targets, easier debugging |
 | 2024-12-02 | Rust for core, Python for ML | Performance where needed, ecosystem where helpful |
+| 2025-12-02 | Skip events with missing mid_price | Data quality issue causing fills at price=0, corrupting backtest results |
+| 2025-12-02 | Priority: Fix fill simulation realism | Current 52% returns are unrealistic, need queue-position model before trusting results |
 
 ---
 
