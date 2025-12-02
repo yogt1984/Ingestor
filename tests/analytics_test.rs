@@ -1,11 +1,13 @@
 use ingestor::{
     feature_fusion::{FeatureFusionEngine, FeaturesSnapshot},
-    orderbook::ConcurrentOrderBook,
-    tradeslog::{ConcurrentTradesLog, Trade},
+    orderbook::{ConcurrentOrderBook, OrderBookFeatures},
+    tradeslog::{ConcurrentTradesLog, Trade, TradesLogFeatures},
+    illiquidity::IlliquidityMetrics,
+    entropy::EntropyMetrics,
 };
 
 use rust_decimal_macros::dec;
-use tokio::{sync::watch, time::{sleep, Duration}};
+use tokio::{sync::{watch, mpsc}, time::{sleep, Duration}};
 use std::sync::Arc;
 
 #[tokio::test]
@@ -22,12 +24,23 @@ async fn test_full_analytics_pipeline() {
         is_buyer_maker: false,
     }).await;
 
-    let (_ill_tx, ill_rx) = tokio::sync::mpsc::channel(10);
-    let (_ent_tx, ent_rx) = tokio::sync::mpsc::channel(10);
-    let (_feat_tx, feat_rx) = tokio::sync::mpsc::channel::<FeaturesSnapshot>(10);
+    let (_ob_tx, ob_rx) = mpsc::channel::<OrderBookFeatures>(10);
+    let (_tl_tx, tl_rx) = mpsc::channel::<TradesLogFeatures>(10);
+    let (_ill_tx, ill_rx) = mpsc::channel::<IlliquidityMetrics>(10);
+    let (_ent_tx, ent_rx) = mpsc::channel::<EntropyMetrics>(10);
+    let (_feat_tx, feat_rx) = mpsc::channel::<FeaturesSnapshot>(10);
     drop(feat_rx);
-    let fusion            = FeatureFusionEngine::new(order_book, trades_log.clone(), ill_rx, ent_rx, _feat_tx);
-    let handle            = tokio::spawn(async move {
+
+    let fusion = FeatureFusionEngine::new(
+        order_book,
+        trades_log.clone(),
+        ob_rx,
+        tl_rx,
+        ill_rx,
+        ent_rx,
+        _feat_tx,
+    );
+    let handle = tokio::spawn(async move {
         fusion.run(shutdown_rx).await;
     });
 
