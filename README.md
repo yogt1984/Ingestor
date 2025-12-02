@@ -406,21 +406,41 @@ MIT
 
 ## References
 
-### Market Making
+### Market Making (Core)
 - Avellaneda, M. & Stoikov, S. (2008). High-frequency trading in a limit order book
 - Guéant, O., Lehalle, C.A. & Fernandez-Tapia, J. (2013). Dealing with inventory risk
 - Guéant, O. (2017). Optimal Market Making
+- Cartea, A., Jaimungal, S. & Penalva, J. (2015). Algorithmic and High-Frequency Trading (textbook)
 
 ### Microstructure
 - Cont, R., Kukanov, A. & Stoikov, S. (2014). The price impact of order book events
 - Easley, D., López de Prado, M. & O'Hara, M. (2012). Flow toxicity and liquidity
 - Kyle, A.S. (1985). Continuous auctions and insider trading
+- Glosten, L. & Milgrom, P. (1985). Bid, ask and transaction prices
+- Harris, L. (2003). Trading and Exchanges (textbook)
+- Hasbrouck, J. (2009). Trading costs and returns for US equities
+- Lehalle, C.A. & Laruelle, S. (2018). Market Microstructure in Practice
 
-### Volatility
+### Order Book Analysis
+- Biais, B., Hillion, P. & Spatt, C. (1995). An empirical analysis of the limit order book
+- Bouchaud, J.P., Mézard, M. & Potters, M. (2002). Statistical properties of stock order books
+- Gatheral, J. & Oomen, R. (2010). Zero-intelligence realized variance estimation
+- Gould, M., Porter, M., Williams, S. et al. (2013). Limit order books
+- Roll, R. (1984). A simple implicit measure of the effective bid-ask spread
+- Lee, C. & Ready, M. (1991). Inferring trade direction from intraday data
+- Amihud, Y. (2002). Illiquidity and stock returns
+
+### Volatility & Jumps
 - Andersen, T., Bollerslev, T., Diebold, F. & Labys, P. (2003). Realized volatility
-- Barndorff-Nielsen, O. & Shephard, N. (2004). Power and bipower variation
+- Barndorff-Nielsen, O. & Shephard, N. (2004). Power and bipower variation with jumps
 
 ### RL for Trading
-- Spooner, T. et al. (2018). Market making via reinforcement learning
-- Sadighian, J. (2019). Deep reinforcement learning for market making
-- Ganesh, S. et al. (2019). RL for market making in lit and dark pools
+- Spooner, T., Fearnley, J., Mayraz, G. et al. (2018). Market making via reinforcement learning
+- Sadighian, J. (2019). Deep reinforcement learning for market making in corporate bonds
+- Ganesh, S., Vadori, N., Xu, M. et al. (2019). RL for market making in lit and dark pools
+- Ning, B., Ling, F. & Jaimungal, S. (2021). Double deep Q-learning for optimal execution
+
+### Deep Learning for Finance
+- Zhang, Z., Zohren, S. & Roberts, S. (2019). DeepLOB: Deep convolutional neural networks for LOB
+- Sirignano, J. & Cont, R. (2019). Universal features of price formation in financial markets
+- Kolm, P. & Ritter, G. (2019). Modern perspectives on reinforcement learning in finance
