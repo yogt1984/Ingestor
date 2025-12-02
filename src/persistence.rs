@@ -96,6 +96,20 @@ pub fn save_feature_as_parquet(features: &[FeaturesSnapshot], filepath: impl AsR
         // Complex vector fields (serialized as JSON)
         "volume_vector" => features.iter().map(|f| serialize_complex(&f.volume_vector)).collect::<Vec<_>>(),
         "pwi_vector" => features.iter().map(|f| serialize_complex(&f.pwi_vector)).collect::<Vec<_>>(),
+        // Volatility metrics
+        "realized_volatility_100" => features.iter().map(|f| f.realized_volatility_100.unwrap_or(f64::NAN)).collect::<Vec<_>>(),
+        "realized_volatility_1000" => features.iter().map(|f| f.realized_volatility_1000.unwrap_or(f64::NAN)).collect::<Vec<_>>(),
+        "bipower_variation_100" => features.iter().map(|f| f.bipower_variation_100.unwrap_or(f64::NAN)).collect::<Vec<_>>(),
+        "jump_indicator" => features.iter().map(|f| f.jump_indicator.unwrap_or(f64::NAN)).collect::<Vec<_>>(),
+        "vol_of_vol" => features.iter().map(|f| f.vol_of_vol.unwrap_or(f64::NAN)).collect::<Vec<_>>(),
+        // Toxicity metrics
+        "toxic_flow_ratio_micro" => features.iter().map(|f| decimal_to_f64(f.toxic_flow_ratio_micro)).collect::<Vec<_>>(),
+        "toxic_flow_ratio_mid" => features.iter().map(|f| decimal_to_f64(f.toxic_flow_ratio_mid)).collect::<Vec<_>>(),
+        "adverse_selection_micro" => features.iter().map(|f| decimal_to_f64(f.adverse_selection_micro)).collect::<Vec<_>>(),
+        "adverse_selection_mid" => features.iter().map(|f| decimal_to_f64(f.adverse_selection_mid)).collect::<Vec<_>>(),
+        "arrival_asymmetry" => features.iter().map(|f| decimal_to_f64(f.arrival_asymmetry)).collect::<Vec<_>>(),
+        "size_toxicity_ratio" => features.iter().map(|f| decimal_to_f64(f.size_toxicity_ratio)).collect::<Vec<_>>(),
+        "toxicity_index" => features.iter().map(|f| decimal_to_f64(f.toxicity_index)).collect::<Vec<_>>(),
     ].context("Failed to create DataFrame")?;
 
     // Create parent directories if they don't exist
@@ -477,6 +491,20 @@ mod tests {
             // Complex vector fields
             volume_vector: vec![(dec!(0.01), (dec!(100.0), dec!(50.0)))],
             pwi_vector: vec![(dec!(0.01), dec!(100.5))],
+            // Volatility metrics
+            realized_volatility_100: Some(0.001),
+            realized_volatility_1000: Some(0.0008),
+            bipower_variation_100: Some(0.0009),
+            jump_indicator: Some(1.5),
+            vol_of_vol: Some(0.0002),
+            // Toxicity metrics
+            toxic_flow_ratio_micro: Some(dec!(0.25)),
+            toxic_flow_ratio_mid: Some(dec!(0.22)),
+            adverse_selection_micro: Some(dec!(0.001)),
+            adverse_selection_mid: Some(dec!(0.0008)),
+            arrival_asymmetry: Some(dec!(0.15)),
+            size_toxicity_ratio: Some(dec!(1.2)),
+            toxicity_index: Some(dec!(0.28)),
         }
     }
 

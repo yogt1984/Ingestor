@@ -8,6 +8,8 @@ use ingestor::{
     tradeslog::{ConcurrentTradesLog, Trade, TradesLogFeatures},
     entropy::{EntropyEngine, EntropyConfig, EntropyMetrics},
     illiquidity::{IlliquidityEngine, IlliquidityConfig, IlliquidityMetrics},
+    volatility::VolatilityMetrics,
+    toxicity::ToxicityMetrics,
     feature_fusion::{FeatureFusionEngine, FeaturesSnapshot},
     persistence::{PersistenceEngine, save_feature_as_parquet_path},
 };
@@ -44,6 +46,8 @@ async fn test_full_pipeline_to_parquet() {
     let (tradeslog_tx, tradeslog_rx) = mpsc::channel::<TradesLogFeatures>(100);
     let (entropy_tx, entropy_rx) = mpsc::channel::<EntropyMetrics>(100);
     let (illiquidity_tx, illiquidity_rx) = mpsc::channel::<IlliquidityMetrics>(100);
+    let (_volatility_tx, volatility_rx) = mpsc::channel::<VolatilityMetrics>(100);
+    let (_toxicity_tx, toxicity_rx) = mpsc::channel::<ToxicityMetrics>(100);
     let (fused_tx, fused_rx) = mpsc::channel::<FeaturesSnapshot>(100);
     let (persist_tx, persist_rx) = channel::bounded::<FeaturesSnapshot>(1000);
 
@@ -71,6 +75,8 @@ async fn test_full_pipeline_to_parquet() {
         tradeslog_rx,
         illiquidity_rx,
         entropy_rx,
+        volatility_rx,
+        toxicity_rx,
         fused_tx,
     );
     
@@ -253,6 +259,20 @@ async fn test_persistence_engine_with_entropy() {
             volume_tick_entropy_15m: Some(rust_decimal::Decimal::from_f64(2.9 + i as f64 * 0.01).unwrap()),
             volume_vector: vec![(dec!(0.01), (dec!(100.0), dec!(50.0)))],
             pwi_vector: vec![(dec!(0.01), dec!(100.5))],
+            // Volatility metrics
+            realized_volatility_100: Some(0.001),
+            realized_volatility_1000: Some(0.0008),
+            bipower_variation_100: Some(0.0009),
+            jump_indicator: Some(1.5),
+            vol_of_vol: Some(0.0002),
+            // Toxicity metrics
+            toxic_flow_ratio_micro: Some(dec!(0.25)),
+            toxic_flow_ratio_mid: Some(dec!(0.22)),
+            adverse_selection_micro: Some(dec!(0.001)),
+            adverse_selection_mid: Some(dec!(0.0008)),
+            arrival_asymmetry: Some(dec!(0.15)),
+            size_toxicity_ratio: Some(dec!(1.2)),
+            toxicity_index: Some(dec!(0.28)),
         };
         
         tx.send(snapshot).unwrap();
@@ -307,6 +327,8 @@ async fn test_feature_fusion_includes_all_entropy() {
     let (tl_tx, tl_rx) = mpsc::channel::<TradesLogFeatures>(10);
     let (_ill_tx, ill_rx) = mpsc::channel::<IlliquidityMetrics>(10);
     let (ent_tx, ent_rx) = mpsc::channel::<EntropyMetrics>(10);
+    let (_vol_tx, vol_rx) = mpsc::channel::<VolatilityMetrics>(10);
+    let (_tox_tx, tox_rx) = mpsc::channel::<ToxicityMetrics>(10);
     let (fused_tx, mut fused_rx) = mpsc::channel::<FeaturesSnapshot>(10);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
@@ -323,6 +345,8 @@ async fn test_feature_fusion_includes_all_entropy() {
         tl_rx,
         ill_rx,
         ent_rx,
+        vol_rx,
+        tox_rx,
         fused_tx,
     );
 

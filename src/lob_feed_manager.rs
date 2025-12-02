@@ -19,17 +19,24 @@ pub struct BinanceDepthUpdate {
 
 pub struct LobFeedManager {
     order_book: ConcurrentOrderBook,
-    hf_uri: String,
-    lf_uri: String,
+    symbol: String,
 }
 
 impl LobFeedManager {
-    pub fn new(hf_uri: String, lf_uri: String) -> Self {
+    pub fn new(symbol: &str) -> Self {
+        let symbol_lower = symbol.to_lowercase();
         Self {
             order_book: ConcurrentOrderBook::new(),
-            hf_uri,
-            lf_uri,
+            symbol: symbol_lower,
         }
+    }
+
+    fn build_hf_uri(&self) -> String {
+        format!("wss://stream.binance.com:9443/ws/{}@depth@100ms", self.symbol)
+    }
+
+    fn build_lf_uri(&self) -> String {
+        format!("wss://stream.binance.com:9443/ws/{}@depth", self.symbol)
     }
 
     pub fn get_order_book(&self) -> ConcurrentOrderBook {
@@ -39,8 +46,8 @@ impl LobFeedManager {
     pub async fn start(&self, shutdown_rx: tokio::sync::watch::Receiver<bool>) {
         let hf_book = self.order_book.clone();
         let lf_book = self.order_book.clone();
-        let hf_uri = self.hf_uri.clone();
-        let lf_uri = self.lf_uri.clone();
+        let hf_uri = self.build_hf_uri();
+        let lf_uri = self.build_lf_uri();
         let hf_shutdown = shutdown_rx.clone();
         let lf_shutdown = shutdown_rx.clone();
         let hf_task = task::spawn(Self::run_feed(hf_uri, hf_book, true, hf_shutdown));
@@ -68,7 +75,7 @@ impl LobFeedManager {
                 connect_result = connect_async(&uri) => {
                     match connect_result {
                         Ok((ws_stream, _)) => {
-                            info!("Connected to WebSocket at {}", uri);
+                            debug!("Connected to WebSocket at {}", uri);
                             let (_, mut read) = ws_stream.split();
                             loop {
                                 tokio::select! {

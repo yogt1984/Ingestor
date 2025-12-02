@@ -4,3 +4,5 @@ pub mod feature_fusion;
 pub mod persistence;
 pub mod illiquidity;
 pub mod entropy;
+pub mod volatility;
+pub mod toxicity;

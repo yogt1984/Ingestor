@@ -42,16 +42,17 @@ pub struct FeedMetrics {
 
 pub struct LogFeedManager {
     trades_log: ConcurrentTradesLog,
-    uri: String,
+    symbol: String,
     metrics: FeedMetrics,
 }
 
 impl LogFeedManager {
-    pub fn new(uri: String, trades_log_capacity: usize) -> Self {
+    pub fn new(symbol: &str, trades_log_capacity: usize) -> Self {
+        let symbol_lower = symbol.to_lowercase();
         let trades_log = ConcurrentTradesLog::new(trades_log_capacity);
         Self {
             trades_log,
-            uri,
+            symbol: symbol_lower,
             metrics: FeedMetrics {
                 messages_received: metrics::register_counter!("log_feed_messages_received"),
                 trades_processed: metrics::register_counter!("log_feed_trades_processed"),
@@ -61,8 +62,13 @@ impl LogFeedManager {
         }
     }
 
+    fn build_uri(&self) -> String {
+        format!("wss://stream.binance.com:9443/ws/{}@trade", self.symbol)
+    }
+
     pub async fn start(&self, mut shutdown_rx: tokio::sync::watch::Receiver<bool>) {
         let mut retry_delay = Duration::from_secs(1);
+        let uri = self.build_uri();
         loop {
             tokio::select! {
                 _ = shutdown_rx.changed() => {
@@ -73,11 +79,11 @@ impl LogFeedManager {
                         continue;
                     }
                 }
-                connect_result = connect_async(&self.uri) => {
+                connect_result = connect_async(&uri) => {
                     match connect_result {
                         Ok((ws_stream, _)) => {
                             self.metrics.current_connections.set(1.0);
-                            info!("Connected to Trade WebSocket at {}", self.uri);
+                            debug!("Connected to Trade WebSocket at {}", uri);
                             let (_, mut read) = ws_stream.split();
                             loop {
                                 tokio::select! {
@@ -115,12 +121,12 @@ impl LogFeedManager {
                                     }
                                 }
                             }
-                            warn!("⚠️ Trade WebSocket stream closed for {}", self.uri);
+                            warn!("⚠️ Trade WebSocket stream closed for {}", uri);
                             self.metrics.current_connections.set(0.0);
                         }
                         Err(err) => {
                             self.metrics.connection_errors.increment(1);
-                            error!("Failed to connect to {}: {}", self.uri, err);
+                            error!("Failed to connect to {}: {}", uri, err);
                         }
                     }
                 }
@@ -128,7 +134,7 @@ impl LogFeedManager {
             if *shutdown_rx.borrow() {
                 break;
             }
-            warn!("Reconnecting to {} in {:?}...", self.uri, retry_delay);
+            warn!("Reconnecting to {} in {:?}...", uri, retry_delay);
             sleep(retry_delay).await;
             retry_delay = std::cmp::min(retry_delay * 2, Duration::from_secs(60));
         }
