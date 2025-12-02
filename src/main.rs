@@ -10,6 +10,8 @@ mod illiquidity;
 mod entropy;
 mod volatility;
 mod toxicity;
+mod market_maker;
+mod mm_simulator;
 mod tui;
 
 use crossbeam::channel;
