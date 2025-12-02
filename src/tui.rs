@@ -379,6 +379,7 @@ fn main_loop(terminal: &mut Term, rx: Receiver<FeaturesSnapshot>, symbol: String
 
     // History for sparklines
     let mut microprice_hist: VecDeque<f64> = VecDeque::with_capacity(MAX_HISTORY);
+    let mut pwi50_hist: VecDeque<f64> = VecDeque::with_capacity(MAX_HISTORY);
     let mut entropy_hist: VecDeque<f64> = VecDeque::with_capacity(MAX_HISTORY);
 
     loop {
@@ -435,6 +436,11 @@ fn main_loop(terminal: &mut Term, rx: Receiver<FeaturesSnapshot>, symbol: String
                     microprice_hist.pop_front();
                 }
 
+                pwi50_hist.push_back(current_features.pwi_50);
+                if pwi50_hist.len() > MAX_HISTORY {
+                    pwi50_hist.pop_front();
+                }
+
                 entropy_hist.push_back(current_features.tick_entropy_1m);
                 if entropy_hist.len() > MAX_HISTORY {
                     entropy_hist.pop_front();
@@ -455,7 +461,7 @@ fn main_loop(terminal: &mut Term, rx: Receiver<FeaturesSnapshot>, symbol: String
                     if !has_data {
                         draw_waiting(f);
                     } else {
-                        draw_live(f, &symbol, &current_features, &microprice_hist, &entropy_hist);
+                        draw_live(f, &symbol, &current_features, &microprice_hist, &pwi50_hist, &entropy_hist);
                     }
                 })?;
             }
@@ -520,6 +526,7 @@ fn draw_live(
     symbol: &str,
     feat: &AveragedFeatures,
     microprice_hist: &VecDeque<f64>,
+    pwi50_hist: &VecDeque<f64>,
     entropy_hist: &VecDeque<f64>,
 ) {
     let size = f.size();
@@ -670,10 +677,14 @@ fn draw_live(
     );
     f.render_widget(entropy_para, rows[4]);
 
-    // Sparklines
+    // Sparklines - 3 columns for microprice, PWI50, entropy
     let spark_cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+        ])
         .split(rows[5]);
 
     fn normalize_spark(buf: &VecDeque<f64>) -> Vec<u64> {
@@ -684,19 +695,39 @@ fn draw_live(
         buf.iter().map(|v| (((v - min) / span) * 100.0) as u64).collect()
     }
 
+    // Microprice sparkline
     let micro_data = normalize_spark(microprice_hist);
     let micro_spark = Sparkline::default()
-        .block(Block::default().title(format!(" MICROPRICE {:.2} ", feat.microprice)).borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray)))
+        .block(Block::default()
+            .title(format!(" MICROPRICE {:.2} ", feat.microprice))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)))
         .style(Style::default().fg(Color::Cyan))
         .data(&micro_data);
     f.render_widget(micro_spark, spark_cols[0]);
 
+    // PWI50 sparkline
+    let pwi_data = normalize_spark(pwi50_hist);
+    let pwi_color = if feat.pwi_50 > 0.0 { Color::Green } else if feat.pwi_50 < 0.0 { Color::Red } else { Color::Yellow };
+    let pwi_spark = Sparkline::default()
+        .block(Block::default()
+            .title(format!(" PWI50 {:+.2}% ", feat.pwi_50 * 100.0))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)))
+        .style(Style::default().fg(pwi_color))
+        .data(&pwi_data);
+    f.render_widget(pwi_spark, spark_cols[1]);
+
+    // Entropy sparkline
     let ent_data = normalize_spark(entropy_hist);
     let ent_spark = Sparkline::default()
-        .block(Block::default().title(format!(" ENTROPY 1m {:.3} ", feat.tick_entropy_1m)).borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray)))
+        .block(Block::default()
+            .title(format!(" ENTROPY {:.3} ", feat.tick_entropy_1m))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)))
         .style(Style::default().fg(Color::Magenta))
         .data(&ent_data);
-    f.render_widget(ent_spark, spark_cols[1]);
+    f.render_widget(ent_spark, spark_cols[2]);
 }
 
 fn draw_features(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
