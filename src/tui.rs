@@ -437,6 +437,14 @@ fn get_feature_descriptions() -> Vec<(&'static str, &'static str, &'static str)>
         ("Arrival Asymmetry", "(buys-sells)/total", "Normalized difference between buy and sell arrival rates. Directional pressure indicator."),
         ("Size Toxicity", "Large/Small toxic ratio", "Compares toxicity of large vs small trades. > 1 means large trades more informed."),
         ("Toxicity Index", "Composite score [0,1]", "Weighted combination of toxicity measures. Higher = more toxic trading environment."),
+
+        // Fill Simulation (Backtesting)
+        ("FILL SIMULATION", "", ""),
+        ("Queue Position", "0=front, 1=back", "Position in limit order book queue. Front of queue gets filled first; back rarely gets filled (Moallemi & Yuan, 2017)."),
+        ("Fill Probability", "P(fill | touch)", "Probability of getting filled given price touches our quote. Depends on queue position, trade intensity, and market regime."),
+        ("Adverse Selection", "E[loss | filled]", "Expected loss when filled due to informed traders. Fills tend to precede unfavorable price moves (Cont et al., 2014)."),
+        ("Trade Intensity", "Trades/second", "Higher trade rate increases fill probability. More market orders hitting the book = more chances to get filled."),
+        ("Spread Competitiveness", "Our spread vs market", "Tighter spreads relative to market get priority fills. But too tight = adverse selection."),
     ]
 }
 
