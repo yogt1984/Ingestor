@@ -163,6 +163,26 @@ impl BacktestEngine {
         }
     }
 
+    /// Create a backtest engine from pre-loaded events
+    /// Used by walk-forward validation to avoid reloading data
+    pub fn from_events(config: BacktestConfig, events: Vec<ReplayEvent>) -> Self {
+        let replay = ParquetReplay::from_events(events);
+        let mm = MarketMakerEngine::new(config.mm.clone());
+        let fill_sim = FillSimulator::new(config.fill_sim.clone());
+
+        Self {
+            config,
+            replay,
+            mm,
+            fill_sim,
+            trade_log: TradeLog::new(),
+            equity_curve: EquityCurve::new(),
+            events_processed: 0,
+            fills_generated: 0,
+            last_mid_price: None,
+        }
+    }
+
     /// Load historical data
     pub fn load_data(&mut self) -> Result<usize> {
         self.replay.load()

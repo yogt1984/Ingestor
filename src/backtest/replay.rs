@@ -343,6 +343,20 @@ impl ParquetReplay {
     pub fn iter(&self) -> impl Iterator<Item = &ReplayEvent> {
         self.events.iter()
     }
+
+    /// Consume the replay and return all events
+    pub fn into_events(self) -> Vec<ReplayEvent> {
+        self.events
+    }
+
+    /// Create a replay from pre-loaded events
+    pub fn from_events(events: Vec<ReplayEvent>) -> Self {
+        Self {
+            config: ReplayConfig::default(),
+            events,
+            current_index: 0,
+        }
+    }
 }
 
 #[cfg(test)]

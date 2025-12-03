@@ -101,6 +101,32 @@ enum Commands {
         skews: String,
     },
 
+    /// Walk-forward validation (time-series cross-validation)
+    WalkForward {
+        /// Number of folds
+        #[arg(long, default_value = "5")]
+        folds: usize,
+
+        /// Test period per fold (hours)
+        #[arg(long, default_value = "24")]
+        test_hours: f64,
+
+        /// Use rolling (vs anchored/expanding) window
+        #[arg(long)]
+        rolling: bool,
+
+        /// Output file for results
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
+
+    /// Validate data quality
+    Validate {
+        /// Output file for report
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
+
     /// Show info about data
     Info,
 }
@@ -112,6 +138,12 @@ fn main() -> Result<()> {
     match &cli.command {
         Some(Commands::Sweep { spreads, skews }) => {
             run_sweep(&cli, spreads, skews)?;
+        }
+        Some(Commands::WalkForward { folds, test_hours, rolling, output }) => {
+            run_walk_forward(&cli, *folds, *test_hours, *rolling, output.clone())?;
+        }
+        Some(Commands::Validate { output }) => {
+            run_validate(&cli, output.clone())?;
         }
         Some(Commands::Info) => {
             show_info(&cli)?;
@@ -354,6 +386,83 @@ fn build_config(cli: &Cli) -> BacktestConfig {
         use_realistic_fills: !cli.naive_fills,
         ..Default::default()
     }
+}
+
+fn run_walk_forward(
+    cli: &Cli,
+    folds: usize,
+    test_hours: f64,
+    rolling: bool,
+    output: Option<PathBuf>,
+) -> Result<()> {
+    use ingestor::backtest::walk_forward::{WalkForwardEngine, WalkForwardConfig, ParamGrid};
+
+    println!("═══════════════════════════════════════════════════════");
+    println!("           WALK-FORWARD VALIDATION                     ");
+    println!("═══════════════════════════════════════════════════════");
+    println!();
+    println!("Configuration:");
+    println!("  Data:          {:?}", cli.data);
+    println!("  Folds:         {}", folds);
+    println!("  Test Period:   {} hours per fold", test_hours);
+    println!("  Mode:          {}", if rolling { "Rolling" } else { "Anchored (expanding)" });
+    println!();
+
+    let config = WalkForwardConfig {
+        n_folds: folds,
+        test_hours,
+        anchored: !rolling,
+        data_dir: cli.data.clone(),
+        param_grid: ParamGrid {
+            spreads: vec![1.0, 2.0, 3.0, 4.0, 5.0],
+            skews: vec![0.3, 0.5, 0.7],
+            fill_probs: vec![0.05, 0.10, 0.15],
+        },
+        verbose: !cli.quiet,
+        ..Default::default()
+    };
+
+    let mut engine = WalkForwardEngine::new(config);
+
+    println!("Loading data...");
+    let num_events = engine.load_data()?;
+    println!("Loaded {} events", num_events);
+    println!();
+
+    let results = engine.run()?;
+
+    if let Some(ref output_path) = output {
+        results.save_json(output_path.to_str().unwrap())?;
+        println!();
+        println!("Results saved to: {:?}", output_path);
+    }
+
+    Ok(())
+}
+
+fn run_validate(cli: &Cli, output: Option<PathBuf>) -> Result<()> {
+    use ingestor::backtest::data_quality::DataValidator;
+
+    println!("═══════════════════════════════════════════════════════");
+    println!("           DATA QUALITY VALIDATION                     ");
+    println!("═══════════════════════════════════════════════════════");
+    println!();
+    println!("Data directory: {:?}", cli.data);
+    println!();
+    println!("Running validation...");
+
+    let validator = DataValidator::new();
+    let report = validator.validate_directory(&cli.data)?;
+
+    report.print_summary();
+
+    if let Some(ref output_path) = output {
+        report.save_json(output_path.to_str().unwrap())?;
+        println!();
+        println!("Report saved to: {:?}", output_path);
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
