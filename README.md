@@ -412,8 +412,9 @@ MIT
 - Guéant, O. (2017). Optimal Market Making
 - Cartea, A., Jaimungal, S. & Penalva, J. (2015). Algorithmic and High-Frequency Trading (textbook)
 
-### Microstructure
+### Microstructure & Fill Simulation
 - Cont, R., Kukanov, A. & Stoikov, S. (2014). The price impact of order book events
+- Moallemi, C.C. & Yuan, K. (2017). The value of queue position in a limit order book
 - Easley, D., López de Prado, M. & O'Hara, M. (2012). Flow toxicity and liquidity
 - Kyle, A.S. (1985). Continuous auctions and insider trading
 - Glosten, L. & Milgrom, P. (1985). Bid, ask and transaction prices
