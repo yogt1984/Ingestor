@@ -1,6 +1,12 @@
 //! Backtest Harness
 //!
 //! Run strategies on historical data and collect results.
+//!
+//! Uses the realistic fill simulator based on:
+//! - Queue position modeling
+//! - Adverse selection
+//! - Trade intensity
+//! - Regime awareness
 
 use std::path::PathBuf;
 
@@ -9,10 +15,11 @@ use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
 
-use crate::market_maker::{MarketMakerEngine, MMConfig, MMQuotes, Fill, QuoteSide};
-use crate::mm_simulator::{MMSimulator, SimulatorConfig};
+use crate::market_maker::{MarketMakerEngine, MMConfig, Fill, QuoteSide};
+use crate::mm_simulator::SimulatorConfig;
 
 use super::replay::{ParquetReplay, ReplayConfig, ReplayEvent};
+use super::fill_simulator::{FillSimulator, FillSimulatorConfig, MarketState};
 use super::metrics::{
     PerformanceMetrics, TradeLog, TradeRecord, TradeSide,
     EquityCurve, EquityPoint,
@@ -25,8 +32,10 @@ pub struct BacktestConfig {
     pub replay: ReplayConfig,
     /// Market maker configuration
     pub mm: MMConfig,
-    /// Simulator configuration
+    /// Legacy simulator configuration (for fee rate)
     pub simulator: SimulatorConfig,
+    /// Fill simulator configuration (realistic fills)
+    pub fill_sim: FillSimulatorConfig,
     /// Initial capital (for equity tracking)
     pub initial_capital: Decimal,
     /// Risk-free rate for Sharpe calculation
@@ -35,6 +44,8 @@ pub struct BacktestConfig {
     pub equity_sample_interval: usize,
     /// Whether to print progress
     pub verbose: bool,
+    /// Whether to use realistic fill simulation (vs naive)
+    pub use_realistic_fills: bool,
 }
 
 impl Default for BacktestConfig {
@@ -43,10 +54,12 @@ impl Default for BacktestConfig {
             replay: ReplayConfig::default(),
             mm: MMConfig::default(),
             simulator: SimulatorConfig::default(),
+            fill_sim: FillSimulatorConfig::default(),
             initial_capital: dec!(10000), // $10k starting capital
             risk_free_rate: 0.05, // 5% annual
             equity_sample_interval: 100, // Every 100 events
             verbose: true,
+            use_realistic_fills: true, // Use realistic fills by default
         }
     }
 }
@@ -60,6 +73,22 @@ pub struct BacktestResults {
     pub equity_curve: EquityCurve,
     pub events_processed: usize,
     pub fills_generated: usize,
+    /// Fill simulation statistics
+    pub fill_stats: FillStats,
+}
+
+/// Statistics from the fill simulator
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FillStats {
+    pub bid_touches: u64,
+    pub ask_touches: u64,
+    pub bid_fills: u64,
+    pub ask_fills: u64,
+    pub bid_fill_rate: f64,
+    pub ask_fill_rate: f64,
+    pub partial_fills: u64,
+    pub total_adverse_selection_cost: Decimal,
+    pub avg_fill_probability: f64,
 }
 
 impl BacktestResults {
@@ -76,6 +105,23 @@ impl BacktestResults {
         println!("Events Processed: {}", self.events_processed);
         println!("Fills Generated:  {}", self.fills_generated);
         println!();
+
+        if self.config.use_realistic_fills {
+            println!("FILL SIMULATION (Realistic)");
+            println!("  Bid Touches: {} | Fills: {} | Rate: {:.1}%",
+                self.fill_stats.bid_touches,
+                self.fill_stats.bid_fills,
+                self.fill_stats.bid_fill_rate * 100.0);
+            println!("  Ask Touches: {} | Fills: {} | Rate: {:.1}%",
+                self.fill_stats.ask_touches,
+                self.fill_stats.ask_fills,
+                self.fill_stats.ask_fill_rate * 100.0);
+            println!("  Partial Fills: {}", self.fill_stats.partial_fills);
+            println!("  Adverse Selection Cost: {:.4}",
+                self.fill_stats.total_adverse_selection_cost);
+            println!();
+        }
+
         self.metrics.print_report();
     }
 }
@@ -85,7 +131,7 @@ pub struct BacktestEngine {
     config: BacktestConfig,
     replay: ParquetReplay,
     mm: MarketMakerEngine,
-    simulator: MMSimulator,
+    fill_sim: FillSimulator,
 
     // State
     trade_log: TradeLog,
@@ -93,7 +139,7 @@ pub struct BacktestEngine {
     events_processed: usize,
     fills_generated: usize,
 
-    // For simulating trades from price movements
+    // For market state tracking
     last_mid_price: Option<Decimal>,
 }
 
@@ -102,13 +148,13 @@ impl BacktestEngine {
     pub fn new(config: BacktestConfig) -> Self {
         let replay = ParquetReplay::new(config.replay.clone());
         let mm = MarketMakerEngine::new(config.mm.clone());
-        let simulator = MMSimulator::new(config.simulator.clone());
+        let fill_sim = FillSimulator::new(config.fill_sim.clone());
 
         Self {
             config,
             replay,
             mm,
-            simulator,
+            fill_sim,
             trade_log: TradeLog::new(),
             equity_curve: EquityCurve::new(),
             events_processed: 0,
@@ -137,7 +183,7 @@ impl BacktestEngine {
 
         // Reset state
         self.mm.reset();
-        self.simulator.reset();
+        self.fill_sim.reset();
         self.trade_log = TradeLog::new();
         self.equity_curve = EquityCurve::new();
         self.events_processed = 0;
@@ -151,6 +197,8 @@ impl BacktestEngine {
 
         if self.config.verbose {
             println!("Starting backtest with {} events", total_events);
+            println!("Fill simulation: {}",
+                if self.config.use_realistic_fills { "REALISTIC" } else { "NAIVE" });
             if let Some((start, end)) = self.replay.time_range() {
                 let duration_hours = (end - start) as f64 / (1000.0 * 60.0 * 60.0);
                 println!("Time range: {:.1} hours", duration_hours);
@@ -191,6 +239,25 @@ impl BacktestEngine {
             self.config.risk_free_rate,
         );
 
+        // Collect fill stats
+        let (bid_rate, ask_rate) = self.fill_sim.fill_rate();
+        let fill_stats = FillStats {
+            bid_touches: self.fill_sim.stats.bid_touches,
+            ask_touches: self.fill_sim.stats.ask_touches,
+            bid_fills: self.fill_sim.stats.bid_fills,
+            ask_fills: self.fill_sim.stats.ask_fills,
+            bid_fill_rate: bid_rate,
+            ask_fill_rate: ask_rate,
+            partial_fills: self.fill_sim.stats.bid_partial_fills
+                + self.fill_sim.stats.ask_partial_fills,
+            total_adverse_selection_cost: self.fill_sim.stats.total_adverse_selection_cost,
+            avg_fill_probability: if self.fills_generated > 0 {
+                self.fill_sim.stats.cumulative_fill_probability / self.fills_generated as f64
+            } else {
+                0.0
+            },
+        };
+
         Ok(BacktestResults {
             config: self.config.clone(),
             metrics,
@@ -198,6 +265,7 @@ impl BacktestEngine {
             equity_curve: self.equity_curve.clone(),
             events_processed: self.events_processed,
             fills_generated: self.fills_generated,
+            fill_stats,
         })
     }
 
@@ -241,17 +309,21 @@ impl BacktestEngine {
             timestamp_ms,
         );
 
-        // Update simulator with new quotes
-        self.simulator.update_quotes(&quotes);
+        // Update fill simulator with new quotes
+        self.fill_sim.update_quotes(&quotes, timestamp_ms);
 
-        // Simulate fills based on price movement
-        if let Some(last_mid) = self.last_mid_price {
-            let fills = self.simulate_fills_from_movement(
-                last_mid,
-                mid_price,
-                &quotes,
-                timestamp_ms,
-            );
+        // Simulate fills
+        if let Some(prev_mid) = self.last_mid_price {
+            let fills = if self.config.use_realistic_fills {
+                // Use realistic fill simulation
+                let market_state = MarketState::from_snapshot(snap, prev_mid);
+                let fill_events = self.fill_sim.simulate_fills(&market_state, timestamp_ms);
+
+                fill_events.into_iter().map(|fe| fe.fill).collect()
+            } else {
+                // Use naive fill simulation (legacy)
+                self.simulate_fills_naive(mid_price, &quotes, timestamp_ms)
+            };
 
             for fill in fills {
                 self.process_fill(fill, timestamp_ms)?;
@@ -267,24 +339,17 @@ impl BacktestEngine {
         Ok(())
     }
 
-    /// Simulate fills based on price movement
-    ///
-    /// This is a simplified model: if price moves through our quote,
-    /// we assume we got filled.
-    fn simulate_fills_from_movement(
-        &mut self,
-        _last_mid: Decimal,
+    /// Naive fill simulation (legacy) - for comparison
+    fn simulate_fills_naive(
+        &self,
         current_mid: Decimal,
-        quotes: &MMQuotes,
+        quotes: &crate::market_maker::MMQuotes,
         timestamp_ms: u64,
     ) -> Vec<Fill> {
         let mut fills = Vec::new();
 
         // Check bid fill: if price dropped to our bid level
         if let Some(ref bid) = quotes.bid {
-            // Simple model: if low of the move touched our bid, we got filled
-            // Since we only have mid prices, we approximate:
-            // If current_mid < bid.price, aggressive sell hit our bid
             if current_mid <= bid.price {
                 fills.push(Fill {
                     side: QuoteSide::Bid,
@@ -312,7 +377,7 @@ impl BacktestEngine {
 
     /// Process a fill
     fn process_fill(&mut self, fill: Fill, timestamp_ms: u64) -> Result<()> {
-        let fee_rate = self.config.simulator.fee_rate;
+        let fee_rate = self.config.fill_sim.fee_rate;
         let fee = fill.price * fill.size * fee_rate;
 
         // Record trade
@@ -344,7 +409,6 @@ impl BacktestEngine {
         match fill.side {
             QuoteSide::Ask if inventory > dec!(0) => {
                 // Selling while long = closing (partially or fully)
-                // PnL = (sell_price - avg_entry) * size
                 let close_size = fill.size.min(inventory);
                 if close_size > dec!(0) && avg_entry > dec!(0) {
                     Some((fill.price - avg_entry) * close_size)
@@ -354,7 +418,6 @@ impl BacktestEngine {
             }
             QuoteSide::Bid if inventory < dec!(0) => {
                 // Buying while short = closing
-                // PnL = (avg_entry - buy_price) * size (profit if buy < entry)
                 let close_size = fill.size.min(inventory.abs());
                 if close_size > dec!(0) && avg_entry > dec!(0) {
                     Some((avg_entry - fill.price) * close_size)
@@ -436,6 +499,26 @@ pub fn backtest_with_config(
     engine.run()
 }
 
+/// Run backtest with naive fills (for comparison)
+pub fn backtest_naive_fills(
+    data_dir: &str,
+    mm_config: MMConfig,
+) -> Result<BacktestResults> {
+    let config = BacktestConfig {
+        replay: ReplayConfig {
+            data_dir: PathBuf::from(data_dir),
+            ..Default::default()
+        },
+        mm: mm_config,
+        use_realistic_fills: false, // Use naive fills
+        ..Default::default()
+    };
+
+    let mut engine = BacktestEngine::new(config);
+    engine.load_data()?;
+    engine.run()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,6 +528,7 @@ mod tests {
         let config = BacktestConfig::default();
         assert_eq!(config.initial_capital, dec!(10000));
         assert_eq!(config.equity_sample_interval, 100);
+        assert!(config.use_realistic_fills);
     }
 
     #[test]
@@ -457,5 +541,12 @@ mod tests {
             current_inventory: dec!(0.01),
         };
         assert_eq!(state.events_processed, 100);
+    }
+
+    #[test]
+    fn test_fill_stats_default() {
+        let stats = FillStats::default();
+        assert_eq!(stats.bid_fills, 0);
+        assert_eq!(stats.ask_fills, 0);
     }
 }

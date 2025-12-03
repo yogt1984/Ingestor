@@ -519,7 +519,8 @@ mod tests {
     fn test_std_dev() {
         let vals = vec![2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0];
         let sd = std_dev(&vals);
-        assert!((sd - 2.0).abs() < 0.1); // Approximately 2
+        // Sample std dev for this data is ~2.138, not 2.0 (which is population std dev)
+        assert!((sd - 2.138).abs() < 0.1, "Expected ~2.138 but got {}", sd);
     }
 
     #[test]
