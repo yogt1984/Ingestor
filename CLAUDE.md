@@ -43,32 +43,52 @@ cargo run --release --bin backtest -- --data ./data/features info
 cargo run --release --bin backtest -- sweep --spreads 1,2,3 --skews 0.3,0.5,0.7
 ```
 
-## Recent Session: 2025-12-02
+## Recent Session: 2025-12-03
 
 ### What Was Done
-1. Wired up backtesting module (was written but not exposed in lib.rs)
-2. Fixed FeaturesSnapshot struct mismatch in replay.rs
-3. Fixed timestamp parsing (RFC3339 strings from Parquet)
-4. Fixed critical bug: events with `mid_price = None` were becoming 0, causing bogus fills
-5. Fixed per-trade PnL calculation
+1. Added entropy gate and threshold CLI params (`--entropy-gate`, `--high-entropy`)
+2. Implemented extended `grid-search` command with `--test-gate` flag
+3. Ran comprehensive comparison: 360 parameter combinations
 
-### Current Backtest Results
-```
-Best Parameters (1bps spread, 0.3 skew):
-- Sharpe: +0.44
-- Return: +52% over 47 days (unrealistic - fill model too optimistic)
-- Win Rate: 63%
-- Trades: 2,113
-```
+### Grid Search Results (Entropy Gating Analysis)
+
+**Test: UNGATED (widen spreads in low entropy) vs GATED (pull quotes in low entropy)**
+
+| Metric | UNGATED (WIDE) | GATED |
+|--------|----------------|-------|
+| Avg Sharpe | **-34.09** | -213.76 |
+| Avg Trades | **185.6** | 11.7 |
+| Configs w/ trades | 180 | 84 |
+
+**Best Parameters (Spread=1.0 bps, Skew=0.3, WIDE, FillProb=15%)**:
+- Sharpe: -1.20
+- Return: +5.14% over 47 days
+- Win Rate: 59.5%
+- Trades: 452
+
+### Key Conclusions
+
+1. **UNGATED (WIDE) is significantly better than GATED** - More trades, better Sharpe
+2. **Entropy threshold has NO effect** - Results identical for 0.6/0.7/0.8
+3. **GATE mode too restrictive** - Produces 0 trades for spreads ≥4 bps
+4. **Only spread=1.0 bps profitable** - Wider spreads produce negative returns
+5. **All Sharpe ratios negative** with realistic fill model (expected - see below)
+
+### Realistic Fill Simulation Impact
+
+With queue-position-based fill model (10% base fill probability):
+- Naive fills: 894 fills, +6.14% return (overly optimistic)
+- Realistic fills: 203 fills, -0.30% return (conservative)
+
+The negative Sharpes with realistic fills indicate the current strategy parameters don't overcome transaction costs and adverse selection.
 
 ### Next Priority
-**Fix fill simulation realism** - Current model assumes fill when mid-price crosses quote. Need:
-- Queue position modeling
-- Partial fills
-- Adverse selection modeling
+- Consider removing entropy gating feature (no benefit found)
+- Focus on tighter spreads (1 bps) with lower skew (0.3)
+- Explore ML-based spread/skew adaptation (Phase 4)
 
 ## Known Issues
-1. Fill model too optimistic (52% return is unrealistic)
+1. Entropy gating provides no measurable benefit
 2. Some Parquet files have missing `mid_price` values (now filtered)
 3. Dependabot: 9 vulnerabilities (1 critical) - in technical debt backlog
 
