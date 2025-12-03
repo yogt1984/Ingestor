@@ -24,6 +24,7 @@ use ratatui::{
 use crate::feature_fusion::FeaturesSnapshot;
 use crate::market_maker::{MarketMakerEngine, MMConfig, MarketRegime};
 use crate::mm_simulator::{PaperTradingEngine, SimulatorConfig};
+use ingestor::forward_testing::{ForwardTestSession, ForwardTestConfig};
 
 type Term = Terminal<CrosstermBackend<io::Stdout>>;
 
@@ -524,6 +525,9 @@ fn main_loop(
         sim_config,
     );
 
+    // Forward testing session for trade logging
+    let mut forward_session = ForwardTestSession::new(ForwardTestConfig::default());
+
     loop {
         // Handle input
         if event::poll(Duration::from_millis(50))? {
@@ -531,7 +535,12 @@ fn main_loop(
                 match mode {
                     AppMode::Menu => match key.code {
                         KeyCode::Char('0') => mode = AppMode::Live,
-                        KeyCode::Char('1') => mode = AppMode::LiveMM,
+                        KeyCode::Char('1') => {
+                            mode = AppMode::LiveMM;
+                            // Start forward testing session
+                            forward_session = ForwardTestSession::new(ForwardTestConfig::default());
+                            forward_session.start();
+                        }
                         KeyCode::Char('2') => {
                             mode = AppMode::Features;
                             scroll_offset = 0;
@@ -561,10 +570,22 @@ fn main_loop(
                         _ => {}
                     },
                     AppMode::LiveMM => match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => mode = AppMode::Menu,
+                        KeyCode::Char('q') | KeyCode::Esc => {
+                            // End forward testing session and save
+                            if forward_session.is_active() {
+                                if let Ok(summary) = forward_session.end() {
+                                    // Session saved to ./data/sessions/
+                                    log::info!("Session {} saved with {} trades",
+                                        summary.session_id, summary.trade_count);
+                                }
+                            }
+                            mode = AppMode::Menu;
+                        }
                         KeyCode::Char('r') => {
-                            // Reset MM state
+                            // Reset MM state and start new session
                             paper_trading.reset();
+                            forward_session = ForwardTestSession::new(ForwardTestConfig::default());
+                            forward_session.start();
                         }
                         _ => {}
                     },
@@ -654,7 +675,7 @@ fn main_loop(
                             .unwrap()
                             .as_millis() as u64;
 
-                        paper_trading.on_features(
+                        let quotes = paper_trading.on_features(
                             microprice,
                             mid_price,
                             volatility,
@@ -662,6 +683,20 @@ fn main_loop(
                             flow_imbalance,
                             timestamp_ms,
                         );
+
+                        // Log quotes to forward testing session
+                        if forward_session.is_active() {
+                            forward_session.log_quote(
+                                timestamp_ms,
+                                quotes.bid.as_ref().map(|q| q.price),
+                                quotes.bid.as_ref().map(|q| q.size),
+                                quotes.ask.as_ref().map(|q| q.price),
+                                quotes.ask.as_ref().map(|q| q.size),
+                                mid_price,
+                                paper_trading.mm.inventory(),
+                                &format!("{:?}", quotes.regime),
+                            );
+                        }
                     }
                 }
 
@@ -689,7 +724,7 @@ fn main_loop(
                     if !has_data {
                         draw_waiting(f);
                     } else {
-                        draw_live_mm(f, &symbol, &current_features, &paper_trading);
+                        draw_live_mm(f, &symbol, &current_features, &paper_trading, &forward_session);
                     }
                 })?;
             }
@@ -1115,6 +1150,7 @@ fn draw_live_mm(
     symbol: &str,
     feat: &AveragedFeatures,
     paper_trading: &PaperTradingEngine,
+    session: &ForwardTestSession,
 ) {
     let size = f.size();
     let state = paper_trading.state();
@@ -1133,11 +1169,17 @@ fn draw_live_mm(
         ])
         .split(size);
 
-    // Title
+    // Title with session info
     let now = chrono::Local::now().format("%H:%M:%S");
+    let session_info = if session.is_active() {
+        let m = session.metrics();
+        format!("Session: {} | Quotes: {}", session.session_id(), m.quotes_generated)
+    } else {
+        "Session: inactive".to_string()
+    };
     let title = format!(
-        " {} | {} | MARKET MAKER (paper) | [r] reset [q] menu ",
-        symbol.to_uppercase(), now
+        " {} | {} | MARKET MAKER (paper) | {} | [r] reset [q] menu ",
+        symbol.to_uppercase(), now, session_info
     );
     let title_para = Paragraph::new(Line::from(Span::styled(
         title,
