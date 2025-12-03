@@ -13,7 +13,7 @@ use crate::{
     toxicity::ToxicityMetrics,
 };
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, Default)]
 pub struct FeaturesSnapshot {
     pub timestamp: String,
     pub best_bid: Option<Decimal>,

@@ -30,7 +30,9 @@
 pub mod replay;
 pub mod harness;
 pub mod metrics;
+pub mod fill_simulator;
 
 pub use replay::{ParquetReplay, ReplayEvent, ReplayConfig};
 pub use harness::{BacktestEngine, BacktestConfig, BacktestResults};
 pub use metrics::{PerformanceMetrics, TradeLog, EquityCurve};
+pub use fill_simulator::{FillSimulator, FillSimulatorConfig, FillEvent, MarketState};

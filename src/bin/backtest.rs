@@ -71,6 +71,18 @@ struct Cli {
     /// Quiet mode (no progress output)
     #[arg(short, long)]
     quiet: bool,
+
+    /// Use naive fill simulation (for comparison)
+    #[arg(long)]
+    naive_fills: bool,
+
+    /// Fill probability (0.0-1.0) for realistic simulation
+    #[arg(long, default_value = "0.10")]
+    fill_prob: f64,
+
+    /// Queue position (0.0=front, 1.0=back)
+    #[arg(long, default_value = "0.5")]
+    queue_pos: f64,
 }
 
 #[derive(Subcommand)]
@@ -124,6 +136,11 @@ fn run_single(cli: &Cli) -> Result<()> {
     println!("  Max Inventory: {}", cli.max_inventory);
     println!("  Quote Size:    {}", cli.quote_size);
     println!("  Fee Rate:      {} bps", cli.fee_rate * 10000.0);
+    println!("  Fill Mode:     {}", if cli.naive_fills { "NAIVE" } else { "REALISTIC" });
+    if !cli.naive_fills {
+        println!("  Fill Prob:     {:.0}%", cli.fill_prob * 100.0);
+        println!("  Queue Pos:     {:.0}%", cli.queue_pos * 100.0);
+    }
     println!();
 
     let config = build_config(cli);
@@ -191,7 +208,14 @@ fn run_sweep(cli: &Cli, spreads_str: &str, skews_str: &str) -> Result<()> {
                     fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
                     ..Default::default()
                 },
+                fill_sim: ingestor::backtest::FillSimulatorConfig {
+                    base_fill_probability: cli.fill_prob,
+                    queue_position: cli.queue_pos,
+                    fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
+                    ..Default::default()
+                },
                 verbose: false,
+                use_realistic_fills: !cli.naive_fills,
                 ..Default::default()
             };
 
@@ -296,6 +320,8 @@ fn show_info(cli: &Cli) -> Result<()> {
 }
 
 fn build_config(cli: &Cli) -> BacktestConfig {
+    use ingestor::backtest::FillSimulatorConfig;
+
     let mm_config = MMConfig {
         base_spread_bps: cli.spread,
         inventory_skew_factor: cli.skew,
@@ -309,6 +335,13 @@ fn build_config(cli: &Cli) -> BacktestConfig {
         ..Default::default()
     };
 
+    let fill_sim_config = FillSimulatorConfig {
+        base_fill_probability: cli.fill_prob,
+        queue_position: cli.queue_pos,
+        fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
+        ..Default::default()
+    };
+
     BacktestConfig {
         replay: ReplayConfig {
             data_dir: cli.data.clone(),
@@ -316,7 +349,9 @@ fn build_config(cli: &Cli) -> BacktestConfig {
         },
         mm: mm_config,
         simulator: sim_config,
+        fill_sim: fill_sim_config,
         verbose: !cli.quiet,
+        use_realistic_fills: !cli.naive_fills,
         ..Default::default()
     }
 }
