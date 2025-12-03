@@ -71,11 +71,51 @@ cargo test
 
 ---
 
-## Market Making Engine
+## Algorithm: Avellaneda-Stoikov Market Making
+
+### Theoretical Foundation
+
+The core algorithm is the **Avellaneda-Stoikov (2008)** optimal market making model, which solves:
+
+> *"Where should a market maker place bid/ask quotes to maximize profit while managing inventory risk?"*
+
+#### Reservation Price
+
+The key insight is the **reservation price** - the price at which the market maker is indifferent to trading:
+
+```
+reservation_price = mid_price - inventory × γ × σ² × T
+```
+
+Where:
+- `γ` (gamma) = risk aversion parameter (how much we dislike inventory risk)
+- `σ` = volatility estimate
+- `T` = time horizon
+- `inventory` = current position
+
+**Intuition**: If we're long, our reservation price drops (we want to sell). If we're short, it rises (we want to buy).
+
+#### Optimal Spread
+
+```
+optimal_spread = γ × σ² × T + (2/γ) × ln(1 + γ/k)
+```
+
+Where `k` is a market liquidity parameter. The spread widens with volatility and risk aversion.
+
+### Implementation Extensions
+
+Our implementation extends vanilla Avellaneda-Stoikov with:
+
+| Extension | Paper | Purpose |
+|-----------|-------|---------|
+| **Entropy Regime Detection** | Novel | Avoid adverse selection in trending markets |
+| **Flow Toxicity (VPIN)** | Easley et al. (2012) | Detect informed trading |
+| **Queue Position Modeling** | Moallemi & Yuan (2017) | Realistic fill simulation |
+| **Microprice Fair Value** | Gatheral & Oomen (2010) | Better fair value estimate |
+| **Bipower Volatility** | Barndorff-Nielsen (2004) | Jump-robust volatility |
 
 ### Architecture
-
-The market maker implements an **Avellaneda-Stoikov** style quoting strategy with entropy-based regime control:
 
 ```
 FeaturesSnapshot ──→ MarketMakerEngine ──→ MMQuotes (bid/ask)
@@ -98,15 +138,153 @@ FeaturesSnapshot ──→ MarketMakerEngine ──→ MMQuotes (bid/ask)
 | **Medium Entropy** | 0.4 - 0.7 | 1.5x | Uncertain, widen slightly |
 | **Low Entropy** | < 0.4 | 3.0x | One-sided flow, wide spreads, reduce size |
 
-### Key Parameters
+**Why Entropy?** Low entropy means price movements are predictable (trending). In trending markets, market makers get "picked off" by informed traders who know where price is going. High entropy means random walk behavior, ideal for capturing bid-ask spread.
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `base_spread_bps` | 2.0 | Base half-spread in basis points |
-| `inventory_skew_factor` | 0.5 | How much to skew per unit inventory |
-| `max_inventory` | 0.1 BTC | Position limit |
-| `quote_size` | 0.001 BTC | Base order size |
-| `risk_aversion` | 0.1 | Gamma in Avellaneda-Stoikov |
+---
+
+## Degrees of Freedom (Parameters)
+
+### Market Making Parameters (`MMConfig`)
+
+| Parameter | Symbol | Default | Range | Description |
+|-----------|--------|---------|-------|-------------|
+| `base_spread_bps` | s | 2.0 | 0.5 - 10.0 | Base half-spread in basis points |
+| `inventory_skew_factor` | κ | 0.5 | 0.1 - 2.0 | How much to skew per unit inventory |
+| `max_inventory` | I_max | 0.1 | 0.01 - 1.0 | Position limit (BTC) |
+| `quote_size` | q | 0.001 | 0.0001 - 0.01 | Base order size (BTC) |
+| `risk_aversion` | γ | 0.1 | 0.01 - 1.0 | Avellaneda-Stoikov gamma |
+| `high_entropy_threshold` | θ_h | 0.7 | 0.5 - 0.9 | Above = high entropy regime |
+| `low_entropy_threshold` | θ_l | 0.4 | 0.2 - 0.6 | Below = low entropy regime |
+| `medium_entropy_spread_mult` | m_m | 1.5 | 1.0 - 3.0 | Spread multiplier in medium |
+| `low_entropy_spread_mult` | m_l | 3.0 | 1.5 - 5.0 | Spread multiplier in low |
+| `pull_quotes_in_low_entropy` | - | false | bool | Stop quoting in low entropy |
+
+### Fill Simulation Parameters (`FillSimulatorConfig`)
+
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| `base_fill_probability` | 0.10 | 0.01 - 0.30 | Fill rate when price touches |
+| `queue_position` | 0.5 | 0.0 - 1.0 | Position in queue (0=front, 1=back) |
+| `adverse_selection_factor` | 0.3 | 0.0 - 1.0 | Expected adverse price move after fill |
+| `quote_latency_ms` | 50 | 10 - 500 | Latency before quote is active |
+| `min_fill_fraction` | 0.1 | 0.0 - 1.0 | Minimum partial fill size |
+| `competitive_spread_bps` | 2.0 | 0.5 - 5.0 | Spread below which competition is high |
+
+### Total Degrees of Freedom
+
+**Core tunable**: 6 (spread, skew, risk_aversion, two entropy thresholds, pull_quotes)
+**Fill simulation**: 4 (fill_prob, queue_pos, adverse_selection, latency)
+**Total**: ~10 key parameters for optimization
+
+---
+
+## Entropy Gate: Selective Market Making
+
+### The Concept
+
+Instead of always quoting (with regime-adjusted spreads), an **entropy gate** only activates market making when conditions are favorable:
+
+```
+IF entropy > threshold THEN
+    activate market making
+ELSE
+    no quotes (sit out)
+```
+
+### Why This Might Work
+
+| Condition | Entropy | Market Maker Outcome |
+|-----------|---------|----------------------|
+| **Trending** | Low (<0.4) | Gets run over by informed flow |
+| **Choppy** | High (>0.7) | Captures spread repeatedly |
+| **News Event** | Very Low | Massive adverse selection |
+
+**Hypothesis**: By only participating in high-entropy regimes, we avoid the worst adverse selection while still capturing spread in favorable conditions.
+
+### Current Implementation
+
+The current implementation uses **spread widening** rather than full gating:
+
+```rust
+// In MMConfig
+pull_quotes_in_low_entropy: false  // Set to true for full gating
+low_entropy_spread_mult: 3.0       // Alternative: widen spread 3x
+```
+
+### Proposed Experiment: Full Entropy Gate
+
+To test the hypothesis:
+
+1. **Baseline**: Run MM continuously with spread adjustment (current)
+2. **Gated**: Only quote when `tick_entropy_10s > 0.7`
+3. **Compare**: Sharpe ratio, fill rate, adverse selection costs
+
+**Expected outcome**: Gated version has fewer trades but higher win rate and better risk-adjusted returns.
+
+### Trade-offs
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **Always Quote** | More fills, higher volume | Adverse selection in trends |
+| **Spread Widening** | Stay active, adaptive | May not be wide enough |
+| **Entropy Gate** | Clean avoidance | Miss opportunities, regime lag |
+
+### Implementation Status
+
+The `pull_quotes_in_low_entropy` flag exists but is `false` by default. A full grid search comparing gated vs. ungated strategies is the next logical step.
+
+---
+
+## Grid Search & Parameter Optimization
+
+### Current Capability
+
+```bash
+# Basic parameter sweep (already implemented)
+cargo run --release --bin backtest -- sweep \
+    --spreads 1,2,3,4,5 \
+    --skews 0.3,0.5,0.7
+```
+
+### Recommended Grid Search
+
+```bash
+# Full parameter grid (to be implemented)
+cargo run --release --bin backtest -- grid-search \
+    --spread-range 0.5:5.0:0.5 \
+    --skew-range 0.1:1.0:0.1 \
+    --entropy-threshold 0.5:0.9:0.1 \
+    --fill-prob 0.05:0.20:0.05 \
+    --objective sharpe \
+    --output grid_results.json
+```
+
+### Multi-Objective Optimization
+
+Key objectives to balance:
+
+1. **Sharpe Ratio**: Risk-adjusted returns
+2. **Max Drawdown**: Worst peak-to-trough decline
+3. **Fill Rate**: Percentage of quotes that get filled
+4. **Inventory Turnover**: How quickly positions close
+
+### Walk-Forward Validation
+
+Critical to avoid overfitting:
+
+```
+|------ In-Sample ------|-- Out-of-Sample --|
+|  Optimize parameters  |  Validate edge    |
+        Fold 1
+
+         |------ In-Sample ------|-- Out-of-Sample --|
+                  Fold 2
+
+                   |------ In-Sample ------|-- Out-of-Sample --|
+                            Fold 3
+```
+
+Already implemented via `backtest walk-forward` command.
 
 ---
 
@@ -125,16 +303,20 @@ FeaturesSnapshot ──→ MarketMakerEngine ──→ MMQuotes (bid/ask)
 - [x] Basic MM engine with paper trading
 - [x] Interactive TUI
 
-#### Phase 2: Backtesting Infrastructure (Weeks 5-8, ~40 hrs)
-- [ ] Historical data replay from Parquet
-- [ ] Fill simulation with realistic queue model
-- [ ] Slippage and latency modeling
-- [ ] Performance metrics suite (Sharpe, drawdown, fill rate)
-- [ ] Parameter sensitivity analysis
-- [ ] Walk-forward validation framework
+#### Phase 2: Backtesting Infrastructure (Weeks 5-8, ~40 hrs) ✅ COMPLETE
+- [x] Historical data replay from Parquet
+- [x] Fill simulation with realistic queue model (Cont et al., Moallemi & Yuan)
+- [x] Slippage and latency modeling
+- [x] Performance metrics suite (Sharpe, drawdown, fill rate)
+- [x] Walk-forward validation framework
+- [x] Data quality validation pipeline
+- [x] Forward testing session logging
+- [x] Backtest vs live comparison reports
 
-#### Phase 3: Strategy Optimization (Weeks 9-14, ~60 hrs)
-- [ ] Grid search for MM parameters
+#### Phase 3: Strategy Optimization (Weeks 9-14, ~60 hrs) 🔄 IN PROGRESS
+- [x] Basic parameter sweep (spread × skew grid)
+- [ ] Extended grid search (entropy thresholds, fill params)
+- [ ] Entropy gate experiment (gated vs ungated)
 - [ ] Bayesian optimization (Optuna integration)
 - [ ] Multi-objective optimization (Sharpe vs drawdown)
 - [ ] Regime-specific parameter sets

@@ -2,6 +2,39 @@
 //!
 //! Logs paper trading activity and compares against backtest predictions.
 //!
+//! # Algorithm Background
+//!
+//! This module supports the **Avellaneda-Stoikov (2008)** market making algorithm
+//! with entropy-based regime detection. The strategy places bid/ask quotes around
+//! a fair value, adjusting spreads based on:
+//!
+//! - **Inventory risk**: Skew quotes to reduce position (Avellaneda-Stoikov)
+//! - **Regime detection**: Widen/pull quotes in low-entropy (trending) markets
+//! - **Volatility**: Widen spreads in high-vol environments
+//!
+//! # Degrees of Freedom (Tunable Parameters)
+//!
+//! ## Market Making Parameters (`MMConfig`)
+//!
+//! | Parameter | Default | Range | Description |
+//! |-----------|---------|-------|-------------|
+//! | `base_spread_bps` | 2.0 | 0.5-10.0 | Base half-spread per side |
+//! | `inventory_skew_factor` | 0.5 | 0.1-2.0 | Skew per unit inventory |
+//! | `max_inventory` | 0.1 | 0.01-1.0 | Position limit (BTC) |
+//! | `quote_size` | 0.001 | 0.0001-0.01 | Order size (BTC) |
+//! | `risk_aversion` | 0.1 | 0.01-1.0 | A-S gamma parameter |
+//! | `high_entropy_threshold` | 0.7 | 0.5-0.9 | High entropy cutoff |
+//! | `low_entropy_threshold` | 0.4 | 0.2-0.6 | Low entropy cutoff |
+//! | `pull_quotes_in_low_entropy` | false | bool | Full entropy gating |
+//!
+//! ## Fill Simulation Parameters (`FillSimulatorConfig`)
+//!
+//! | Parameter | Default | Range | Description |
+//! |-----------|---------|-------|-------------|
+//! | `base_fill_probability` | 0.10 | 0.01-0.30 | Fill rate on touch |
+//! | `queue_position` | 0.5 | 0.0-1.0 | Queue position (0=front) |
+//! | `adverse_selection_factor` | 0.3 | 0.0-1.0 | Post-fill adverse move |
+//!
 //! # Features
 //!
 //! - Trade logging to JSON/Parquet files
@@ -19,7 +52,7 @@
 //! session.log_trade(&trade);
 //!
 //! // On each quote update...
-//! session.log_quote(&quotes, mid_price);
+//! session.log_quote(timestamp_ms, bid_price, bid_size, ask_price, ask_size, mid_price, inventory, "HighEntropy");
 //!
 //! // Get live metrics
 //! let metrics = session.metrics();
@@ -27,6 +60,13 @@
 //! // End session and save
 //! session.end()?;
 //! ```
+//!
+//! # References
+//!
+//! - Avellaneda, M. & Stoikov, S. (2008). High-frequency trading in a limit order book
+//! - Cont, R., Kukanov, A. & Stoikov, S. (2014). The price impact of order book events
+//! - Moallemi, C.C. & Yuan, K. (2017). The value of queue position in a limit order book
+//! - Easley, D., López de Prado, M. & O'Hara, M. (2012). Flow toxicity and liquidity
 
 use std::path::PathBuf;
 use std::collections::VecDeque;
