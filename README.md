@@ -19,7 +19,103 @@ cargo run --release
 
 # Run tests (106 tests)
 cargo test
+
+# Run grid search after collecting data
+cargo run --release --bin backtest -- grid-search --test-gate
 ```
+
+---
+
+## Data Collection Guide
+
+### Overnight/Continuous Recording
+
+To collect data for backtesting, you need to run the ingestor continuously. Here are several methods:
+
+#### Method 1: tmux (Recommended)
+```bash
+# Start a new tmux session
+tmux new -s ingestor
+
+# Run the ingestor
+cargo run --release
+
+# Press [0] for Live Dashboard
+# Detach from tmux: Ctrl+B, then D
+
+# Reattach later
+tmux attach -t ingestor
+```
+
+#### Method 2: screen
+```bash
+# Start a new screen session
+screen -S ingestor
+
+# Run the ingestor
+cargo run --release
+
+# Detach: Ctrl+A, then D
+
+# Reattach later
+screen -r ingestor
+```
+
+#### Method 3: nohup (Headless)
+```bash
+# Run in background (no TUI)
+nohup cargo run --release > ingestor.log 2>&1 &
+
+# Check status
+tail -f ingestor.log
+
+# Stop
+pkill -f "target/release/ingestor"
+```
+
+#### Method 4: systemd Service
+```bash
+# Create /etc/systemd/system/ingestor.service
+[Unit]
+Description=Ingestor Market Data Collector
+After=network.target
+
+[Service]
+Type=simple
+User=your_user
+WorkingDirectory=/path/to/Ingestor
+ExecStart=/path/to/Ingestor/target/release/ingestor
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+
+# Enable and start
+sudo systemctl enable ingestor
+sudo systemctl start ingestor
+```
+
+### Data Storage
+
+- **Location:** `./data/features/*.parquet`
+- **Size:** ~200KB per file (1000 rows each)
+- **Rate:** ~1 file per ~15 minutes
+- **Retention:** Default unlimited, configurable via [s] in menu
+
+| Duration | Approx Files | Approx Size |
+|----------|--------------|-------------|
+| 1 day | ~96 | ~20 MB |
+| 1 week | ~672 | ~135 MB |
+| 1 month | ~2,880 | ~575 MB |
+| 3 months | ~8,640 | ~1.7 GB |
+
+### Recommended Data Collection
+
+For reliable backtesting:
+- **Minimum:** 2 weeks (for basic parameter validation)
+- **Recommended:** 1-3 months (for walk-forward validation)
+- **Ideal:** 6+ months (for regime diversity)
 
 ---
 
@@ -237,27 +333,74 @@ The `pull_quotes_in_low_entropy` flag exists but is `false` by default. A full g
 
 ## Grid Search & Parameter Optimization
 
-### Current Capability
+### Available Commands
 
 ```bash
-# Basic parameter sweep (already implemented)
+# Basic parameter sweep
 cargo run --release --bin backtest -- sweep \
     --spreads 1,2,3,4,5 \
     --skews 0.3,0.5,0.7
-```
 
-### Recommended Grid Search
+# Extended grid search (360 combinations)
+cargo run --release --bin backtest -- grid-search --test-gate
 
-```bash
-# Full parameter grid (to be implemented)
+# Grid search with custom parameters
 cargo run --release --bin backtest -- grid-search \
-    --spread-range 0.5:5.0:0.5 \
-    --skew-range 0.1:1.0:0.1 \
-    --entropy-threshold 0.5:0.9:0.1 \
-    --fill-prob 0.05:0.20:0.05 \
-    --objective sharpe \
-    --output grid_results.json
+    --spreads 1,2,3 \
+    --skews 0.3,0.5,0.7 \
+    --high-entropies 0.6,0.7,0.8 \
+    --fill-probs 0.05,0.10,0.15 \
+    --test-gate \
+    --output results.json
+
+# Single backtest run
+cargo run --release --bin backtest -- --spread 1.0 --skew 0.3 --fill-prob 0.10
+
+# Data info
+cargo run --release --bin backtest -- info
 ```
+
+### Grid Search Parameters
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--spreads` | 1,2,3,4,5 | Spread values in bps |
+| `--skews` | 0.3,0.5,0.7,1.0 | Inventory skew factors |
+| `--high-entropies` | 0.6,0.7,0.8 | Entropy thresholds |
+| `--fill-probs` | 0.05,0.10,0.15 | Fill probability estimates |
+| `--test-gate` | false | Compare GATED vs UNGATED modes |
+| `--output` | none | Save results to JSON file |
+
+### Grid Search Output
+
+The grid search tests all parameter combinations and reports:
+
+```
+═══════════════════════════════════════════════════════
+TOP 10 PARAMETER SETS (by Sharpe):
+═══════════════════════════════════════════════════════
+ 1. Spread=1.0 Skew=0.3 Entropy=0.7 WIDE FillP=0.15
+    Sharpe=-1.20 Return=+5.14% DD=0.43% WinRate=59.5% Trades=452
+...
+
+═══════════════════════════════════════════════════════
+ENTROPY GATE COMPARISON:
+═══════════════════════════════════════════════════════
+                    UNGATED (spread widen)  vs  GATED (no quotes)
+  Avg Sharpe:       -34.09                      -213.76
+  Avg Trades:       185.6                       11.7
+```
+
+### Latest Grid Search Results (Dec 3, 2025)
+
+See `REPORT_03_12_25.md` for full analysis. Key findings:
+
+| Finding | Implication |
+|---------|-------------|
+| **Only spread=1 bps profitable** | Wider spreads don't overcome costs |
+| **UNGATED >> GATED** | Don't pull quotes, widen spreads instead |
+| **Entropy threshold irrelevant** | 0.6/0.7/0.8 produce identical results |
+| **Best config: spread=1, skew=0.3** | +5% return, 62% win rate, 0.3% drawdown |
 
 ### Multi-Objective Optimization
 
@@ -315,8 +458,8 @@ Already implemented via `backtest walk-forward` command.
 
 #### Phase 3: Strategy Optimization (Weeks 9-14, ~60 hrs) 🔄 IN PROGRESS
 - [x] Basic parameter sweep (spread × skew grid)
-- [ ] Extended grid search (entropy thresholds, fill params)
-- [ ] Entropy gate experiment (gated vs ungated)
+- [x] Extended grid search (entropy thresholds, fill params)
+- [x] Entropy gate experiment (gated vs ungated) - **Result: UNGATED wins**
 - [ ] Bayesian optimization (Optuna integration)
 - [ ] Multi-objective optimization (Sharpe vs drawdown)
 - [ ] Regime-specific parameter sets

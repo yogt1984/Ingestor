@@ -845,10 +845,30 @@ fn draw_menu(f: &mut ratatui::Frame, symbol: &str, settings: &TuiSettings) {
             Span::raw("Quit"),
         ]),
         Line::from(""),
+        Line::from(Span::styled("  OVERNIGHT DATA COLLECTION", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))),
         Line::from(Span::styled(
-            "  Tip: Keep app running 24/7 for continuous data. More data = better backtests!",
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            "  To record data overnight/continuously:",
+            Style::default().fg(Color::DarkGray),
         )),
+        Line::from(Span::styled(
+            "    1. Start Live Dashboard [0] and leave running",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            "    2. Use tmux/screen to keep session alive: tmux new -s ingestor",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            "    3. Or run headless: cargo run --release > /dev/null 2>&1 &",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled("  AFTER DATA COLLECTION (run from terminal):", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(
+            "    cargo run --release --bin backtest -- grid-search --test-gate",
+            Style::default().fg(Color::Green),
+        )),
+        Line::from(""),
     ];
 
     let para = Paragraph::new(lines).block(
