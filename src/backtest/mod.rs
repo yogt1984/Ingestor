@@ -7,6 +7,9 @@
 //! - `replay`: Parquet file reader with time-ordered event streaming
 //! - `harness`: Run strategies on historical data
 //! - `metrics`: Performance measurement (Sharpe, drawdown, etc.)
+//! - `fill_simulator`: Realistic fill simulation with queue position modeling
+//! - `walk_forward`: Walk-forward validation to prevent overfitting
+//! - `data_quality`: Data validation and quality checks
 //!
 //! # Usage
 //!
@@ -31,8 +34,12 @@ pub mod replay;
 pub mod harness;
 pub mod metrics;
 pub mod fill_simulator;
+pub mod walk_forward;
+pub mod data_quality;
 
 pub use replay::{ParquetReplay, ReplayEvent, ReplayConfig};
 pub use harness::{BacktestEngine, BacktestConfig, BacktestResults};
 pub use metrics::{PerformanceMetrics, TradeLog, EquityCurve};
 pub use fill_simulator::{FillSimulator, FillSimulatorConfig, FillEvent, MarketState};
+pub use walk_forward::{WalkForwardEngine, WalkForwardConfig, WalkForwardResults};
+pub use data_quality::{DataQualityReport, DataValidator};
