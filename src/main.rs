@@ -112,12 +112,17 @@ async fn main() {
         fused_tx,
     );
 
+    // Max files = 0 means unlimited retention
+    // Each parquet file is ~200KB with 1000 rows (~100 seconds of data at 10Hz)
+    // 50000 files = ~10GB = ~58 days of continuous data
+    let max_files = 0; // Unlimited - manage disk space via TUI settings [s]
+
     let persistence_engine = PersistenceEngine::new(
         persist_rx,
         1000,
         "data/features",
         "features",
-        96,
+        max_files,
         persistence::save_feature_as_parquet_path,
     );
 

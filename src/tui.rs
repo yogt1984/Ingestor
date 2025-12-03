@@ -37,18 +37,42 @@ enum AppMode {
     Live,
     LiveMM,  // Live with Market Maker
     Features,
+    Backtest,       // Running backtest
+    WalkForward,    // Walk-forward validation
+    DataQuality,    // Data quality check
 }
 
 /// Settings for the application
 #[derive(Clone)]
 pub struct TuiSettings {
     pub persist_features: bool,
+    /// Maximum storage size in GB (0 = unlimited)
+    pub max_storage_gb: f64,
+    /// Run backtest after data collection
+    pub run_backtest: bool,
 }
 
 impl Default for TuiSettings {
     fn default() -> Self {
         Self {
             persist_features: true, // Default to persisting
+            max_storage_gb: 10.0,   // Default 10 GB
+            run_backtest: false,
+        }
+    }
+}
+
+impl TuiSettings {
+    /// Calculate max files based on storage limit
+    /// Each parquet file is ~200KB with 1000 rows
+    pub fn max_files(&self) -> usize {
+        if self.max_storage_gb <= 0.0 {
+            0 // Unlimited
+        } else {
+            // ~200KB per file, convert GB to files
+            let bytes_per_file = 200_000.0;
+            let max_bytes = self.max_storage_gb * 1_000_000_000.0;
+            (max_bytes / bytes_per_file) as usize
         }
     }
 }
@@ -512,8 +536,22 @@ fn main_loop(
                             mode = AppMode::Features;
                             scroll_offset = 0;
                         }
+                        KeyCode::Char('3') => mode = AppMode::Backtest,
+                        KeyCode::Char('4') => mode = AppMode::WalkForward,
+                        KeyCode::Char('5') => mode = AppMode::DataQuality,
                         KeyCode::Char('p') => {
                             settings.persist_features = !settings.persist_features;
+                        }
+                        KeyCode::Char('s') => {
+                            // Cycle through storage options: 1, 5, 10, 50, 100, unlimited
+                            settings.max_storage_gb = match settings.max_storage_gb as i32 {
+                                0 => 1.0,
+                                1 => 5.0,
+                                5 => 10.0,
+                                10 => 50.0,
+                                50 => 100.0,
+                                _ => 0.0, // unlimited
+                            };
                         }
                         KeyCode::Char('q') | KeyCode::Esc => return Ok(settings),
                         _ => {}
@@ -543,6 +581,16 @@ fn main_loop(
                         }
                         KeyCode::PageDown => {
                             scroll_offset = scroll_offset.saturating_add(10);
+                        }
+                        _ => {}
+                    },
+                    AppMode::Backtest | AppMode::WalkForward | AppMode::DataQuality => match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => mode = AppMode::Menu,
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            scroll_offset = scroll_offset.saturating_sub(1);
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            scroll_offset = scroll_offset.saturating_add(1);
                         }
                         _ => {}
                     },
@@ -648,6 +696,15 @@ fn main_loop(
             AppMode::Features => {
                 terminal.draw(|f| draw_features(f, &mut scroll_offset))?;
             }
+            AppMode::Backtest => {
+                terminal.draw(|f| draw_backtest_screen(f, &mut scroll_offset))?;
+            }
+            AppMode::WalkForward => {
+                terminal.draw(|f| draw_walkforward_screen(f, &mut scroll_offset))?;
+            }
+            AppMode::DataQuality => {
+                terminal.draw(|f| draw_dataquality_screen(f, &mut scroll_offset))?;
+            }
         }
     }
 }
@@ -658,41 +715,105 @@ fn draw_menu(f: &mut ratatui::Frame, symbol: &str, settings: &TuiSettings) {
     let persist_status = if settings.persist_features { "ON " } else { "OFF" };
     let persist_color = if settings.persist_features { Color::Green } else { Color::Red };
 
+    let storage_str = if settings.max_storage_gb <= 0.0 {
+        "UNLIMITED".to_string()
+    } else {
+        format!("{:.0} GB", settings.max_storage_gb)
+    };
+
+    // Calculate current data stats
+    let data_dir = std::path::Path::new("./data/features");
+    let (file_count, total_size_mb) = if data_dir.exists() {
+        let files: Vec<_> = std::fs::read_dir(data_dir)
+            .map(|rd| rd.filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map(|x| x == "parquet").unwrap_or(false))
+                .collect())
+            .unwrap_or_default();
+        let size: u64 = files.iter()
+            .filter_map(|f| f.metadata().ok())
+            .map(|m| m.len())
+            .sum();
+        (files.len(), size as f64 / 1_000_000.0)
+    } else {
+        (0, 0.0)
+    };
+
     let lines = vec![
         Line::from(""),
         Line::from(Span::styled(
             "  INGESTOR - Real-Time Market Microstructure Features",
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         )),
+        Line::from(Span::styled(
+            "  Binance WebSocket -> 60+ Features -> Parquet -> Backtest",
+            Style::default().fg(Color::DarkGray),
+        )),
         Line::from(""),
-        Line::from(format!("  Symbol: {}", symbol.to_uppercase())),
+        Line::from(vec![
+            Span::raw("  Symbol: "),
+            Span::styled(symbol.to_uppercase(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(format!("    Data: {} files ({:.1} MB)", file_count, total_size_mb)),
+        ]),
         Line::from(""),
-        Line::from(Span::styled("  Select an option:", Style::default().fg(Color::Yellow))),
-        Line::from(""),
+        Line::from(Span::styled("  DATA COLLECTION", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
         Line::from(vec![
             Span::styled("  [0] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
             Span::raw("Live Dashboard"),
+            Span::styled(" - stream features, save to ./data/features/*.parquet", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(vec![
             Span::styled("  [1] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::raw("Live Dashboard + Market Maker (paper trading)"),
+            Span::raw("Live + Market Maker"),
+            Span::styled(" - paper trade while collecting data", Style::default().fg(Color::DarkGray)),
         ]),
+        Line::from(""),
+        Line::from(Span::styled("  BACKTESTING", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from(vec![
+            Span::styled("  [3] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw("Run Backtest"),
+            Span::styled(" - test MM strategy on collected data", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled("  [4] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw("Walk-Forward Validation"),
+            Span::styled(" - cross-validate to detect overfitting", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled("  [5] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw("Data Quality Check"),
+            Span::styled(" - validate data before backtesting", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  INFO", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
         Line::from(vec![
             Span::styled("  [2] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
             Span::raw("Feature Descriptions"),
+            Span::styled(" - 60+ microstructure features explained", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(""),
-        Line::from(Span::styled("  Settings:", Style::default().fg(Color::Yellow))),
+        Line::from(Span::styled("  SETTINGS", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
         Line::from(vec![
             Span::styled("  [p] ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
-            Span::raw("Persist features to disk: "),
+            Span::raw("Persist to disk: "),
             Span::styled(persist_status, Style::default().fg(persist_color).add_modifier(Modifier::BOLD)),
+            Span::styled("   (saves 60+ features per tick to Parquet)", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled("  [s] ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+            Span::raw("Max storage: "),
+            Span::styled(&storage_str, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("   (~{} files)", settings.max_files()), Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(""),
         Line::from(vec![
             Span::styled("  [q] ", Style::default().fg(Color::Red)),
             Span::raw("Quit"),
         ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Tip: Keep app running 24/7 for continuous data. More data = better backtests!",
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+        )),
     ];
 
     let para = Paragraph::new(lines).block(
@@ -1306,4 +1427,272 @@ fn textwrap_simple(text: &str, max_width: usize) -> Vec<String> {
     }
 
     lines
+}
+
+/// Run backtest and display results
+fn draw_backtest_screen(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
+    use ingestor::backtest::{BacktestEngine, BacktestConfig, ReplayConfig};
+    use std::path::PathBuf;
+
+    let size = f.size();
+
+    // Run backtest (cached result would be better, but this is simpler for now)
+    let data_dir = PathBuf::from("./data/features");
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  BACKTEST RESULTS",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+
+    if !data_dir.exists() {
+        lines.push(Line::from(Span::styled(
+            "  No data found in ./data/features",
+            Style::default().fg(Color::Red),
+        )));
+        lines.push(Line::from("  Run option [0] or [1] first to collect data."));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  Running backtest... (this may take a moment)",
+            Style::default().fg(Color::Yellow),
+        )));
+        lines.push(Line::from(""));
+
+        let config = BacktestConfig {
+            replay: ReplayConfig {
+                data_dir,
+                ..Default::default()
+            },
+            verbose: false,
+            ..Default::default()
+        };
+
+        let mut engine = BacktestEngine::new(config);
+        match engine.load_data() {
+            Ok(num_events) => {
+                lines.push(Line::from(format!("  Loaded {} events", num_events)));
+
+                match engine.run() {
+                    Ok(results) => {
+                        lines.push(Line::from(""));
+                        lines.push(Line::from(Span::styled("  PERFORMANCE", Style::default().fg(Color::Yellow))));
+                        lines.push(Line::from(format!("  Total Return:    {:+.2}%", results.metrics.total_return * 100.0)));
+                        lines.push(Line::from(format!("  Sharpe Ratio:    {:+.2}", results.metrics.sharpe_ratio)));
+                        lines.push(Line::from(format!("  Max Drawdown:    {:.2}%", results.metrics.max_drawdown * 100.0)));
+                        lines.push(Line::from(format!("  Win Rate:        {:.1}%", results.metrics.win_rate * 100.0)));
+                        lines.push(Line::from(""));
+                        lines.push(Line::from(Span::styled("  TRADING", Style::default().fg(Color::Yellow))));
+                        lines.push(Line::from(format!("  Trades:          {}", results.metrics.num_trades)));
+                        lines.push(Line::from(format!("  Profit Factor:   {:.2}", results.metrics.profit_factor)));
+                        lines.push(Line::from(""));
+                        lines.push(Line::from(Span::styled("  FILL SIMULATION", Style::default().fg(Color::Yellow))));
+                        lines.push(Line::from(format!("  Bid Fill Rate:   {:.1}%", results.fill_stats.bid_fill_rate * 100.0)));
+                        lines.push(Line::from(format!("  Ask Fill Rate:   {:.1}%", results.fill_stats.ask_fill_rate * 100.0)));
+                        lines.push(Line::from(format!("  Partial Fills:   {}", results.fill_stats.partial_fills)));
+                    }
+                    Err(e) => {
+                        lines.push(Line::from(Span::styled(
+                            format!("  Error: {}", e),
+                            Style::default().fg(Color::Red),
+                        )));
+                    }
+                }
+            }
+            Err(e) => {
+                lines.push(Line::from(Span::styled(
+                    format!("  Error loading data: {}", e),
+                    Style::default().fg(Color::Red),
+                )));
+            }
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  [q] Back to menu",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let max_scroll = lines.len().saturating_sub(size.height as usize) as u16;
+    *scroll_offset = (*scroll_offset).min(max_scroll);
+
+    let para = Paragraph::new(lines)
+        .scroll((*scroll_offset, 0))
+        .block(
+            Block::default()
+                .title(" BACKTEST ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
+    f.render_widget(para, size);
+}
+
+/// Run walk-forward validation and display results
+fn draw_walkforward_screen(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
+    let size = f.size();
+    let data_dir = std::path::PathBuf::from("./data/features");
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  WALK-FORWARD VALIDATION",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "  Time-series cross-validation to detect overfitting",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+    ];
+
+    if !data_dir.exists() {
+        lines.push(Line::from(Span::styled(
+            "  No data found. Collect data first using [0] or [1].",
+            Style::default().fg(Color::Red),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  Walk-forward validation takes ~1-5 minutes depending on data size.",
+            Style::default().fg(Color::Yellow),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from("  For faster results, use the CLI:"));
+        lines.push(Line::from(Span::styled(
+            "    ./target/release/backtest --data ./data/features walk-forward",
+            Style::default().fg(Color::Green),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from("  Options:"));
+        lines.push(Line::from("    --folds N        Number of train/test splits (default: 5)"));
+        lines.push(Line::from("    --test-hours H   Hours per test fold (default: 24)"));
+        lines.push(Line::from("    --rolling        Use rolling (vs expanding) window"));
+        lines.push(Line::from("    -o FILE.json     Save results to JSON file"));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  [q] Back to menu",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let max_scroll = lines.len().saturating_sub(size.height as usize) as u16;
+    *scroll_offset = (*scroll_offset).min(max_scroll);
+
+    let para = Paragraph::new(lines)
+        .scroll((*scroll_offset, 0))
+        .block(
+            Block::default()
+                .title(" WALK-FORWARD ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
+    f.render_widget(para, size);
+}
+
+/// Run data quality check and display results
+fn draw_dataquality_screen(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
+    use ingestor::backtest::DataValidator;
+    let size = f.size();
+    let data_dir = std::path::PathBuf::from("./data/features");
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  DATA QUALITY REPORT",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+
+    if !data_dir.exists() {
+        lines.push(Line::from(Span::styled(
+            "  No data found in ./data/features",
+            Style::default().fg(Color::Red),
+        )));
+    } else {
+        let validator = DataValidator::new();
+        match validator.validate_directory(&data_dir) {
+            Ok(report) => {
+                let score_color = if report.quality_score > 0.8 {
+                    Color::Green
+                } else if report.quality_score > 0.5 {
+                    Color::Yellow
+                } else {
+                    Color::Red
+                };
+
+                lines.push(Line::from(vec![
+                    Span::styled("  Quality Score: ", Style::default()),
+                    Span::styled(
+                        format!("{:.0}%", report.quality_score * 100.0),
+                        Style::default().fg(score_color).add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+                lines.push(Line::from(""));
+                lines.push(Line::from(format!("  Total Events:   {}", report.total_events)));
+                lines.push(Line::from(format!("  Valid Events:   {} ({:.1}%)",
+                    report.valid_events,
+                    report.valid_events as f64 / report.total_events.max(1) as f64 * 100.0)));
+                lines.push(Line::from(format!("  Invalid Events: {}", report.invalid_events)));
+                lines.push(Line::from(""));
+
+                if !report.price_anomalies.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        format!("  Price Anomalies: {}", report.price_anomalies.len()),
+                        Style::default().fg(Color::Yellow),
+                    )));
+                }
+
+                if !report.data_gaps.is_empty() {
+                    let total_gap_hours: f64 = report.data_gaps.iter().map(|g| g.duration_hours).sum();
+                    lines.push(Line::from(Span::styled(
+                        format!("  Data Gaps: {} ({:.1} hours total)", report.data_gaps.len(), total_gap_hours),
+                        Style::default().fg(Color::Yellow),
+                    )));
+                }
+
+                if !report.timestamp_issues.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        format!("  Timestamp Issues: {}", report.timestamp_issues.len()),
+                        Style::default().fg(Color::Yellow),
+                    )));
+                }
+
+                lines.push(Line::from(""));
+                if !report.recommendations.is_empty() {
+                    lines.push(Line::from(Span::styled("  RECOMMENDATIONS:", Style::default().fg(Color::Yellow))));
+                    for rec in &report.recommendations {
+                        lines.push(Line::from(format!("    - {}", rec)));
+                    }
+                }
+            }
+            Err(e) => {
+                lines.push(Line::from(Span::styled(
+                    format!("  Error: {}", e),
+                    Style::default().fg(Color::Red),
+                )));
+            }
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  [q] Back to menu",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let max_scroll = lines.len().saturating_sub(size.height as usize) as u16;
+    *scroll_offset = (*scroll_offset).min(max_scroll);
+
+    let para = Paragraph::new(lines)
+        .scroll((*scroll_offset, 0))
+        .block(
+            Block::default()
+                .title(" DATA QUALITY ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
+    f.render_widget(para, size);
 }
