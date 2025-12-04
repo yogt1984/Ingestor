@@ -402,6 +402,35 @@ See `REPORT_03_12_25.md` for full analysis. Key findings:
 | **Entropy threshold irrelevant** | 0.6/0.7/0.8 produce identical results |
 | **Best config: spread=1, skew=0.3** | +5% return, 62% win rate, 0.3% drawdown |
 
+### Bayesian Optimization (Optuna)
+
+For smarter parameter search than grid search:
+
+```bash
+# Install Optuna
+pip3 install optuna
+
+# Run Bayesian optimization (50 trials, ~5 min)
+python3 scripts/optimize.py --trials 50 --metric return
+
+# Optimize for different metrics
+python3 scripts/optimize.py --trials 100 --metric sharpe
+python3 scripts/optimize.py --trials 100 --metric risk_adjusted
+
+# Save results to custom file
+python3 scripts/optimize.py --trials 50 --output my_results.json
+```
+
+**Why Bayesian over Grid Search?**
+- Grid search tests ALL combinations (360 for our default grid)
+- Bayesian learns from previous trials → focuses on promising regions
+- 50 Bayesian trials often beats 360 grid search trials
+
+**Output includes:**
+- Best parameters found
+- Parameter importance ranking
+- All trial results (saved to JSON)
+
 ### Multi-Objective Optimization
 
 Key objectives to balance:
@@ -460,7 +489,7 @@ Already implemented via `backtest walk-forward` command.
 - [x] Basic parameter sweep (spread × skew grid)
 - [x] Extended grid search (entropy thresholds, fill params)
 - [x] Entropy gate experiment (gated vs ungated) - **Result: UNGATED wins**
-- [ ] Bayesian optimization (Optuna integration)
+- [x] Bayesian optimization (Optuna integration)
 - [ ] Multi-objective optimization (Sharpe vs drawdown)
 - [ ] Regime-specific parameter sets
 - [ ] Out-of-sample validation
