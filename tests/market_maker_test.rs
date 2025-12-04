@@ -4,7 +4,6 @@ use ingestor::market_maker::{
     MarketMakerEngine, MMConfig, MMState, Quote, QuoteSide, Fill, MarketRegime, RegimeThresholds,
     PnLTracker,
 };
-use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 
 #[test]
