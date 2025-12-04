@@ -128,14 +128,22 @@ For reliable backtesting:
 │                                                          │
 │  Symbol: BTCUSDT                                         │
 │                                                          │
-│  Select an option:                                       │
+│  DATA COLLECTION                                         │
+│  [0] Live Dashboard - stream & save features             │
+│  [1] Live + Market Maker - paper trade (default params)  │
+│  [6] Paper Trade w/ Preset - validate optimized params   │
 │                                                          │
-│  [0] Live Dashboard                                      │
-│  [1] Live Dashboard + Market Maker (paper trading)       │
+│  BACKTESTING                                             │
+│  [3] Run Backtest                                        │
+│  [4] Walk-Forward Validation                             │
+│  [5] Data Quality Check                                  │
+│                                                          │
+│  INFO                                                    │
 │  [2] Feature Descriptions                                │
 │                                                          │
-│  Settings:                                               │
-│  [p] Persist features to disk: ON                        │
+│  SETTINGS                                                │
+│  [p] Persist to disk: ON                                 │
+│  [s] Max storage: 10 GB                                  │
 │                                                          │
 │  [q] Quit                                                │
 └──────────────────────────────────────────────────────────┘
@@ -143,8 +151,10 @@ For reliable backtesting:
 
 ### Market Maker Dashboard
 
+When using `[6] Paper Trade w/ Preset`, the dashboard shows which preset is active:
+
 ```
- BTCUSDT | 14:32:15 | MARKET MAKER (paper) | [r] reset [q] menu
+ BTCUSDT | 14:32:15 | Preset: GridSearch-Best (2025-12-03 16:00) | Quotes: 1234 | [r] reset [q] menu
 ┌─ MARKET MAKER STATE ────────────────────────────────────┐
 │ REGIME HIGH ENTROPY   ENTROPY 0.923                     │
 │ FAIR VALUE 97234.82  HALF SPREAD 4.50  SKEW +0.02       │
@@ -163,6 +173,37 @@ For reliable backtesting:
 │ TRADES SEEN 1234  BID FILLS 6  ASK FILLS 6  FILL 12.5%  │
 │ BID MISSES 42  ASK MISSES 38  FILL VOL 0.0120           │
 └─────────────────────────────────────────────────────────┘
+```
+
+### Paper Trading with Presets
+
+The `[6] Paper Trade w/ Preset` option lets you validate optimized parameters with live market data:
+
+1. **Select a Preset**: Choose from presets created via grid-search or Bayesian optimization
+2. **Paper Trade**: Run the market maker with those parameters against live data
+3. **Measure Fill Rate**: Compare actual fills vs backtest assumptions
+4. **Session Saved**: Results automatically saved to `./data/sessions/`
+
+Example preset selection screen:
+```
+┌─ PRESET SELECTION ──────────────────────────────────────┐
+│                                                          │
+│  SELECT PARAMETER PRESET FOR PAPER TRADING               │
+│                                                          │
+│  AVAILABLE PRESETS:                                      │
+│                                                          │
+│  >> [1] GridSearch-Best                                  │
+│         Developed: 2025-12-03 16:00 via grid-search      │
+│         Spread: 1.0bps | Skew: 0.30 | Entropy: 0.70      │
+│         Expected: +5.1% return | 59.5% win | 452 trades  │
+│                                                          │
+│     [2] GridSearch-Conservative                          │
+│         Developed: 2025-12-03 16:00 via grid-search      │
+│         Spread: 1.0bps | Skew: 0.30 | Entropy: 0.70      │
+│         Expected: +1.1% return | 55.0% win | 202 trades  │
+│                                                          │
+│  [up/down] Navigate  [Enter] Select  [q] Back            │
+└──────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -725,6 +766,52 @@ Binance WebSocket
                        MMSimulator
                        (Paper Trading)
 ```
+
+---
+
+## Development Workflow
+
+The recommended workflow for developing and validating trading strategies:
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  1. COLLECT     │────>│  2. OPTIMIZE    │────>│  3. VALIDATE    │────>│  4. COMPARE     │
+│     DATA        │     │    PARAMETERS   │     │    (PAPER)      │     │    RESULTS      │
+│                 │     │                 │     │                 │     │                 │
+│  [0] Live       │     │  grid-search    │     │  [6] Paper      │     │  Backtest vs    │
+│  Dashboard      │     │  or Optuna      │     │  Trade Preset   │     │  Paper Trade    │
+└─────────────────┘     └─────────────────┘     └─────────────────┘     └─────────────────┘
+```
+
+### Step 1: Collect Data
+```bash
+# Run overnight (use tmux or screen)
+cargo run --release
+# Press [0] for Live Dashboard
+```
+
+### Step 2: Optimize Parameters
+```bash
+# Grid search (comprehensive)
+cargo run --release --bin backtest -- grid-search --test-gate
+
+# Bayesian optimization (faster)
+python3 scripts/optimize.py --trials 50 --metric return
+```
+
+### Step 3: Paper Trade with Preset
+```bash
+cargo run --release
+# Press [6] to select a preset
+# Select "GridSearch-Best" and run against live data
+```
+
+### Step 4: Compare Results
+Compare backtest expectations with paper trading reality:
+- **Fill rate**: Backtest assumption (e.g., 10%) vs actual observed fills
+- **Sharpe ratio**: Expected vs realized
+- **Win rate**: Backtest vs live
+- Session results saved in `./data/sessions/`
 
 ---
 

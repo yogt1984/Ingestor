@@ -12,6 +12,7 @@ mod volatility;
 mod toxicity;
 mod market_maker;
 mod mm_simulator;
+mod presets;
 mod tui;
 
 use crossbeam::channel;
