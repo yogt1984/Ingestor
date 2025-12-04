@@ -28,11 +28,13 @@ fn test_preset_to_mm_config() {
     let preset = ParameterPreset::new("Test", "manual", 1.5, 0.4, 0.8, 0.10);
     let config = preset.to_mm_config();
 
-    assert_eq!(config.base_spread_bps, 1.5);
-    assert_eq!(config.inventory_skew_factor, 0.4);
+    // Now using RegimeParams - high entropy spread is the base spread
+    assert_eq!(config.regime_params.high_entropy.spread_bps, 1.5);
+    assert_eq!(config.regime_params.high_entropy.skew_factor, 0.4);
     assert_eq!(config.regime_thresholds.high_entropy_threshold, 0.8);
     assert_eq!(config.regime_thresholds.low_entropy_threshold, 0.4);
-    assert!(!config.pull_quotes_in_low_entropy);
+    // Without entropy gate, should_quote is true in low entropy
+    assert!(config.regime_params.low_entropy.should_quote);
 }
 
 #[test]
@@ -41,7 +43,8 @@ fn test_preset_with_entropy_gate() {
     preset.entropy_gate = true;
 
     let config = preset.to_mm_config();
-    assert!(config.pull_quotes_in_low_entropy);
+    // With entropy gate, should_quote is false in low entropy
+    assert!(!config.regime_params.low_entropy.should_quote);
 }
 
 #[test]
