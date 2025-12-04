@@ -11,3 +11,5 @@ pub mod mm_simulator;
 pub mod backtest;
 pub mod forward_testing;
 pub mod presets;
+pub mod lob_feed_manager;
+pub mod log_feed_manager;

@@ -1,3 +1,4 @@
+use crate::lob_feed_manager::{SharedConnectionStatus, ConnectionStatus};
 use crate::tradeslog::{ConcurrentTradesLog, Trade};
 use futures_util::StreamExt;
 use log::{debug, error, info, warn};
@@ -5,7 +6,6 @@ use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::str::FromStr;
 use std::time::Duration;
-use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use thiserror::Error;
@@ -44,6 +44,7 @@ pub struct LogFeedManager {
     trades_log: ConcurrentTradesLog,
     symbol: String,
     metrics: FeedMetrics,
+    connection_status: SharedConnectionStatus,
 }
 
 impl LogFeedManager {
@@ -59,7 +60,13 @@ impl LogFeedManager {
                 connection_errors: metrics::register_counter!("log_feed_connection_errors"),
                 current_connections: metrics::register_gauge!("log_feed_current_connections"),
             },
+            connection_status: SharedConnectionStatus::new(),
         }
+    }
+
+    /// Get the connection status for TUI display
+    pub fn connection_status(&self) -> SharedConnectionStatus {
+        self.connection_status.clone()
     }
 
     fn build_uri(&self) -> String {
@@ -70,10 +77,12 @@ impl LogFeedManager {
         let mut retry_delay = Duration::from_secs(1);
         let uri = self.build_uri();
         loop {
+            self.connection_status.set(ConnectionStatus::Connecting);
             tokio::select! {
                 _ = shutdown_rx.changed() => {
                     if *shutdown_rx.borrow() {
                         info!("Shutting down trade feed manager");
+                        self.connection_status.set(ConnectionStatus::Disconnected);
                         break;
                     } else {
                         continue;
@@ -83,7 +92,9 @@ impl LogFeedManager {
                     match connect_result {
                         Ok((ws_stream, _)) => {
                             self.metrics.current_connections.set(1.0);
+                            self.connection_status.set(ConnectionStatus::Connected);
                             debug!("Connected to Trade WebSocket at {}", uri);
+                            retry_delay = Duration::from_secs(1); // Reset on successful connect
                             let (_, mut read) = ws_stream.split();
                             loop {
                                 tokio::select! {
@@ -91,6 +102,7 @@ impl LogFeedManager {
                                         if *shutdown_rx.borrow() {
                                             info!("Shutting down trade feed manager");
                                             self.metrics.current_connections.set(0.0);
+                                            self.connection_status.set(ConnectionStatus::Disconnected);
                                             return;
                                         }
                                     }
@@ -121,20 +133,23 @@ impl LogFeedManager {
                                     }
                                 }
                             }
-                            warn!("⚠️ Trade WebSocket stream closed for {}", uri);
+                            // Stream closed - will reconnect
                             self.metrics.current_connections.set(0.0);
+                            self.connection_status.set(ConnectionStatus::Reconnecting);
                         }
                         Err(err) => {
                             self.metrics.connection_errors.increment(1);
                             error!("Failed to connect to {}: {}", uri, err);
+                            self.connection_status.set(ConnectionStatus::Reconnecting);
                         }
                     }
                 }
             }
             if *shutdown_rx.borrow() {
+                self.connection_status.set(ConnectionStatus::Disconnected);
                 break;
             }
-            warn!("Reconnecting to {} in {:?}...", uri, retry_delay);
+            debug!("Reconnecting to {} in {:?}...", uri, retry_delay);
             sleep(retry_delay).await;
             retry_delay = std::cmp::min(retry_delay * 2, Duration::from_secs(60));
         }
