@@ -25,6 +25,7 @@ use crate::feature_fusion::FeaturesSnapshot;
 use crate::market_maker::{MarketMakerEngine, MMConfig, MarketRegime};
 use crate::mm_simulator::{PaperTradingEngine, SimulatorConfig};
 use ingestor::forward_testing::{ForwardTestSession, ForwardTestConfig};
+use crate::presets::{PresetStore, ParameterPreset};
 
 type Term = Terminal<CrosstermBackend<io::Stdout>>;
 
@@ -36,11 +37,13 @@ const UPDATE_INTERVAL_MS: u64 = 1000; // 1Hz update rate
 enum AppMode {
     Menu,
     Live,
-    LiveMM,  // Live with Market Maker
+    LiveMM,          // Live with Market Maker
+    PresetSelect,    // Preset selection for paper trading
+    PaperTradePreset, // Paper trading with selected preset
     Features,
-    Backtest,       // Running backtest
-    WalkForward,    // Walk-forward validation
-    DataQuality,    // Data quality check
+    Backtest,        // Running backtest
+    WalkForward,     // Walk-forward validation
+    DataQuality,     // Data quality check
 }
 
 /// Settings for the application
@@ -528,6 +531,11 @@ fn main_loop(
     // Forward testing session for trade logging
     let mut forward_session = ForwardTestSession::new(ForwardTestConfig::default());
 
+    // Preset store for paper trading with optimized parameters
+    let mut preset_store = PresetStore::load();
+    let mut selected_preset_idx: usize = 0;
+    let mut active_preset: Option<ParameterPreset> = None;
+
     loop {
         // Handle input
         if event::poll(Duration::from_millis(50))? {
@@ -548,6 +556,13 @@ fn main_loop(
                         KeyCode::Char('3') => mode = AppMode::Backtest,
                         KeyCode::Char('4') => mode = AppMode::WalkForward,
                         KeyCode::Char('5') => mode = AppMode::DataQuality,
+                        KeyCode::Char('6') => {
+                            // Paper trade with preset - go to preset selection
+                            preset_store = PresetStore::load();
+                            selected_preset_idx = 0;
+                            mode = AppMode::PresetSelect;
+                            scroll_offset = 0;
+                        }
                         KeyCode::Char('p') => {
                             settings.persist_features = !settings.persist_features;
                         }
@@ -583,6 +598,60 @@ fn main_loop(
                         }
                         KeyCode::Char('r') => {
                             // Reset MM state and start new session
+                            paper_trading.reset();
+                            forward_session = ForwardTestSession::new(ForwardTestConfig::default());
+                            forward_session.start();
+                        }
+                        _ => {}
+                    },
+                    AppMode::PresetSelect => match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => mode = AppMode::Menu,
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            if selected_preset_idx > 0 {
+                                selected_preset_idx -= 1;
+                            }
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            if selected_preset_idx + 1 < preset_store.presets.len() {
+                                selected_preset_idx += 1;
+                            }
+                        }
+                        KeyCode::Enter => {
+                            // Select preset and start paper trading
+                            if let Some(preset) = preset_store.get(selected_preset_idx) {
+                                let mm_config = preset.to_mm_config();
+                                // Use queue position model for more realistic fills
+                                let sim_config = SimulatorConfig {
+                                    use_queue_model: true,
+                                    queue_position_fraction: 0.5, // Middle of queue
+                                    ..Default::default()
+                                };
+                                paper_trading = PaperTradingEngine::new(
+                                    MarketMakerEngine::new(mm_config),
+                                    sim_config,
+                                );
+                                active_preset = Some(preset.clone());
+                                forward_session = ForwardTestSession::new(ForwardTestConfig::default());
+                                forward_session.start();
+                                mode = AppMode::PaperTradePreset;
+                            }
+                        }
+                        _ => {}
+                    },
+                    AppMode::PaperTradePreset => match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => {
+                            // End forward testing session and save
+                            if forward_session.is_active() {
+                                if let Ok(summary) = forward_session.end() {
+                                    log::info!("Preset session {} saved with {} trades",
+                                        summary.session_id, summary.trade_count);
+                                }
+                            }
+                            active_preset = None;
+                            mode = AppMode::Menu;
+                        }
+                        KeyCode::Char('r') => {
+                            // Reset but keep preset
                             paper_trading.reset();
                             forward_session = ForwardTestSession::new(ForwardTestConfig::default());
                             forward_session.start();
@@ -652,7 +721,7 @@ fn main_loop(
                 }
 
                 // Update MM engine with latest features
-                if mode == AppMode::LiveMM {
+                if mode == AppMode::LiveMM || mode == AppMode::PaperTradePreset {
                     if let Some(ref snap) = last_snapshot {
                         let microprice = snap.microprice.unwrap_or(snap.mid_price.unwrap_or_default());
                         let mid_price = snap.mid_price.unwrap_or_default();
@@ -708,7 +777,7 @@ fn main_loop(
         // Draw based on mode
         match mode {
             AppMode::Menu => {
-                terminal.draw(|f| draw_menu(f, &symbol, &settings))?;
+                terminal.draw(|f| draw_menu(f, &symbol, &settings, &preset_store))?;
             }
             AppMode::Live => {
                 terminal.draw(|f| {
@@ -724,7 +793,19 @@ fn main_loop(
                     if !has_data {
                         draw_waiting(f);
                     } else {
-                        draw_live_mm(f, &symbol, &current_features, &paper_trading, &forward_session);
+                        draw_live_mm(f, &symbol, &current_features, &paper_trading, &forward_session, None);
+                    }
+                })?;
+            }
+            AppMode::PresetSelect => {
+                terminal.draw(|f| draw_preset_select(f, &preset_store, selected_preset_idx))?;
+            }
+            AppMode::PaperTradePreset => {
+                terminal.draw(|f| {
+                    if !has_data {
+                        draw_waiting(f);
+                    } else {
+                        draw_live_mm(f, &symbol, &current_features, &paper_trading, &forward_session, active_preset.as_ref());
                     }
                 })?;
             }
@@ -744,7 +825,7 @@ fn main_loop(
     }
 }
 
-fn draw_menu(f: &mut ratatui::Frame, symbol: &str, settings: &TuiSettings) {
+fn draw_menu(f: &mut ratatui::Frame, symbol: &str, settings: &TuiSettings, preset_store: &PresetStore) {
     let size = f.size();
 
     let persist_status = if settings.persist_features { "ON " } else { "OFF" };
@@ -799,7 +880,19 @@ fn draw_menu(f: &mut ratatui::Frame, symbol: &str, settings: &TuiSettings) {
         Line::from(vec![
             Span::styled("  [1] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
             Span::raw("Live + Market Maker"),
-            Span::styled(" - paper trade while collecting data", Style::default().fg(Color::DarkGray)),
+            Span::styled(" - paper trade with default params", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled("  [6] ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+            Span::raw("Paper Trade w/ Preset"),
+            Span::styled(
+                if let Some(latest) = preset_store.latest() {
+                    format!(" - {} presets available, latest: {}", preset_store.presets.len(), latest.created_at_local())
+                } else {
+                    " - no presets available".to_string()
+                },
+                Style::default().fg(Color::DarkGray)
+            ),
         ]),
         Line::from(""),
         Line::from(Span::styled("  BACKTESTING", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
@@ -1171,6 +1264,7 @@ fn draw_live_mm(
     feat: &AveragedFeatures,
     paper_trading: &PaperTradingEngine,
     session: &ForwardTestSession,
+    active_preset: Option<&ParameterPreset>,
 ) {
     let size = f.size();
     let state = paper_trading.state();
@@ -1189,17 +1283,22 @@ fn draw_live_mm(
         ])
         .split(size);
 
-    // Title with session info
+    // Title with session info and preset info
     let now = chrono::Local::now().format("%H:%M:%S");
     let session_info = if session.is_active() {
         let m = session.metrics();
-        format!("Session: {} | Quotes: {}", session.session_id(), m.quotes_generated)
+        format!("Quotes: {}", m.quotes_generated)
     } else {
-        "Session: inactive".to_string()
+        "inactive".to_string()
+    };
+    let preset_info = if let Some(preset) = active_preset {
+        format!("Preset: {} ({})", preset.name, preset.created_at_local())
+    } else {
+        "Default params".to_string()
     };
     let title = format!(
-        " {} | {} | MARKET MAKER (paper) | {} | [r] reset [q] menu ",
-        symbol.to_uppercase(), now, session_info
+        " {} | {} | {} | {} | [r] reset [q] menu ",
+        symbol.to_uppercase(), now, preset_info, session_info
     );
     let title_para = Paragraph::new(Line::from(Span::styled(
         title,
@@ -1756,5 +1855,124 @@ fn draw_dataquality_screen(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan)),
         );
+    f.render_widget(para, size);
+}
+
+/// Draw preset selection screen
+fn draw_preset_select(f: &mut ratatui::Frame, preset_store: &PresetStore, selected_idx: usize) {
+    let size = f.size();
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  SELECT PARAMETER PRESET FOR PAPER TRADING",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "  Choose an optimized configuration to validate with live data",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+    ];
+
+    if preset_store.presets.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  No presets available.",
+            Style::default().fg(Color::Yellow),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from("  Run grid-search or Bayesian optimization to create presets:"));
+        lines.push(Line::from(Span::styled(
+            "    cargo run --release --bin backtest -- grid-search --test-gate",
+            Style::default().fg(Color::Green),
+        )));
+        lines.push(Line::from(Span::styled(
+            "    python3 scripts/optimize.py --trials 50",
+            Style::default().fg(Color::Green),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  AVAILABLE PRESETS:",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
+
+        for (i, preset) in preset_store.presets.iter().enumerate() {
+            let is_selected = i == selected_idx;
+            let prefix = if is_selected { ">> " } else { "   " };
+            let style = if is_selected {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            // Main preset line
+            lines.push(Line::from(vec![
+                Span::styled(prefix, style),
+                Span::styled(format!("[{}] ", i + 1), Style::default().fg(Color::Green)),
+                Span::styled(&preset.name, style),
+            ]));
+
+            // Details line
+            let details = format!(
+                "       Developed: {} via {}",
+                preset.created_at_local(),
+                preset.optimization_method
+            );
+            lines.push(Line::from(Span::styled(
+                details,
+                if is_selected { Style::default().fg(Color::Cyan) } else { Style::default().fg(Color::DarkGray) },
+            )));
+
+            // Parameters line
+            let params = format!(
+                "       Spread: {:.1}bps | Skew: {:.2} | Entropy: {:.2} | Fill Prob: {:.0}%",
+                preset.spread_bps,
+                preset.skew,
+                preset.high_entropy_threshold,
+                preset.fill_prob_assumption * 100.0
+            );
+            lines.push(Line::from(Span::styled(
+                params,
+                if is_selected { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::DarkGray) },
+            )));
+
+            // Expected performance line
+            let expected = format!(
+                "       Expected: {:+.1}% return | {:.1}% win rate | {} trades",
+                preset.expected_return * 100.0,
+                preset.expected_win_rate * 100.0,
+                preset.expected_trades
+            );
+            lines.push(Line::from(Span::styled(
+                expected,
+                if is_selected { Style::default().fg(Color::Green) } else { Style::default().fg(Color::DarkGray) },
+            )));
+
+            // Data range
+            if !preset.data_range.is_empty() {
+                let data_info = format!("       Data: {}", preset.data_range);
+                lines.push(Line::from(Span::styled(
+                    data_info,
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+
+            lines.push(Line::from(""));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  [up/down] Navigate  [Enter] Select  [q] Back to menu",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let para = Paragraph::new(lines).block(
+        Block::default()
+            .title(" PRESET SELECTION ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Magenta)),
+    );
     f.render_widget(para, size);
 }
