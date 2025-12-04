@@ -95,6 +95,10 @@ struct Cli {
     /// Pull quotes entirely in low entropy regime (entropy gate)
     #[arg(long)]
     entropy_gate: bool,
+
+    /// Output results as JSON (for scripting/Optuna)
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Subcommand)]
@@ -199,6 +203,34 @@ fn main() -> Result<()> {
 }
 
 fn run_single(cli: &Cli) -> Result<()> {
+    // JSON mode: minimal output, just the results
+    if cli.json {
+        let mut config = build_config(cli);
+        config.verbose = false;  // Suppress progress output
+        let mut engine = BacktestEngine::new(config);
+        engine.load_data()?;
+        let results = engine.run()?;
+
+        // Output JSON for Optuna/scripting
+        let json_output = serde_json::json!({
+            "sharpe": results.metrics.sharpe_ratio,
+            "total_return": results.metrics.total_return,
+            "max_drawdown": results.metrics.max_drawdown,
+            "num_trades": results.metrics.num_trades,
+            "win_rate": results.metrics.win_rate,
+            "avg_trade_pnl": results.metrics.avg_trade_pnl,
+            "params": {
+                "spread": cli.spread,
+                "skew": cli.skew,
+                "fill_prob": cli.fill_prob,
+                "high_entropy": cli.high_entropy,
+                "entropy_gate": cli.entropy_gate
+            }
+        });
+        println!("{}", json_output);
+        return Ok(());
+    }
+
     println!("═══════════════════════════════════════════════════════");
     println!("           INGESTOR BACKTEST ENGINE                     ");
     println!("═══════════════════════════════════════════════════════");
