@@ -73,7 +73,8 @@ async fn test_entropy_all_windows() {
     
     // With 100 recent trades, at least some entropy windows should have values
     // (Note: Some windows may be None if trades are outside their time window)
-    assert!(entropy_count >= 0, "Entropy count should be non-negative");
+    // entropy_count is always >= 0 as usize, this validates the count was computed
+    let _ = entropy_count;
     
     // Verify all volume tick entropy windows (may be None if not enough data)
     let volume_entropy_count = [
@@ -88,7 +89,8 @@ async fn test_entropy_all_windows() {
     
     // The test verifies that the fields exist in the struct, even if None
     // This is important for parquet persistence - all fields must be present
-    assert!(volume_entropy_count >= 0, "Volume entropy count should be non-negative");
+    // volume_entropy_count is always >= 0 as usize, this validates the count was computed
+    let _ = volume_entropy_count;
 }
 
 #[tokio::test]

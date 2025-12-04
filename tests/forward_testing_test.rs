@@ -2,7 +2,7 @@
 
 use ingestor::forward_testing::{
     ForwardTestSession, ForwardTestConfig, SessionMetrics,
-    TradeRecord, QuoteRecord, BacktestComparison, ComparisonMetrics, ComparisonDiff,
+    ComparisonMetrics, ComparisonDiff,
 };
 use rust_decimal_macros::dec;
 

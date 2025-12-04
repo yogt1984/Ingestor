@@ -1,7 +1,6 @@
 //! Tests for the presets module
 
 use ingestor::presets::{ParameterPreset, PresetStore};
-use ingestor::market_maker::MMConfig;
 
 #[test]
 fn test_preset_creation() {
