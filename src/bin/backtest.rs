@@ -30,7 +30,7 @@ use anyhow::Result;
 
 use ingestor::backtest::{BacktestEngine, BacktestConfig};
 use ingestor::backtest::replay::ReplayConfig;
-use ingestor::market_maker::MMConfig;
+use ingestor::market_maker::{MMConfig, RegimeParams, RegimeConfig};
 use ingestor::mm_simulator::SimulatorConfig;
 
 #[derive(Parser)]
@@ -99,6 +99,38 @@ struct Cli {
     /// Output results as JSON (for scripting/Optuna)
     #[arg(long)]
     json: bool,
+
+    /// Use regime-specific parameters (different params per regime)
+    #[arg(long)]
+    regime_params: bool,
+
+    /// High entropy spread (bps) - used with --regime-params
+    #[arg(long, default_value = "1.0")]
+    high_spread: f64,
+
+    /// Medium entropy spread (bps) - used with --regime-params
+    #[arg(long, default_value = "2.5")]
+    med_spread: f64,
+
+    /// Low entropy spread (bps) - used with --regime-params
+    #[arg(long, default_value = "5.0")]
+    low_spread: f64,
+
+    /// High entropy skew - used with --regime-params
+    #[arg(long, default_value = "0.3")]
+    high_skew: f64,
+
+    /// Medium entropy skew - used with --regime-params
+    #[arg(long, default_value = "0.5")]
+    med_skew: f64,
+
+    /// Low entropy skew - used with --regime-params
+    #[arg(long, default_value = "1.0")]
+    low_skew: f64,
+
+    /// Quote in low entropy (false = no quotes in low entropy)
+    #[arg(long)]
+    quote_low_entropy: bool,
 }
 
 #[derive(Subcommand)]
@@ -172,6 +204,41 @@ enum Commands {
         #[arg(short, long)]
         output: Option<std::path::PathBuf>,
     },
+
+    /// Regime-specific grid search (optimize params per regime independently)
+    RegimeSearch {
+        /// High entropy spread values (comma-separated)
+        #[arg(long, default_value = "0.5,1.0,1.5")]
+        high_spreads: String,
+
+        /// Medium entropy spread values (comma-separated)
+        #[arg(long, default_value = "2.0,2.5,3.0")]
+        med_spreads: String,
+
+        /// Low entropy spread values (comma-separated, or "none" to test no-quote)
+        #[arg(long, default_value = "4.0,5.0,none")]
+        low_spreads: String,
+
+        /// High entropy skew values (comma-separated)
+        #[arg(long, default_value = "0.2,0.3,0.4")]
+        high_skews: String,
+
+        /// Medium entropy skew values (comma-separated)
+        #[arg(long, default_value = "0.4,0.5,0.6")]
+        med_skews: String,
+
+        /// Low entropy skew values (comma-separated)
+        #[arg(long, default_value = "0.8,1.0,1.2")]
+        low_skews: String,
+
+        /// Fill probability values (comma-separated)
+        #[arg(long, default_value = "0.10")]
+        fill_probs: String,
+
+        /// Output file for results (JSON)
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -193,6 +260,9 @@ fn main() -> Result<()> {
         }
         Some(Commands::GridSearch { spreads, skews, high_entropies, test_gate, fill_probs, output }) => {
             run_grid_search(&cli, spreads, skews, high_entropies, *test_gate, fill_probs, output.clone())?;
+        }
+        Some(Commands::RegimeSearch { high_spreads, med_spreads, low_spreads, high_skews, med_skews, low_skews, fill_probs, output }) => {
+            run_regime_search(&cli, high_spreads, med_spreads, low_spreads, high_skews, med_skews, low_skews, fill_probs, output.clone())?;
         }
         Some(Commands::Single) | None => {
             run_single(&cli)?;
@@ -432,17 +502,53 @@ fn build_config(cli: &Cli) -> BacktestConfig {
     use ingestor::backtest::FillSimulatorConfig;
     use ingestor::market_maker::RegimeThresholds;
 
-    let mm_config = MMConfig {
-        base_spread_bps: cli.spread,
-        inventory_skew_factor: cli.skew,
-        max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
-        quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
-        regime_thresholds: RegimeThresholds {
-            high_entropy_threshold: cli.high_entropy,
-            low_entropy_threshold: cli.low_entropy,
-        },
-        pull_quotes_in_low_entropy: cli.entropy_gate,
-        ..Default::default()
+    let mm_config = if cli.regime_params {
+        // Use regime-specific parameters
+        let regime_params = RegimeParams {
+            high_entropy: RegimeConfig {
+                spread_bps: cli.high_spread,
+                skew_factor: cli.high_skew,
+                size_mult: 1.0,
+                should_quote: true,
+            },
+            medium_entropy: RegimeConfig {
+                spread_bps: cli.med_spread,
+                skew_factor: cli.med_skew,
+                size_mult: 0.7,
+                should_quote: true,
+            },
+            low_entropy: RegimeConfig {
+                spread_bps: cli.low_spread,
+                skew_factor: cli.low_skew,
+                size_mult: 0.3,
+                should_quote: cli.quote_low_entropy,
+            },
+        };
+        MMConfig {
+            use_regime_params: true,
+            regime_params,
+            max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
+            quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
+            regime_thresholds: RegimeThresholds {
+                high_entropy_threshold: cli.high_entropy,
+                low_entropy_threshold: cli.low_entropy,
+            },
+            ..Default::default()
+        }
+    } else {
+        // Legacy uniform parameters
+        MMConfig {
+            base_spread_bps: cli.spread,
+            inventory_skew_factor: cli.skew,
+            max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
+            quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
+            regime_thresholds: RegimeThresholds {
+                high_entropy_threshold: cli.high_entropy,
+                low_entropy_threshold: cli.low_entropy,
+            },
+            pull_quotes_in_low_entropy: cli.entropy_gate,
+            ..Default::default()
+        }
     };
 
     let sim_config = SimulatorConfig {
@@ -769,6 +875,311 @@ fn run_grid_search(
         println!("  Total Return: {:+.2}%", best.total_return * 100.0);
         println!("  Max Drawdown: {:.2}%", best.max_drawdown * 100.0);
         println!("  Win Rate:     {:.1}%", best.win_rate * 100.0);
+        println!("═══════════════════════════════════════════════════════");
+    }
+
+    if let Some(ref output_path) = output {
+        let json = serde_json::to_string_pretty(&all_results)?;
+        std::fs::write(output_path, json)?;
+        println!();
+        println!("Full results saved to: {:?}", output_path);
+    }
+
+    Ok(())
+}
+
+/// Low entropy spread option - can be a value or "none" (no quoting)
+#[derive(Debug, Clone)]
+enum LowEntropySpread {
+    Value(f64),
+    NoQuote,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct RegimeSearchResult {
+    high_spread: f64,
+    high_skew: f64,
+    med_spread: f64,
+    med_skew: f64,
+    low_spread: Option<f64>,  // None = no quoting in low entropy
+    low_skew: f64,
+    fill_prob: f64,
+    sharpe: f64,
+    total_return: f64,
+    max_drawdown: f64,
+    num_trades: usize,
+    win_rate: f64,
+    avg_trade_pnl: f64,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_regime_search(
+    cli: &Cli,
+    high_spreads_str: &str,
+    med_spreads_str: &str,
+    low_spreads_str: &str,
+    high_skews_str: &str,
+    med_skews_str: &str,
+    low_skews_str: &str,
+    fill_probs_str: &str,
+    output: Option<PathBuf>,
+) -> Result<()> {
+    use ingestor::market_maker::RegimeThresholds;
+
+    // Parse parameters
+    let high_spreads: Vec<f64> = high_spreads_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    let med_spreads: Vec<f64> = med_spreads_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    let high_skews: Vec<f64> = high_skews_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    let med_skews: Vec<f64> = med_skews_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    let low_skews: Vec<f64> = low_skews_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    let fill_probs: Vec<f64> = fill_probs_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+
+    // Parse low entropy spreads - can include "none"
+    let low_spreads: Vec<LowEntropySpread> = low_spreads_str
+        .split(',')
+        .map(|s| {
+            let s = s.trim().to_lowercase();
+            if s == "none" || s == "no" {
+                LowEntropySpread::NoQuote
+            } else {
+                s.parse().map(LowEntropySpread::Value).unwrap_or(LowEntropySpread::NoQuote)
+            }
+        })
+        .collect();
+
+    let total_combinations = high_spreads.len() * high_skews.len()
+        * med_spreads.len() * med_skews.len()
+        * low_spreads.len() * low_skews.len()
+        * fill_probs.len();
+
+    println!("═══════════════════════════════════════════════════════");
+    println!("       REGIME-SPECIFIC GRID SEARCH                      ");
+    println!("       (Optimize params per regime independently)       ");
+    println!("═══════════════════════════════════════════════════════");
+    println!();
+    println!("Parameter Space:");
+    println!("  High Entropy:");
+    println!("    Spreads: {:?}", high_spreads);
+    println!("    Skews:   {:?}", high_skews);
+    println!("  Medium Entropy:");
+    println!("    Spreads: {:?}", med_spreads);
+    println!("    Skews:   {:?}", med_skews);
+    println!("  Low Entropy:");
+    println!("    Spreads: {:?}", low_spreads_str);
+    println!("    Skews:   {:?}", low_skews);
+    println!("  Fill Probs: {:?}", fill_probs);
+    println!();
+    println!("Total combinations: {}", total_combinations);
+    println!();
+
+    let replay_config = ReplayConfig {
+        data_dir: cli.data.clone(),
+        ..Default::default()
+    };
+
+    let mut all_results: Vec<RegimeSearchResult> = Vec::new();
+    let mut count = 0;
+
+    for &h_spread in &high_spreads {
+        for &h_skew in &high_skews {
+            for &m_spread in &med_spreads {
+                for &m_skew in &med_skews {
+                    for l_spread in &low_spreads {
+                        for &l_skew in &low_skews {
+                            for &fill_prob in &fill_probs {
+                                count += 1;
+
+                                let (low_spread_val, should_quote_low) = match l_spread {
+                                    LowEntropySpread::Value(v) => (*v, true),
+                                    LowEntropySpread::NoQuote => (5.0, false), // dummy value when not quoting
+                                };
+
+                                let regime_params = RegimeParams {
+                                    high_entropy: RegimeConfig {
+                                        spread_bps: h_spread,
+                                        skew_factor: h_skew,
+                                        size_mult: 1.0,
+                                        should_quote: true,
+                                    },
+                                    medium_entropy: RegimeConfig {
+                                        spread_bps: m_spread,
+                                        skew_factor: m_skew,
+                                        size_mult: 0.7,
+                                        should_quote: true,
+                                    },
+                                    low_entropy: RegimeConfig {
+                                        spread_bps: low_spread_val,
+                                        skew_factor: l_skew,
+                                        size_mult: 0.3,
+                                        should_quote: should_quote_low,
+                                    },
+                                };
+
+                                let mm_config = MMConfig {
+                                    use_regime_params: true,
+                                    regime_params,
+                                    max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
+                                    quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
+                                    regime_thresholds: RegimeThresholds {
+                                        high_entropy_threshold: cli.high_entropy,
+                                        low_entropy_threshold: cli.low_entropy,
+                                    },
+                                    ..Default::default()
+                                };
+
+                                let config = BacktestConfig {
+                                    replay: replay_config.clone(),
+                                    mm: mm_config,
+                                    simulator: SimulatorConfig {
+                                        fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
+                                        ..Default::default()
+                                    },
+                                    fill_sim: ingestor::backtest::FillSimulatorConfig {
+                                        base_fill_probability: fill_prob,
+                                        queue_position: cli.queue_pos,
+                                        fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
+                                        ..Default::default()
+                                    },
+                                    verbose: false,
+                                    use_realistic_fills: !cli.naive_fills,
+                                    ..Default::default()
+                                };
+
+                                let mut engine = BacktestEngine::new(config);
+                                engine.load_data()?;
+                                let results = engine.run()?;
+
+                                let avg_trade_pnl = if results.metrics.num_trades > 0 {
+                                    results.metrics.total_return / results.metrics.num_trades as f64
+                                } else {
+                                    0.0
+                                };
+
+                                let low_spread_opt = match l_spread {
+                                    LowEntropySpread::Value(v) => Some(*v),
+                                    LowEntropySpread::NoQuote => None,
+                                };
+
+                                let result = RegimeSearchResult {
+                                    high_spread: h_spread,
+                                    high_skew: h_skew,
+                                    med_spread: m_spread,
+                                    med_skew: m_skew,
+                                    low_spread: low_spread_opt,
+                                    low_skew: l_skew,
+                                    fill_prob,
+                                    sharpe: results.metrics.sharpe_ratio,
+                                    total_return: results.metrics.total_return,
+                                    max_drawdown: results.metrics.max_drawdown,
+                                    num_trades: results.metrics.num_trades,
+                                    win_rate: results.metrics.win_rate,
+                                    avg_trade_pnl,
+                                };
+
+                                let low_str = match low_spread_opt {
+                                    Some(v) => format!("{:.1}", v),
+                                    None => "NONE".to_string(),
+                                };
+
+                                println!(
+                                    "[{:>4}/{}] H({:.1},{:.1}) M({:.1},{:.1}) L({},{:.1}) fp={:.2} => Sharpe={:+.2} Ret={:+.2}% Tr={}",
+                                    count, total_combinations,
+                                    h_spread, h_skew, m_spread, m_skew, low_str, l_skew, fill_prob,
+                                    result.sharpe, result.total_return * 100.0, result.num_trades,
+                                );
+
+                                all_results.push(result);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort by Sharpe ratio
+    all_results.sort_by(|a, b| b.sharpe.partial_cmp(&a.sharpe).unwrap_or(std::cmp::Ordering::Equal));
+
+    println!();
+    println!("═══════════════════════════════════════════════════════");
+    println!("TOP 10 REGIME-SPECIFIC PARAMETER SETS (by Sharpe):");
+    println!("═══════════════════════════════════════════════════════");
+
+    for (i, r) in all_results.iter().take(10).enumerate() {
+        let low_str = match r.low_spread {
+            Some(v) => format!("{:.1}bps", v),
+            None => "NO QUOTE".to_string(),
+        };
+        println!(
+            "{:>2}. HIGH(sp={:.1}bps, sk={:.1}) MED(sp={:.1}bps, sk={:.1}) LOW({}, sk={:.1})",
+            i + 1, r.high_spread, r.high_skew, r.med_spread, r.med_skew, low_str, r.low_skew
+        );
+        println!(
+            "    Sharpe={:+.2} Return={:+.2}% DD={:.2}% WinRate={:.1}% Trades={}",
+            r.sharpe, r.total_return * 100.0, r.max_drawdown * 100.0, r.win_rate * 100.0, r.num_trades
+        );
+    }
+
+    // Compare quoting vs not quoting in low entropy
+    let with_low_quote: Vec<_> = all_results.iter().filter(|r| r.low_spread.is_some()).collect();
+    let without_low_quote: Vec<_> = all_results.iter().filter(|r| r.low_spread.is_none()).collect();
+
+    if !with_low_quote.is_empty() && !without_low_quote.is_empty() {
+        println!();
+        println!("═══════════════════════════════════════════════════════");
+        println!("LOW ENTROPY QUOTING COMPARISON:");
+        println!("═══════════════════════════════════════════════════════");
+
+        let avg_sharpe_with: f64 = with_low_quote.iter().map(|r| r.sharpe).sum::<f64>() / with_low_quote.len() as f64;
+        let avg_sharpe_without: f64 = without_low_quote.iter().map(|r| r.sharpe).sum::<f64>() / without_low_quote.len() as f64;
+
+        let avg_trades_with: f64 = with_low_quote.iter().map(|r| r.num_trades as f64).sum::<f64>() / with_low_quote.len() as f64;
+        let avg_trades_without: f64 = without_low_quote.iter().map(|r| r.num_trades as f64).sum::<f64>() / without_low_quote.len() as f64;
+
+        println!("                    QUOTE in Low Entropy    NO QUOTE in Low Entropy");
+        println!("  Avg Sharpe:       {:+.3}                   {:+.3}", avg_sharpe_with, avg_sharpe_without);
+        println!("  Avg Trades:       {:.0}                      {:.0}", avg_trades_with, avg_trades_without);
+
+        let diff = avg_sharpe_without - avg_sharpe_with;
+        if diff > 0.1 {
+            println!();
+            println!("  >>> NOT QUOTING in low entropy improves Sharpe by +{:.2}!", diff);
+        } else if diff < -0.1 {
+            println!();
+            println!("  >>> QUOTING in low entropy is better by +{:.2} Sharpe!", -diff);
+        }
+    }
+
+    // Best overall
+    if let Some(best) = all_results.first() {
+        println!();
+        println!("═══════════════════════════════════════════════════════");
+        println!("RECOMMENDED REGIME-SPECIFIC PARAMETERS:");
+        println!("═══════════════════════════════════════════════════════");
+        println!("  High Entropy:");
+        println!("    spread_bps:  {}", best.high_spread);
+        println!("    skew_factor: {}", best.high_skew);
+        println!("  Medium Entropy:");
+        println!("    spread_bps:  {}", best.med_spread);
+        println!("    skew_factor: {}", best.med_skew);
+        println!("  Low Entropy:");
+        match best.low_spread {
+            Some(v) => {
+                println!("    spread_bps:  {}", v);
+                println!("    skew_factor: {}", best.low_skew);
+                println!("    should_quote: true");
+            }
+            None => {
+                println!("    should_quote: false (no quoting in low entropy)");
+            }
+        }
+        println!();
+        println!("Expected Performance:");
+        println!("  Sharpe Ratio: {:+.2}", best.sharpe);
+        println!("  Total Return: {:+.2}%", best.total_return * 100.0);
+        println!("  Max Drawdown: {:.2}%", best.max_drawdown * 100.0);
+        println!("  Win Rate:     {:.1}%", best.win_rate * 100.0);
+        println!("  Trades:       {}", best.num_trades);
         println!("═══════════════════════════════════════════════════════");
     }
 
