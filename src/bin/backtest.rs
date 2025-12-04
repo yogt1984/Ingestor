@@ -373,10 +373,9 @@ fn run_sweep(cli: &Cli, spreads_str: &str, skews_str: &str) -> Result<()> {
     for &spread in &spreads {
         for &skew in &skews {
             let mm_config = MMConfig {
-                base_spread_bps: spread,
-                inventory_skew_factor: skew,
                 max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
                 quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
+                regime_params: RegimeParams::uniform(spread, skew),
                 ..Default::default()
             };
 
@@ -502,9 +501,10 @@ fn build_config(cli: &Cli) -> BacktestConfig {
     use ingestor::backtest::FillSimulatorConfig;
     use ingestor::market_maker::RegimeThresholds;
 
-    let mm_config = if cli.regime_params {
-        // Use regime-specific parameters
-        let regime_params = RegimeParams {
+    // Build regime params based on CLI flags
+    let regime_params = if cli.regime_params {
+        // Full regime-specific parameters
+        RegimeParams {
             high_entropy: RegimeConfig {
                 spread_bps: cli.high_spread,
                 skew_factor: cli.high_skew,
@@ -523,32 +523,25 @@ fn build_config(cli: &Cli) -> BacktestConfig {
                 size_mult: 0.3,
                 should_quote: cli.quote_low_entropy,
             },
-        };
-        MMConfig {
-            use_regime_params: true,
-            regime_params,
-            max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
-            quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
-            regime_thresholds: RegimeThresholds {
-                high_entropy_threshold: cli.high_entropy,
-                low_entropy_threshold: cli.low_entropy,
-            },
-            ..Default::default()
         }
     } else {
-        // Legacy uniform parameters
-        MMConfig {
-            base_spread_bps: cli.spread,
-            inventory_skew_factor: cli.skew,
-            max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
-            quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
-            regime_thresholds: RegimeThresholds {
-                high_entropy_threshold: cli.high_entropy,
-                low_entropy_threshold: cli.low_entropy,
-            },
-            pull_quotes_in_low_entropy: cli.entropy_gate,
-            ..Default::default()
+        // Uniform parameters with optional entropy gate
+        let mut params = RegimeParams::uniform(cli.spread, cli.skew);
+        if cli.entropy_gate {
+            params.low_entropy.should_quote = false;
         }
+        params
+    };
+
+    let mm_config = MMConfig {
+        max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
+        quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
+        regime_thresholds: RegimeThresholds {
+            high_entropy_threshold: cli.high_entropy,
+            low_entropy_threshold: cli.low_entropy,
+        },
+        regime_params,
+        ..Default::default()
     };
 
     let sim_config = SimulatorConfig {
@@ -729,16 +722,20 @@ fn run_grid_search(
                     for &fill_prob in &fill_probs {
                         count += 1;
 
+                        // Build regime params with optional gating in low entropy
+                        let mut regime_params = RegimeParams::uniform(spread, skew);
+                        if gate {
+                            regime_params.low_entropy.should_quote = false;
+                        }
+
                         let mm_config = MMConfig {
-                            base_spread_bps: spread,
-                            inventory_skew_factor: skew,
                             max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
                             quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
                             regime_thresholds: RegimeThresholds {
                                 high_entropy_threshold: high_entropy,
                                 low_entropy_threshold: cli.low_entropy,
                             },
-                            pull_quotes_in_low_entropy: gate,
+                            regime_params,
                             ..Default::default()
                         };
 
@@ -1016,7 +1013,6 @@ fn run_regime_search(
                                 };
 
                                 let mm_config = MMConfig {
-                                    use_regime_params: true,
                                     regime_params,
                                     max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
                                     quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),

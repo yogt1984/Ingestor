@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-use crate::market_maker::{MMConfig, RegimeThresholds};
+use crate::market_maker::{MMConfig, RegimeThresholds, RegimeParams};
 
 /// A saved parameter preset with metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,14 +71,18 @@ impl ParameterPreset {
 
     /// Convert to MMConfig
     pub fn to_mm_config(&self) -> MMConfig {
+        // Build regime params with optional gating
+        let mut regime_params = RegimeParams::uniform(self.spread_bps, self.skew);
+        if self.entropy_gate {
+            regime_params.low_entropy.should_quote = false;
+        }
+
         MMConfig {
-            base_spread_bps: self.spread_bps,
-            inventory_skew_factor: self.skew,
             regime_thresholds: RegimeThresholds {
                 high_entropy_threshold: self.high_entropy_threshold,
                 low_entropy_threshold: self.low_entropy_threshold,
             },
-            pull_quotes_in_low_entropy: self.entropy_gate,
+            regime_params,
             ..Default::default()
         }
     }
@@ -213,7 +217,8 @@ mod tests {
     fn test_preset_to_config() {
         let preset = ParameterPreset::new("Test", "manual", 1.5, 0.4, 0.8, 0.10);
         let config = preset.to_mm_config();
-        assert_eq!(config.base_spread_bps, 1.5);
-        assert_eq!(config.inventory_skew_factor, 0.4);
+        // Now using RegimeParams - high entropy spread is the base spread
+        assert_eq!(config.regime_params.high_entropy.spread_bps, 1.5);
+        assert_eq!(config.regime_params.high_entropy.skew_factor, 0.4);
     }
 }

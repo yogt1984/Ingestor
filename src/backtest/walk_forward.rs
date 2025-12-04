@@ -284,10 +284,9 @@ impl WalkForwardEngine {
         use crate::mm_simulator::SimulatorConfig;
 
         let mm_config = MMConfig {
-            base_spread_bps: spread,
-            inventory_skew_factor: skew,
             max_inventory: Decimal::from_f64_retain(0.1).unwrap_or(dec!(0.1)),
             quote_size: Decimal::from_f64_retain(0.001).unwrap_or(dec!(0.001)),
+            regime_params: crate::market_maker::RegimeParams::uniform(spread, skew),
             ..Default::default()
         };
 
