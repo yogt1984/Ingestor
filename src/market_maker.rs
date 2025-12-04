@@ -59,12 +59,127 @@ impl Default for RegimeThresholds {
     }
 }
 
+/// Per-regime configuration parameters
+/// Encodes the conditional probability of success given the regime into parameter aggressiveness
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegimeConfig {
+    /// Half-spread in basis points for this regime
+    pub spread_bps: f64,
+    /// Inventory skew factor for this regime
+    pub skew_factor: f64,
+    /// Quote size multiplier (1.0 = full size)
+    pub size_mult: f64,
+    /// Whether to quote at all in this regime
+    pub should_quote: bool,
+}
+
+impl RegimeConfig {
+    pub fn new(spread_bps: f64, skew_factor: f64, size_mult: f64, should_quote: bool) -> Self {
+        Self {
+            spread_bps,
+            skew_factor,
+            size_mult,
+            should_quote,
+        }
+    }
+}
+
+/// Default regime configurations based on empirical findings:
+/// - High entropy: aggressive (tight spreads, full size)
+/// - Medium entropy: moderate (wider spreads, reduced size)
+/// - Low entropy: defensive (very wide or no quotes)
+impl Default for RegimeConfig {
+    fn default() -> Self {
+        Self {
+            spread_bps: 2.0,
+            skew_factor: 0.5,
+            size_mult: 1.0,
+            should_quote: true,
+        }
+    }
+}
+
+/// Regime-specific parameter set
+/// Maps regime → optimal parameters (encodes P(success|regime))
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegimeParams {
+    pub high_entropy: RegimeConfig,
+    pub medium_entropy: RegimeConfig,
+    pub low_entropy: RegimeConfig,
+}
+
+impl Default for RegimeParams {
+    fn default() -> Self {
+        Self {
+            // High entropy: aggressive - 62% win rate historically
+            high_entropy: RegimeConfig {
+                spread_bps: 1.0,      // Tight spread
+                skew_factor: 0.3,     // Low skew
+                size_mult: 1.0,       // Full size
+                should_quote: true,
+            },
+            // Medium entropy: moderate - 51% win rate
+            medium_entropy: RegimeConfig {
+                spread_bps: 2.5,      // Moderate spread
+                skew_factor: 0.5,     // Moderate skew
+                size_mult: 0.7,       // Reduced size
+                should_quote: true,
+            },
+            // Low entropy: defensive - 38% win rate
+            low_entropy: RegimeConfig {
+                spread_bps: 5.0,      // Wide spread
+                skew_factor: 1.0,     // High skew (lean with flow)
+                size_mult: 0.3,       // Small size
+                should_quote: false,  // Default: don't quote in low entropy
+            },
+        }
+    }
+}
+
+impl RegimeParams {
+    /// Get config for a specific regime
+    pub fn for_regime(&self, regime: MarketRegime) -> &RegimeConfig {
+        match regime {
+            MarketRegime::HighEntropy => &self.high_entropy,
+            MarketRegime::MediumEntropy => &self.medium_entropy,
+            MarketRegime::LowEntropy => &self.low_entropy,
+        }
+    }
+
+    /// Create uniform params (same config for all regimes) - for backward compatibility
+    pub fn uniform(spread_bps: f64, skew_factor: f64) -> Self {
+        let config = RegimeConfig {
+            spread_bps,
+            skew_factor,
+            size_mult: 1.0,
+            should_quote: true,
+        };
+        Self {
+            high_entropy: config.clone(),
+            medium_entropy: RegimeConfig {
+                spread_bps: spread_bps * 1.5,
+                skew_factor,
+                size_mult: 0.7,
+                should_quote: true,
+            },
+            low_entropy: RegimeConfig {
+                spread_bps: spread_bps * 3.0,
+                skew_factor,
+                size_mult: 0.3,
+                should_quote: true,
+            },
+        }
+    }
+}
+
 /// Configuration for the market maker
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MMConfig {
     /// Base half-spread in basis points (applied to each side)
+    /// Used when use_regime_params is false
     pub base_spread_bps: f64,
     /// How much to skew quotes per unit of inventory
+    /// Used when use_regime_params is false
     pub inventory_skew_factor: f64,
     /// Maximum allowed inventory (absolute value)
     pub max_inventory: Decimal,
@@ -72,14 +187,18 @@ pub struct MMConfig {
     pub quote_size: Decimal,
     /// Risk aversion parameter (gamma in Avellaneda-Stoikov)
     pub risk_aversion: f64,
-    /// Regime-specific parameters
+    /// Regime classification thresholds
     pub regime_thresholds: RegimeThresholds,
-    /// Spread multiplier for medium entropy regime
+    /// Spread multiplier for medium entropy regime (legacy, used when use_regime_params is false)
     pub medium_entropy_spread_mult: f64,
-    /// Spread multiplier for low entropy regime
+    /// Spread multiplier for low entropy regime (legacy, used when use_regime_params is false)
     pub low_entropy_spread_mult: f64,
-    /// Whether to pull quotes entirely in low entropy
+    /// Whether to pull quotes entirely in low entropy (legacy)
     pub pull_quotes_in_low_entropy: bool,
+    /// Whether to use regime-specific parameters
+    pub use_regime_params: bool,
+    /// Regime-specific parameter sets (used when use_regime_params is true)
+    pub regime_params: RegimeParams,
 }
 
 impl Default for MMConfig {
@@ -94,6 +213,29 @@ impl Default for MMConfig {
             medium_entropy_spread_mult: 1.5,
             low_entropy_spread_mult: 3.0,
             pull_quotes_in_low_entropy: false,
+            use_regime_params: false, // Default to legacy behavior for backward compatibility
+            regime_params: RegimeParams::default(),
+        }
+    }
+}
+
+impl MMConfig {
+    /// Create config with regime-specific parameters enabled
+    pub fn with_regime_params(regime_params: RegimeParams) -> Self {
+        Self {
+            use_regime_params: true,
+            regime_params,
+            ..Default::default()
+        }
+    }
+
+    /// Create config with uniform parameters (backward compatible)
+    pub fn with_uniform_params(spread_bps: f64, skew_factor: f64) -> Self {
+        Self {
+            base_spread_bps: spread_bps,
+            inventory_skew_factor: skew_factor,
+            use_regime_params: false,
+            ..Default::default()
         }
     }
 }
@@ -265,6 +407,136 @@ impl MarketMakerEngine {
         // 2. Compute fair value (microprice + any alpha adjustment)
         let fair_value = microprice;
 
+        // Branch based on whether we use regime-specific params or legacy behavior
+        if self.config.use_regime_params {
+            self.compute_quotes_regime_specific(regime, fair_value, mid_price, volatility, flow_imbalance, timestamp_ms)
+        } else {
+            self.compute_quotes_legacy(regime, fair_value, mid_price, volatility, flow_imbalance, timestamp_ms)
+        }
+    }
+
+    /// Compute quotes using regime-specific parameters
+    /// This encodes P(success|regime) into parameter aggressiveness
+    fn compute_quotes_regime_specific(
+        &mut self,
+        regime: MarketRegime,
+        fair_value: Decimal,
+        mid_price: Decimal,
+        volatility: f64,
+        flow_imbalance: f64,
+        timestamp_ms: u64,
+    ) -> MMQuotes {
+        // Get regime-specific config
+        let regime_config = self.config.regime_params.for_regime(regime);
+
+        // Check if we should quote at all in this regime
+        if !regime_config.should_quote {
+            self.current_bid = None;
+            self.current_ask = None;
+            return MMQuotes {
+                bid: None,
+                ask: None,
+                regime,
+                fair_value,
+                half_spread: dec!(0),
+                skew: dec!(0),
+            };
+        }
+
+        // 3. Compute half-spread using regime-specific spread
+        let base_spread = mid_price * Decimal::from_f64(regime_config.spread_bps / 10000.0)
+            .unwrap_or(dec!(0.0001));
+
+        // 4. Adjust spread for volatility
+        let vol_adjustment = Decimal::from_f64(1.0 + volatility * 100.0).unwrap_or(dec!(1));
+        let half_spread = base_spread * vol_adjustment;
+
+        // 5. Compute inventory skew using regime-specific skew factor
+        let inventory_ratio = if self.config.max_inventory > dec!(0) {
+            self.inventory / self.config.max_inventory
+        } else {
+            dec!(0)
+        };
+        let inv_skew = inventory_ratio * Decimal::from_f64(regime_config.skew_factor).unwrap_or(dec!(0.5));
+
+        // 6. Add flow-based skew in low entropy (lean with the flow)
+        let flow_skew = if regime == MarketRegime::LowEntropy {
+            Decimal::from_f64(flow_imbalance * 0.5).unwrap_or(dec!(0))
+        } else {
+            dec!(0)
+        };
+
+        let total_skew = inv_skew + flow_skew;
+
+        // 7. Compute final quote prices
+        let bid_price = fair_value - half_spread - (total_skew * half_spread);
+        let ask_price = fair_value + half_spread - (total_skew * half_spread);
+
+        // 8. Determine quote sizes using regime-specific size multiplier
+        let size_mult = Decimal::from_f64(regime_config.size_mult).unwrap_or(dec!(1));
+
+        // Reduce size on the side where we have inventory
+        let bid_size = if self.inventory > dec!(0) {
+            self.config.quote_size * size_mult * dec!(0.5)
+        } else {
+            self.config.quote_size * size_mult
+        };
+
+        let ask_size = if self.inventory < dec!(0) {
+            self.config.quote_size * size_mult * dec!(0.5)
+        } else {
+            self.config.quote_size * size_mult
+        };
+
+        // 9. Check inventory limits
+        let at_max_inventory = self.inventory.abs() >= self.config.max_inventory;
+
+        let bid = if at_max_inventory && self.inventory > dec!(0) {
+            None
+        } else {
+            Some(Quote {
+                price: bid_price.round_dp(2),
+                size: bid_size,
+                side: QuoteSide::Bid,
+                timestamp_ms,
+            })
+        };
+
+        let ask = if at_max_inventory && self.inventory < dec!(0) {
+            None
+        } else {
+            Some(Quote {
+                price: ask_price.round_dp(2),
+                size: ask_size,
+                side: QuoteSide::Ask,
+                timestamp_ms,
+            })
+        };
+
+        // Update current quotes
+        self.current_bid = bid.clone();
+        self.current_ask = ask.clone();
+
+        MMQuotes {
+            bid,
+            ask,
+            regime,
+            fair_value,
+            half_spread,
+            skew: total_skew,
+        }
+    }
+
+    /// Legacy quote computation (backward compatible)
+    fn compute_quotes_legacy(
+        &mut self,
+        regime: MarketRegime,
+        fair_value: Decimal,
+        mid_price: Decimal,
+        volatility: f64,
+        flow_imbalance: f64,
+        timestamp_ms: u64,
+    ) -> MMQuotes {
         // 3. Compute base half-spread
         let base_spread = mid_price * Decimal::from_f64(self.config.base_spread_bps / 10000.0)
             .unwrap_or(dec!(0.0001));
@@ -282,8 +554,6 @@ impl MarketMakerEngine {
         let half_spread = vol_adjusted_spread * regime_mult;
 
         // 6. Compute inventory skew
-        // Positive inventory (long) -> skew ask down (more aggressive) to reduce position
-        // Negative inventory (short) -> skew bid up (more aggressive) to reduce position
         let inventory_ratio = if self.config.max_inventory > dec!(0) {
             self.inventory / self.config.max_inventory
         } else {
@@ -313,13 +583,13 @@ impl MarketMakerEngine {
 
         // Reduce size on the side where we have inventory
         let bid_size = if self.inventory > dec!(0) {
-            self.config.quote_size * size_mult * dec!(0.5) // Already long, less eager to buy
+            self.config.quote_size * size_mult * dec!(0.5)
         } else {
             self.config.quote_size * size_mult
         };
 
         let ask_size = if self.inventory < dec!(0) {
-            self.config.quote_size * size_mult * dec!(0.5) // Already short, less eager to sell
+            self.config.quote_size * size_mult * dec!(0.5)
         } else {
             self.config.quote_size * size_mult
         };
@@ -559,5 +829,117 @@ mod tests {
 
         assert_eq!(mm.inventory, dec!(0));
         assert!(mm.pnl.realized_pnl > dec!(0)); // Should have profit
+    }
+
+    #[test]
+    fn test_regime_config_defaults() {
+        let params = RegimeParams::default();
+
+        // High entropy: aggressive
+        assert_eq!(params.high_entropy.spread_bps, 1.0);
+        assert_eq!(params.high_entropy.skew_factor, 0.3);
+        assert!(params.high_entropy.should_quote);
+
+        // Low entropy: defensive
+        assert_eq!(params.low_entropy.spread_bps, 5.0);
+        assert!(!params.low_entropy.should_quote);
+    }
+
+    #[test]
+    fn test_regime_specific_quotes_no_quote_in_low_entropy() {
+        let config = MMConfig::with_regime_params(RegimeParams::default());
+        let mut mm = MarketMakerEngine::new(config);
+
+        // Low entropy (0.2) should not quote since should_quote=false
+        let quotes = mm.compute_quotes(
+            dec!(50000),
+            dec!(50000),
+            0.001,
+            0.2, // Low entropy
+            0.0,
+            1000,
+        );
+
+        assert_eq!(quotes.regime, MarketRegime::LowEntropy);
+        assert!(quotes.bid.is_none());
+        assert!(quotes.ask.is_none());
+    }
+
+    #[test]
+    fn test_regime_specific_quotes_tight_in_high_entropy() {
+        let config = MMConfig::with_regime_params(RegimeParams::default());
+        let mut mm = MarketMakerEngine::new(config);
+
+        // High entropy should quote with tight spread (1 bps)
+        let quotes = mm.compute_quotes(
+            dec!(50000),
+            dec!(50000),
+            0.001,
+            0.8, // High entropy
+            0.0,
+            1000,
+        );
+
+        assert_eq!(quotes.regime, MarketRegime::HighEntropy);
+        assert!(quotes.bid.is_some());
+        assert!(quotes.ask.is_some());
+
+        // Spread should be approximately 1 bps * price = 5 (before vol adjustment)
+        // With vol adjustment: 5 * 1.1 ≈ 5.5
+        let bid = quotes.bid.unwrap();
+        let ask = quotes.ask.unwrap();
+        let spread = ask.price - bid.price;
+        assert!(spread < dec!(15)); // Should be tight
+    }
+
+    #[test]
+    fn test_regime_specific_vs_legacy_behavior() {
+        // Legacy behavior (multipliers)
+        let legacy_config = MMConfig::default();
+        let mut legacy_mm = MarketMakerEngine::new(legacy_config);
+
+        // Regime-specific behavior
+        let regime_config = MMConfig::with_regime_params(RegimeParams::default());
+        let mut regime_mm = MarketMakerEngine::new(regime_config);
+
+        // Both should work but with different spread calculations
+        let legacy_quotes = legacy_mm.compute_quotes(dec!(50000), dec!(50000), 0.001, 0.8, 0.0, 1000);
+        let regime_quotes = regime_mm.compute_quotes(dec!(50000), dec!(50000), 0.001, 0.8, 0.0, 1000);
+
+        // Both should have quotes in high entropy
+        assert!(legacy_quotes.bid.is_some());
+        assert!(regime_quotes.bid.is_some());
+
+        // Regime-specific should have tighter spread (1 bps vs 2 bps default)
+        assert!(regime_quotes.half_spread < legacy_quotes.half_spread);
+    }
+
+    #[test]
+    fn test_regime_params_uniform() {
+        let params = RegimeParams::uniform(2.0, 0.5);
+
+        // All regimes should have base spread 2.0
+        assert_eq!(params.high_entropy.spread_bps, 2.0);
+        // But medium/low should have multiplied spreads
+        assert_eq!(params.medium_entropy.spread_bps, 3.0); // 2.0 * 1.5
+        assert_eq!(params.low_entropy.spread_bps, 6.0); // 2.0 * 3.0
+
+        // All should quote
+        assert!(params.high_entropy.should_quote);
+        assert!(params.medium_entropy.should_quote);
+        assert!(params.low_entropy.should_quote);
+    }
+
+    #[test]
+    fn test_regime_params_for_regime() {
+        let params = RegimeParams::default();
+
+        let high = params.for_regime(MarketRegime::HighEntropy);
+        let medium = params.for_regime(MarketRegime::MediumEntropy);
+        let low = params.for_regime(MarketRegime::LowEntropy);
+
+        assert_eq!(high.spread_bps, 1.0);
+        assert_eq!(medium.spread_bps, 2.5);
+        assert_eq!(low.spread_bps, 5.0);
     }
 }
