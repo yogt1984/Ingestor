@@ -1,7 +1,7 @@
 use crate::lob_feed_manager::{SharedConnectionStatus, ConnectionStatus};
 use crate::tradeslog::{ConcurrentTradesLog, Trade};
 use futures_util::StreamExt;
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::str::FromStr;

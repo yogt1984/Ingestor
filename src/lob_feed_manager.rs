@@ -221,6 +221,7 @@ impl LobFeedManager {
         }
     }
 
+    #[allow(dead_code)]
     async fn process_binance_update(update: BinanceDepthUpdate, order_book: &ConcurrentOrderBook) {
         let parsed_bids = LobFeedManager::parse_levels(update.bids);
         let parsed_asks = LobFeedManager::parse_levels(update.asks);
