@@ -13,6 +13,7 @@
 //! - `statistics`: Statistical significance testing (PSR, DSR, bootstrap CI)
 //! - `oos_validation`: Out-of-sample validation and overfitting detection
 //! - `regime_optimizer`: Regime-specific parameter optimization
+//! - `ml_trainer`: ML weight training with grid search optimization
 //!
 //! # Usage
 //!
@@ -43,6 +44,7 @@ pub mod statistics;
 pub mod oos_validation;
 pub mod multi_objective;
 pub mod regime_optimizer;
+pub mod ml_trainer;
 
 pub use replay::{ParquetReplay, ReplayEvent, ReplayConfig};
 pub use harness::{BacktestEngine, BacktestConfig, BacktestResults};
@@ -54,3 +56,4 @@ pub use statistics::{StatisticalReport, SignificanceVerdict, compute_statistics}
 pub use oos_validation::{OOSValidator, OOSConfig, ValidationReport, OverfitVerdict};
 pub use multi_objective::{MultiObjectiveOptimizer, MOConfig, MOResults, Objective};
 pub use regime_optimizer::{RegimeOptimizer, RegimeOptimizerConfig, RegimeOptimizationResults};
+pub use ml_trainer::{MLTrainer, MLTrainerConfig, MLTrainingResults};
