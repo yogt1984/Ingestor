@@ -13,6 +13,7 @@
 //! # Available Algorithms
 //!
 //! - `AvellanedaStoikovMM`: Classic Avellaneda-Stoikov market making (2008)
+//! - `MLSpreadSkew`: ML-based spread/skew predictor using learned linear weights
 //!
 //! # Usage
 //!
@@ -28,6 +29,7 @@
 
 pub mod traits;
 pub mod avellaneda_stoikov;
+pub mod ml_spread_skew;
 
 pub use traits::{
     MarketMakingAlgorithm,
@@ -37,6 +39,14 @@ pub use traits::{
     AlgorithmError,
 };
 pub use avellaneda_stoikov::AvellanedaStoikovAlgorithm;
+pub use ml_spread_skew::{
+    MLSpreadSkewAlgorithm,
+    MLSpreadSkewConfig,
+    MLModelWeights,
+    SpreadWeights,
+    SkewWeights,
+    TrainingInfo,
+};
 
 // Re-export common types from market_maker for convenience
 pub use crate::market_maker::{
@@ -151,7 +161,31 @@ pub fn create_algorithm(
             };
             Ok(Box::new(AvellanedaStoikovAlgorithm::new(config)))
         }
+        AlgorithmType::MLSpreadSkew => {
+            // Create ML algorithm with default weights
+            // Use regime params for base values if available
+            let config = MLSpreadSkewConfig {
+                max_inventory,
+                quote_size,
+                ..Default::default()
+            };
+            Ok(Box::new(MLSpreadSkewAlgorithm::new(config, MLModelWeights::default())))
+        }
     }
+}
+
+/// Factory function to create ML algorithm with custom weights
+pub fn create_ml_algorithm(
+    max_inventory: Decimal,
+    quote_size: Decimal,
+    weights: MLModelWeights,
+) -> Result<Box<dyn MarketMakingAlgorithm>, AlgorithmError> {
+    let config = MLSpreadSkewConfig {
+        max_inventory,
+        quote_size,
+        ..Default::default()
+    };
+    Ok(Box::new(MLSpreadSkewAlgorithm::new(config, weights)))
 }
 
 #[cfg(test)]
@@ -174,11 +208,39 @@ mod tests {
     }
 
     #[test]
+    fn test_create_algorithm_ml_spread_skew() {
+        let algo = create_algorithm(
+            AlgorithmType::MLSpreadSkew,
+            dec!(0.1),
+            dec!(0.001),
+            None,
+        ).unwrap();
+
+        assert_eq!(algo.algorithm_type(), AlgorithmType::MLSpreadSkew);
+        assert_eq!(algo.type_string(), "ml_spread_skew");
+        assert_eq!(algo.name(), "ML Spread/Skew Predictor");
+    }
+
+    #[test]
+    fn test_create_ml_algorithm_with_weights() {
+        let weights = MLModelWeights::default();
+        let algo = create_ml_algorithm(dec!(0.1), dec!(0.001), weights).unwrap();
+
+        assert_eq!(algo.algorithm_type(), AlgorithmType::MLSpreadSkew);
+    }
+
+    #[test]
     fn test_algorithm_type_string_roundtrip() {
         let original = AlgorithmType::AvellanedaStoikov;
         let type_str = original.as_str();
         let parsed = AlgorithmType::from_str(type_str).unwrap();
         assert_eq!(original, parsed);
+
+        // Also test MLSpreadSkew roundtrip
+        let ml_original = AlgorithmType::MLSpreadSkew;
+        let ml_type_str = ml_original.as_str();
+        let ml_parsed = AlgorithmType::from_str(ml_type_str).unwrap();
+        assert_eq!(ml_original, ml_parsed);
     }
 
     #[test]
