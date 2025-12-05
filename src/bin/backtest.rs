@@ -270,6 +270,49 @@ enum Commands {
         #[arg(short, long)]
         output: Option<std::path::PathBuf>,
     },
+
+    /// Multi-objective optimization (Pareto frontier)
+    MultiObjective {
+        /// Spread values to test (comma-separated)
+        #[arg(long, default_value = "1,2,3,4,5")]
+        spreads: String,
+
+        /// Skew values to test (comma-separated)
+        #[arg(long, default_value = "0.3,0.5,0.7,1.0")]
+        skews: String,
+
+        /// Fill probability values (comma-separated)
+        #[arg(long, default_value = "0.05,0.10,0.15")]
+        fill_probs: String,
+
+        /// High entropy threshold values (comma-separated)
+        #[arg(long, default_value = "0.6,0.7,0.8")]
+        high_entropies: String,
+
+        /// Minimum trades for valid solution
+        #[arg(long, default_value = "20")]
+        min_trades: usize,
+
+        /// Weight for Sharpe in composite score (0-1)
+        #[arg(long, default_value = "0.4")]
+        w_sharpe: f64,
+
+        /// Weight for drawdown in composite score (0-1)
+        #[arg(long, default_value = "0.3")]
+        w_drawdown: f64,
+
+        /// Weight for fill rate in composite score (0-1)
+        #[arg(long, default_value = "0.2")]
+        w_fill: f64,
+
+        /// Weight for turnover in composite score (0-1)
+        #[arg(long, default_value = "0.1")]
+        w_turnover: f64,
+
+        /// Output file for results (JSON)
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -297,6 +340,9 @@ fn main() -> Result<()> {
         }
         Some(Commands::OosValidate { holdout, embargo_hours, spreads, skews, fill_probs, output }) => {
             run_oos_validation(&cli, *holdout, *embargo_hours, spreads, skews, fill_probs, output.clone())?;
+        }
+        Some(Commands::MultiObjective { spreads, skews, fill_probs, high_entropies, min_trades, w_sharpe, w_drawdown, w_fill, w_turnover, output }) => {
+            run_multi_objective(&cli, spreads, skews, fill_probs, high_entropies, *min_trades, *w_sharpe, *w_drawdown, *w_fill, *w_turnover, output.clone())?;
         }
         Some(Commands::Single) | None => {
             run_single(&cli)?;
@@ -1342,6 +1388,98 @@ fn run_oos_validation(
     if let Some(ref output_path) = output {
         let json = serde_json::to_string_pretty(&reports)?;
         std::fs::write(output_path, json)?;
+        println!();
+        println!("Results saved to: {:?}", output_path);
+    }
+
+    Ok(())
+}
+
+fn run_multi_objective(
+    cli: &Cli,
+    spreads: &str,
+    skews: &str,
+    fill_probs: &str,
+    high_entropies: &str,
+    min_trades: usize,
+    w_sharpe: f64,
+    w_drawdown: f64,
+    w_fill: f64,
+    w_turnover: f64,
+    output: Option<std::path::PathBuf>,
+) -> Result<()> {
+    use ingestor::backtest::multi_objective::{MultiObjectiveOptimizer, MOConfig, ObjectiveWeights};
+
+    // Parse parameter grids
+    let spread_values: Vec<f64> = spreads
+        .split(',')
+        .map(|s| s.trim().parse().unwrap_or(1.0))
+        .collect();
+    let skew_values: Vec<f64> = skews
+        .split(',')
+        .map(|s| s.trim().parse().unwrap_or(0.5))
+        .collect();
+    let fill_prob_values: Vec<f64> = fill_probs
+        .split(',')
+        .map(|s| s.trim().parse().unwrap_or(0.10))
+        .collect();
+    let high_entropy_values: Vec<f64> = high_entropies
+        .split(',')
+        .map(|s| s.trim().parse().unwrap_or(0.7))
+        .collect();
+
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!("          MULTI-OBJECTIVE OPTIMIZATION (Pareto Frontier)                ");
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!();
+    println!("PARAMETER GRID:");
+    println!("  Spreads:       {:?}", spread_values);
+    println!("  Skews:         {:?}", skew_values);
+    println!("  Fill Probs:    {:?}", fill_prob_values);
+    println!("  High Entropy:  {:?}", high_entropy_values);
+    println!("  Min Trades:    {}", min_trades);
+    println!();
+    println!("OBJECTIVE WEIGHTS:");
+    println!("  Sharpe:     {:.0}%", w_sharpe * 100.0);
+    println!("  Drawdown:   {:.0}%", w_drawdown * 100.0);
+    println!("  Fill Rate:  {:.0}%", w_fill * 100.0);
+    println!("  Turnover:   {:.0}%", w_turnover * 100.0);
+    println!();
+
+    let total_combinations = spread_values.len() * skew_values.len() *
+        fill_prob_values.len() * high_entropy_values.len();
+    println!("Total parameter combinations: {}", total_combinations);
+    println!();
+
+    // Build config
+    let config = MOConfig {
+        data_dir: cli.data.clone(),
+        spreads: spread_values,
+        skews: skew_values,
+        fill_probs: fill_prob_values,
+        high_entropies: high_entropy_values,
+        objective_weights: ObjectiveWeights {
+            sharpe: w_sharpe,
+            drawdown: w_drawdown,
+            fill_rate: w_fill,
+            turnover: w_turnover,
+        },
+        min_trades,
+        verbose: true,
+    };
+
+    // Run optimization
+    let mut optimizer = MultiObjectiveOptimizer::new(config);
+    optimizer.load_data()?;
+
+    let results = optimizer.optimize()?;
+
+    // Print report
+    results.print_report();
+
+    // Save results
+    if let Some(ref output_path) = output {
+        results.save_json(output_path.to_str().unwrap_or("mo_results.json"))?;
         println!();
         println!("Results saved to: {:?}", output_path);
     }

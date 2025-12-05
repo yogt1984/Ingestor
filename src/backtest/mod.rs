@@ -40,6 +40,7 @@ pub mod walk_forward;
 pub mod data_quality;
 pub mod statistics;
 pub mod oos_validation;
+pub mod multi_objective;
 
 pub use replay::{ParquetReplay, ReplayEvent, ReplayConfig};
 pub use harness::{BacktestEngine, BacktestConfig, BacktestResults};
@@ -49,3 +50,4 @@ pub use walk_forward::{WalkForwardEngine, WalkForwardConfig, WalkForwardResults}
 pub use data_quality::{DataQualityReport, DataValidator};
 pub use statistics::{StatisticalReport, SignificanceVerdict, compute_statistics};
 pub use oos_validation::{OOSValidator, OOSConfig, ValidationReport, OverfitVerdict};
+pub use multi_objective::{MultiObjectiveOptimizer, MOConfig, MOResults, Objective};
