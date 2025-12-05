@@ -131,6 +131,10 @@ struct Cli {
     /// Quote in low entropy (false = no quotes in low entropy)
     #[arg(long)]
     quote_low_entropy: bool,
+
+    /// Show statistical significance report (PSR, DSR, bootstrap CI)
+    #[arg(long)]
+    stats: bool,
 }
 
 #[derive(Subcommand)]
@@ -331,7 +335,12 @@ fn run_single(cli: &Cli) -> Result<()> {
     println!();
 
     let results = engine.run()?;
-    results.print_summary();
+
+    if cli.stats {
+        results.print_summary_with_stats(1); // Single trial for individual backtest
+    } else {
+        results.print_summary();
+    }
 
     if let Some(ref output) = cli.output {
         results.save_json(output.to_str().unwrap())?;
