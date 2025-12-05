@@ -11,6 +11,7 @@
 use std::path::PathBuf;
 
 use rust_decimal::Decimal;
+use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
@@ -24,6 +25,7 @@ use super::metrics::{
     PerformanceMetrics, TradeLog, TradeRecord, TradeSide,
     EquityCurve, EquityPoint,
 };
+use super::statistics::{StatisticalReport, compute_statistics};
 
 /// Configuration for the backtest
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +125,42 @@ impl BacktestResults {
         }
 
         self.metrics.print_report();
+    }
+
+    /// Compute statistical significance report
+    ///
+    /// # Arguments
+    /// * `num_trials` - Number of independent backtests conducted (for DSR adjustment)
+    pub fn compute_statistics(&self, num_trials: usize) -> StatisticalReport {
+        // Extract per-trade returns
+        let trade_returns: Vec<f64> = self.trade_log.trades
+            .iter()
+            .filter_map(|t| {
+                t.pnl.map(|pnl| {
+                    let notional = t.price * t.size;
+                    if notional > dec!(0) {
+                        pnl.to_f64().unwrap_or(0.0) / notional.to_f64().unwrap_or(1.0)
+                    } else {
+                        0.0
+                    }
+                })
+            })
+            .collect();
+
+        compute_statistics(
+            &trade_returns,
+            self.metrics.total_return,
+            self.metrics.max_drawdown,
+            self.metrics.sharpe_ratio,
+            num_trials,
+        )
+    }
+
+    /// Print summary with statistical significance report
+    pub fn print_summary_with_stats(&self, num_trials: usize) {
+        self.print_summary();
+        let stats = self.compute_statistics(num_trials);
+        stats.print();
     }
 }
 
