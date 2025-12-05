@@ -11,6 +11,7 @@
 //! - `walk_forward`: Walk-forward validation to prevent overfitting
 //! - `data_quality`: Data validation and quality checks
 //! - `statistics`: Statistical significance testing (PSR, DSR, bootstrap CI)
+//! - `oos_validation`: Out-of-sample validation and overfitting detection
 //!
 //! # Usage
 //!
@@ -38,6 +39,7 @@ pub mod fill_simulator;
 pub mod walk_forward;
 pub mod data_quality;
 pub mod statistics;
+pub mod oos_validation;
 
 pub use replay::{ParquetReplay, ReplayEvent, ReplayConfig};
 pub use harness::{BacktestEngine, BacktestConfig, BacktestResults};
@@ -46,3 +48,4 @@ pub use fill_simulator::{FillSimulator, FillSimulatorConfig, FillEvent, MarketSt
 pub use walk_forward::{WalkForwardEngine, WalkForwardConfig, WalkForwardResults};
 pub use data_quality::{DataQualityReport, DataValidator};
 pub use statistics::{StatisticalReport, SignificanceVerdict, compute_statistics};
+pub use oos_validation::{OOSValidator, OOSConfig, ValidationReport, OverfitVerdict};

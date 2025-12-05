@@ -243,6 +243,33 @@ enum Commands {
         #[arg(short, long)]
         output: Option<std::path::PathBuf>,
     },
+
+    /// Out-of-sample validation (hold-out test)
+    OosValidate {
+        /// Fraction of data to reserve for out-of-sample test (0.1-0.5)
+        #[arg(long, default_value = "0.20")]
+        holdout: f64,
+
+        /// Gap between train and test to prevent lookahead (hours)
+        #[arg(long, default_value = "1.0")]
+        embargo_hours: f64,
+
+        /// Spread values to test (comma-separated)
+        #[arg(long, default_value = "1,2,3")]
+        spreads: String,
+
+        /// Skew values to test (comma-separated)
+        #[arg(long, default_value = "0.3,0.5")]
+        skews: String,
+
+        /// Fill probability values (comma-separated)
+        #[arg(long, default_value = "0.10")]
+        fill_probs: String,
+
+        /// Output file for results (JSON)
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -267,6 +294,9 @@ fn main() -> Result<()> {
         }
         Some(Commands::RegimeSearch { high_spreads, med_spreads, low_spreads, high_skews, med_skews, low_skews, fill_probs, output }) => {
             run_regime_search(&cli, high_spreads, med_spreads, low_spreads, high_skews, med_skews, low_skews, fill_probs, output.clone())?;
+        }
+        Some(Commands::OosValidate { holdout, embargo_hours, spreads, skews, fill_probs, output }) => {
+            run_oos_validation(&cli, *holdout, *embargo_hours, spreads, skews, fill_probs, output.clone())?;
         }
         Some(Commands::Single) | None => {
             run_single(&cli)?;
@@ -1193,6 +1223,127 @@ fn run_regime_search(
         std::fs::write(output_path, json)?;
         println!();
         println!("Full results saved to: {:?}", output_path);
+    }
+
+    Ok(())
+}
+
+fn run_oos_validation(
+    cli: &Cli,
+    holdout: f64,
+    embargo_hours: f64,
+    spreads_str: &str,
+    skews_str: &str,
+    fill_probs_str: &str,
+    output: Option<PathBuf>,
+) -> Result<()> {
+    use ingestor::backtest::oos_validation::{OOSValidator, OOSConfig};
+
+    // Parse parameters
+    let spreads: Vec<f64> = spreads_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    let skews: Vec<f64> = skews_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    let fill_probs: Vec<f64> = fill_probs_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+
+    println!("═══════════════════════════════════════════════════════");
+    println!("         OUT-OF-SAMPLE VALIDATION                      ");
+    println!("═══════════════════════════════════════════════════════");
+    println!();
+    println!("Configuration:");
+    println!("  Data:           {:?}", cli.data);
+    println!("  Hold-out:       {:.0}%", holdout * 100.0);
+    println!("  Embargo:        {:.1} hours", embargo_hours);
+    println!();
+    println!("Parameter Grid:");
+    println!("  Spreads:        {:?}", spreads);
+    println!("  Skews:          {:?}", skews);
+    println!("  Fill Probs:     {:?}", fill_probs);
+    println!();
+    println!("Total combinations: {}", spreads.len() * skews.len() * fill_probs.len());
+    println!();
+
+    let config = OOSConfig {
+        holdout_fraction: holdout,
+        embargo_hours,
+        data_dir: cli.data.clone(),
+        verbose: !cli.quiet,
+        ..Default::default()
+    };
+
+    let mut validator = OOSValidator::new(config);
+
+    println!("Loading data...");
+    let num_events = validator.load_data()?;
+    println!("Loaded {} events", num_events);
+    println!();
+
+    // Run validation grid
+    let reports = validator.validate_grid(&spreads, &skews, &fill_probs)?;
+
+    if reports.is_empty() {
+        println!("No valid results - check data availability");
+        return Ok(());
+    }
+
+    // Print summary of all results
+    println!();
+    println!("═══════════════════════════════════════════════════════");
+    println!("              VALIDATION RESULTS SUMMARY                ");
+    println!("═══════════════════════════════════════════════════════");
+    println!();
+
+    println!("TOP CONFIGURATIONS (by OOS Sharpe):");
+    println!("┌───────┬───────┬────────┬───────────┬───────────┬──────────┬────────────┐");
+    println!("│ Sprd  │ Skew  │ FillP  │  IS Shpe  │  OOS Shpe │  Degrad  │   Verdict  │");
+    println!("├───────┼───────┼────────┼───────────┼───────────┼──────────┼────────────┤");
+
+    for report in reports.iter().take(10) {
+        let verdict_short = match report.overfit_verdict {
+            ingestor::backtest::OverfitVerdict::Robust => "ROBUST",
+            ingestor::backtest::OverfitVerdict::MildOverfit => "MILD",
+            ingestor::backtest::OverfitVerdict::ModerateOverfit => "MODERATE",
+            ingestor::backtest::OverfitVerdict::SevereOverfit => "SEVERE",
+            ingestor::backtest::OverfitVerdict::Inconclusive => "INCONCL",
+        };
+
+        println!("│ {:5.1} │ {:5.2} │ {:5.0}% │ {:+9.3} │ {:+9.3} │ {:7.0}% │ {:10} │",
+            report.params_tested.spread_bps,
+            report.params_tested.skew_factor,
+            report.params_tested.fill_probability * 100.0,
+            report.comparison.in_sample.sharpe_ratio,
+            report.comparison.out_of_sample.sharpe_ratio,
+            report.comparison.sharpe_degradation * 100.0,
+            verdict_short);
+    }
+    println!("└───────┴───────┴────────┴───────────┴───────────┴──────────┴────────────┘");
+    println!();
+
+    // Statistics on verdicts
+    let robust_count = reports.iter().filter(|r| matches!(r.overfit_verdict, ingestor::backtest::OverfitVerdict::Robust)).count();
+    let mild_count = reports.iter().filter(|r| matches!(r.overfit_verdict, ingestor::backtest::OverfitVerdict::MildOverfit)).count();
+    let moderate_count = reports.iter().filter(|r| matches!(r.overfit_verdict, ingestor::backtest::OverfitVerdict::ModerateOverfit)).count();
+    let severe_count = reports.iter().filter(|r| matches!(r.overfit_verdict, ingestor::backtest::OverfitVerdict::SevereOverfit)).count();
+
+    println!("VERDICT DISTRIBUTION:");
+    println!("  Robust:         {} ({:.0}%)", robust_count, (robust_count as f64 / reports.len() as f64) * 100.0);
+    println!("  Mild Overfit:   {} ({:.0}%)", mild_count, (mild_count as f64 / reports.len() as f64) * 100.0);
+    println!("  Moderate Overfit: {} ({:.0}%)", moderate_count, (moderate_count as f64 / reports.len() as f64) * 100.0);
+    println!("  Severe Overfit: {} ({:.0}%)", severe_count, (severe_count as f64 / reports.len() as f64) * 100.0);
+    println!();
+
+    // Print best result details
+    if let Some(best) = reports.first() {
+        println!("═══════════════════════════════════════════════════════");
+        println!("BEST CONFIGURATION (by OOS Sharpe):");
+        println!("═══════════════════════════════════════════════════════");
+        best.print();
+    }
+
+    // Save results
+    if let Some(ref output_path) = output {
+        let json = serde_json::to_string_pretty(&reports)?;
+        std::fs::write(output_path, json)?;
+        println!();
+        println!("Results saved to: {:?}", output_path);
     }
 
     Ok(())
