@@ -526,15 +526,15 @@ Already implemented via `backtest walk-forward` command.
 - [x] Forward testing session logging
 - [x] Backtest vs live comparison reports
 
-#### Phase 3: Strategy Optimization (Weeks 9-14, ~60 hrs) 🔄 IN PROGRESS
+#### Phase 3: Strategy Optimization (Weeks 9-14, ~60 hrs) ✅ COMPLETE
 - [x] Basic parameter sweep (spread × skew grid)
 - [x] Extended grid search (entropy thresholds, fill params)
 - [x] Entropy gate experiment (gated vs ungated) - **Result: UNGATED wins**
 - [x] Bayesian optimization (Optuna integration)
-- [ ] Multi-objective optimization (Sharpe vs drawdown)
-- [ ] Regime-specific parameter sets
-- [ ] Out-of-sample validation
-- [ ] Statistical significance testing
+- [x] Multi-objective optimization (Sharpe vs drawdown, fill rate, turnover)
+- [x] Regime-specific parameter sets (per-regime optimization)
+- [x] Out-of-sample validation (hold-out test sets, embargo periods)
+- [x] Statistical significance testing (PSR, DSR, Bootstrap CI)
 
 #### Phase 4: RL Integration (Weeks 15-20, ~60 hrs)
 - [ ] Gymnasium environment wrapper

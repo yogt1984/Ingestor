@@ -12,6 +12,7 @@
 //! - `data_quality`: Data validation and quality checks
 //! - `statistics`: Statistical significance testing (PSR, DSR, bootstrap CI)
 //! - `oos_validation`: Out-of-sample validation and overfitting detection
+//! - `regime_optimizer`: Regime-specific parameter optimization
 //!
 //! # Usage
 //!
@@ -41,6 +42,7 @@ pub mod data_quality;
 pub mod statistics;
 pub mod oos_validation;
 pub mod multi_objective;
+pub mod regime_optimizer;
 
 pub use replay::{ParquetReplay, ReplayEvent, ReplayConfig};
 pub use harness::{BacktestEngine, BacktestConfig, BacktestResults};
@@ -51,3 +53,4 @@ pub use data_quality::{DataQualityReport, DataValidator};
 pub use statistics::{StatisticalReport, SignificanceVerdict, compute_statistics};
 pub use oos_validation::{OOSValidator, OOSConfig, ValidationReport, OverfitVerdict};
 pub use multi_objective::{MultiObjectiveOptimizer, MOConfig, MOResults, Objective};
+pub use regime_optimizer::{RegimeOptimizer, RegimeOptimizerConfig, RegimeOptimizationResults};

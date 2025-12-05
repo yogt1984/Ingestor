@@ -313,6 +313,33 @@ enum Commands {
         #[arg(short, long)]
         output: Option<std::path::PathBuf>,
     },
+
+    /// Regime-specific parameter optimization (find best params per regime)
+    RegimeOptimize {
+        /// Spread values to test (comma-separated)
+        #[arg(long, default_value = "0.5,1.0,1.5,2.0,2.5,3.0,4.0,5.0")]
+        spreads: String,
+
+        /// Skew values to test (comma-separated)
+        #[arg(long, default_value = "0.2,0.3,0.4,0.5,0.6,0.7,0.8,1.0")]
+        skews: String,
+
+        /// Fill probability for simulation
+        #[arg(long, default_value = "0.10")]
+        fill_prob: f64,
+
+        /// Minimum trades for valid optimization
+        #[arg(long, default_value = "10")]
+        min_trades: usize,
+
+        /// Allow no-quoting in low entropy regime
+        #[arg(long, default_value = "true")]
+        allow_no_quote: bool,
+
+        /// Output file for results (JSON)
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -343,6 +370,9 @@ fn main() -> Result<()> {
         }
         Some(Commands::MultiObjective { spreads, skews, fill_probs, high_entropies, min_trades, w_sharpe, w_drawdown, w_fill, w_turnover, output }) => {
             run_multi_objective(&cli, spreads, skews, fill_probs, high_entropies, *min_trades, *w_sharpe, *w_drawdown, *w_fill, *w_turnover, output.clone())?;
+        }
+        Some(Commands::RegimeOptimize { spreads, skews, fill_prob, min_trades, allow_no_quote, output }) => {
+            run_regime_optimize(&cli, spreads, skews, *fill_prob, *min_trades, *allow_no_quote, output.clone())?;
         }
         Some(Commands::Single) | None => {
             run_single(&cli)?;
@@ -1480,6 +1510,78 @@ fn run_multi_objective(
     // Save results
     if let Some(ref output_path) = output {
         results.save_json(output_path.to_str().unwrap_or("mo_results.json"))?;
+        println!();
+        println!("Results saved to: {:?}", output_path);
+    }
+
+    Ok(())
+}
+
+fn run_regime_optimize(
+    cli: &Cli,
+    spreads: &str,
+    skews: &str,
+    fill_prob: f64,
+    min_trades: usize,
+    allow_no_quote: bool,
+    output: Option<std::path::PathBuf>,
+) -> Result<()> {
+    use ingestor::backtest::regime_optimizer::{RegimeOptimizer, RegimeOptimizerConfig};
+
+    // Parse parameter grids
+    let spread_values: Vec<f64> = spreads
+        .split(',')
+        .map(|s| s.trim().parse().unwrap_or(2.0))
+        .collect();
+    let skew_values: Vec<f64> = skews
+        .split(',')
+        .map(|s| s.trim().parse().unwrap_or(0.5))
+        .collect();
+
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!("       REGIME-SPECIFIC PARAMETER OPTIMIZATION                          ");
+    println!("       (Find optimal params for each entropy regime independently)     ");
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!();
+    println!("CONFIGURATION:");
+    println!("  Spreads to test:     {:?}", spread_values);
+    println!("  Skews to test:       {:?}", skew_values);
+    println!("  Fill probability:    {:.0}%", fill_prob * 100.0);
+    println!("  Min trades required: {}", min_trades);
+    println!("  Allow no-quote low:  {}", allow_no_quote);
+    println!("  High entropy thresh: {:.2}", cli.high_entropy);
+    println!("  Low entropy thresh:  {:.2}", cli.low_entropy);
+    println!();
+
+    let total_combinations = spread_values.len() * skew_values.len();
+    println!("Testing {} combinations per regime", total_combinations);
+    println!();
+
+    // Build config
+    let config = RegimeOptimizerConfig {
+        data_dir: cli.data.clone(),
+        high_entropy_threshold: cli.high_entropy,
+        low_entropy_threshold: cli.low_entropy,
+        spreads: spread_values,
+        skews: skew_values,
+        fill_probability: fill_prob,
+        min_trades,
+        allow_no_quote_low: allow_no_quote,
+        verbose: true,
+    };
+
+    // Run optimization
+    let mut optimizer = RegimeOptimizer::new(config);
+    optimizer.load_data()?;
+
+    let results = optimizer.optimize()?;
+
+    // Print report
+    results.print_report();
+
+    // Save results
+    if let Some(ref output_path) = output {
+        results.save_json(output_path.to_str().unwrap_or("regime_opt_results.json"))?;
         println!();
         println!("Results saved to: {:?}", output_path);
     }
