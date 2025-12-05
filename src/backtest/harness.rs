@@ -7,6 +7,21 @@
 //! - Adverse selection
 //! - Trade intensity
 //! - Regime awareness
+//!
+//! ## Algorithm Support
+//!
+//! The backtest engine supports any algorithm implementing `MarketMakingAlgorithm`:
+//!
+//! ```ignore
+//! use ingestor::algorithms::{MarketMakingAlgorithm, AvellanedaStoikovAlgorithm};
+//!
+//! // Create with default A-S algorithm
+//! let engine = BacktestEngine::new(config);
+//!
+//! // Or with a custom algorithm
+//! let algo = Box::new(MyCustomAlgorithm::new());
+//! let engine = BacktestEngine::with_algorithm(config, algo);
+//! ```
 
 use std::path::PathBuf;
 
@@ -16,7 +31,11 @@ use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
 
-use crate::market_maker::{MarketMakerEngine, MMConfig, Fill, QuoteSide};
+use crate::algorithms::{
+    MarketMakingAlgorithm, MarketInput, AvellanedaStoikovAlgorithm,
+    compute_entropy_score, compute_flow_imbalance,
+};
+use crate::market_maker::{MMConfig, Fill, QuoteSide};
 use crate::mm_simulator::SimulatorConfig;
 
 use super::replay::{ParquetReplay, ReplayConfig, ReplayEvent};
@@ -165,10 +184,13 @@ impl BacktestResults {
 }
 
 /// Backtest engine
+///
+/// Runs backtests using any algorithm implementing `MarketMakingAlgorithm`.
 pub struct BacktestEngine {
     config: BacktestConfig,
     replay: ParquetReplay,
-    mm: MarketMakerEngine,
+    /// The market making algorithm (polymorphic)
+    algorithm: Box<dyn MarketMakingAlgorithm>,
     fill_sim: FillSimulator,
 
     // State
@@ -182,16 +204,16 @@ pub struct BacktestEngine {
 }
 
 impl BacktestEngine {
-    /// Create a new backtest engine
+    /// Create a new backtest engine with default Avellaneda-Stoikov algorithm.
     pub fn new(config: BacktestConfig) -> Self {
         let replay = ParquetReplay::new(config.replay.clone());
-        let mm = MarketMakerEngine::new(config.mm.clone());
+        let algorithm = Self::create_default_algorithm(&config.mm);
         let fill_sim = FillSimulator::new(config.fill_sim.clone());
 
         Self {
             config,
             replay,
-            mm,
+            algorithm,
             fill_sim,
             trade_log: TradeLog::new(),
             equity_curve: EquityCurve::new(),
@@ -201,17 +223,25 @@ impl BacktestEngine {
         }
     }
 
-    /// Create a backtest engine from pre-loaded events
-    /// Used by walk-forward validation to avoid reloading data
-    pub fn from_events(config: BacktestConfig, events: Vec<ReplayEvent>) -> Self {
-        let replay = ParquetReplay::from_events(events);
-        let mm = MarketMakerEngine::new(config.mm.clone());
+    /// Create a backtest engine with a custom algorithm.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let algo = Box::new(MyCustomAlgorithm::new());
+    /// let engine = BacktestEngine::with_algorithm(config, algo);
+    /// ```
+    pub fn with_algorithm(
+        config: BacktestConfig,
+        algorithm: Box<dyn MarketMakingAlgorithm>,
+    ) -> Self {
+        let replay = ParquetReplay::new(config.replay.clone());
         let fill_sim = FillSimulator::new(config.fill_sim.clone());
 
         Self {
             config,
             replay,
-            mm,
+            algorithm,
             fill_sim,
             trade_log: TradeLog::new(),
             equity_curve: EquityCurve::new(),
@@ -219,6 +249,63 @@ impl BacktestEngine {
             fills_generated: 0,
             last_mid_price: None,
         }
+    }
+
+    /// Create a backtest engine from pre-loaded events.
+    /// Used by walk-forward validation to avoid reloading data.
+    pub fn from_events(config: BacktestConfig, events: Vec<ReplayEvent>) -> Self {
+        let replay = ParquetReplay::from_events(events);
+        let algorithm = Self::create_default_algorithm(&config.mm);
+        let fill_sim = FillSimulator::new(config.fill_sim.clone());
+
+        Self {
+            config,
+            replay,
+            algorithm,
+            fill_sim,
+            trade_log: TradeLog::new(),
+            equity_curve: EquityCurve::new(),
+            events_processed: 0,
+            fills_generated: 0,
+            last_mid_price: None,
+        }
+    }
+
+    /// Create a backtest engine from pre-loaded events with a custom algorithm.
+    pub fn from_events_with_algorithm(
+        config: BacktestConfig,
+        events: Vec<ReplayEvent>,
+        algorithm: Box<dyn MarketMakingAlgorithm>,
+    ) -> Self {
+        let replay = ParquetReplay::from_events(events);
+        let fill_sim = FillSimulator::new(config.fill_sim.clone());
+
+        Self {
+            config,
+            replay,
+            algorithm,
+            fill_sim,
+            trade_log: TradeLog::new(),
+            equity_curve: EquityCurve::new(),
+            events_processed: 0,
+            fills_generated: 0,
+            last_mid_price: None,
+        }
+    }
+
+    /// Create default A-S algorithm from MMConfig
+    fn create_default_algorithm(mm_config: &MMConfig) -> Box<dyn MarketMakingAlgorithm> {
+        Box::new(AvellanedaStoikovAlgorithm::new(mm_config.clone()))
+    }
+
+    /// Get the algorithm type string
+    pub fn algorithm_type(&self) -> &'static str {
+        self.algorithm.type_string()
+    }
+
+    /// Get the algorithm name
+    pub fn algorithm_name(&self) -> &'static str {
+        self.algorithm.name()
     }
 
     /// Load historical data
@@ -240,7 +327,7 @@ impl BacktestEngine {
         }
 
         // Reset state
-        self.mm.reset();
+        self.algorithm.reset();
         self.fill_sim.reset();
         self.trade_log = TradeLog::new();
         self.equity_curve = EquityCurve::new();
@@ -280,7 +367,7 @@ impl BacktestEngine {
                     progress,
                     self.events_processed,
                     self.fills_generated,
-                    self.mm.pnl().total_pnl
+                    self.algorithm.pnl().total_pnl
                 );
             }
         }
@@ -345,27 +432,30 @@ impl BacktestEngine {
         let microprice = snap.microprice.unwrap_or(mid_price);
         let volatility = snap.realized_volatility_100.unwrap_or(0.001);
 
-        // Compute entropy score
-        let entropy_score = self.mm.compute_entropy_score(
+        // Compute entropy score using utility function
+        let entropy_score = compute_entropy_score(
             snap.tick_entropy_1s,
             snap.tick_entropy_5s,
             snap.tick_entropy_10s,
         );
 
-        // Compute flow imbalance
+        // Compute flow imbalance using utility function
         let buy_vol = snap.aggr_ratio_100.unwrap_or(Decimal::new(5, 1));
         let sell_vol = Decimal::ONE - buy_vol;
-        let flow_imbalance = self.mm.compute_flow_imbalance(buy_vol, sell_vol);
+        let flow_imbalance = compute_flow_imbalance(buy_vol, sell_vol);
 
-        // Compute quotes
-        let quotes = self.mm.compute_quotes(
-            microprice,
-            mid_price,
+        // Create MarketInput for the algorithm
+        let market_input = MarketInput {
+            best_bid: microprice, // Use microprice as reference
+            best_ask: mid_price,  // Use mid as upper bound
             volatility,
-            entropy_score,
-            flow_imbalance,
+            entropy: entropy_score,
+            book_imbalance: flow_imbalance,
             timestamp_ms,
-        );
+        };
+
+        // Compute quotes via trait interface
+        let quotes = self.algorithm.compute_quotes(&market_input);
 
         // Update fill simulator with new quotes
         self.fill_sim.update_quotes(&quotes, timestamp_ms);
@@ -389,7 +479,7 @@ impl BacktestEngine {
         }
 
         // Update mark-to-market
-        self.mm.update_mark_to_market(mid_price);
+        self.algorithm.update_mark_to_market(mid_price);
 
         self.last_mid_price = Some(mid_price);
         self.events_processed += 1;
@@ -452,8 +542,8 @@ impl BacktestEngine {
             pnl,
         });
 
-        // Process in MM engine
-        self.mm.process_fill(fill, fee_rate);
+        // Process in algorithm
+        self.algorithm.process_fill(fill, fee_rate);
         self.fills_generated += 1;
 
         Ok(())
@@ -461,8 +551,8 @@ impl BacktestEngine {
 
     /// Calculate PnL from a fill (if closing position)
     fn calculate_fill_pnl(&self, fill: &Fill) -> Option<Decimal> {
-        let inventory = self.mm.inventory();
-        let avg_entry = self.mm.get_state().avg_entry_price;
+        let inventory = self.algorithm.inventory();
+        let avg_entry = self.algorithm.get_state().avg_entry_price;
 
         match fill.side {
             QuoteSide::Ask if inventory > dec!(0) => {
@@ -489,7 +579,7 @@ impl BacktestEngine {
 
     /// Record current equity
     fn record_equity(&mut self, timestamp_ms: i64) {
-        let pnl = self.mm.pnl();
+        let pnl = self.algorithm.pnl();
         let equity = self.config.initial_capital + pnl.total_pnl;
 
         self.equity_curve.add(EquityPoint {
@@ -497,7 +587,7 @@ impl BacktestEngine {
             equity,
             unrealized_pnl: pnl.unrealized_pnl,
             realized_pnl: pnl.realized_pnl,
-            inventory: self.mm.inventory(),
+            inventory: self.algorithm.inventory(),
         });
     }
 
@@ -507,8 +597,8 @@ impl BacktestEngine {
             events_processed: self.events_processed,
             fills_generated: self.fills_generated,
             progress: self.replay.progress(),
-            current_pnl: self.mm.pnl().total_pnl,
-            current_inventory: self.mm.inventory(),
+            current_pnl: self.algorithm.pnl().total_pnl,
+            current_inventory: self.algorithm.inventory(),
         }
     }
 }
@@ -580,6 +670,7 @@ pub fn backtest_naive_fills(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::algorithms::AlgorithmType;
 
     #[test]
     fn test_backtest_config_default() {
@@ -606,5 +697,45 @@ mod tests {
         let stats = FillStats::default();
         assert_eq!(stats.bid_fills, 0);
         assert_eq!(stats.ask_fills, 0);
+    }
+
+    #[test]
+    fn test_engine_default_algorithm() {
+        let config = BacktestConfig::default();
+        let engine = BacktestEngine::new(config);
+
+        // Verify default algorithm is Avellaneda-Stoikov
+        assert_eq!(engine.algorithm_type(), "avellaneda_stoikov");
+        assert_eq!(engine.algorithm_name(), "Avellaneda-Stoikov Market Maker");
+    }
+
+    #[test]
+    fn test_engine_with_custom_algorithm() {
+        let config = BacktestConfig::default();
+        let custom_algo = Box::new(AvellanedaStoikovAlgorithm::with_uniform_params(3.0, 0.6));
+
+        let engine = BacktestEngine::with_algorithm(config, custom_algo);
+
+        // Verify algorithm is set correctly
+        assert_eq!(engine.algorithm_type(), "avellaneda_stoikov");
+    }
+
+    #[test]
+    fn test_engine_from_events_with_algorithm() {
+        let config = BacktestConfig::default();
+        let events = Vec::new();
+        let custom_algo = Box::new(AvellanedaStoikovAlgorithm::with_defaults());
+
+        let engine = BacktestEngine::from_events_with_algorithm(config, events, custom_algo);
+
+        assert_eq!(engine.algorithm_type(), "avellaneda_stoikov");
+    }
+
+    #[test]
+    fn test_create_default_algorithm() {
+        let mm_config = MMConfig::default();
+        let algo = BacktestEngine::create_default_algorithm(&mm_config);
+
+        assert_eq!(algo.algorithm_type(), AlgorithmType::AvellanedaStoikov);
     }
 }
