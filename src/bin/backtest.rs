@@ -391,6 +391,25 @@ enum Commands {
         #[arg(short, long)]
         output: Option<std::path::PathBuf>,
     },
+
+    /// Head-to-head comparison: ML vs Avellaneda-Stoikov on same data
+    HeadToHead {
+        /// Path to ML weights file (JSON) - uses default weights if not specified
+        #[arg(long)]
+        weights: Option<std::path::PathBuf>,
+
+        /// A-S spread (bps) for comparison
+        #[arg(long, default_value = "2.0")]
+        as_spread: f64,
+
+        /// A-S skew factor for comparison
+        #[arg(long, default_value = "0.5")]
+        as_skew: f64,
+
+        /// Output file for comparison results (JSON)
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -430,6 +449,9 @@ fn main() -> Result<()> {
         }
         Some(Commands::Compare { algorithm, weights, output }) => {
             run_compare(&cli, algorithm, weights.clone(), output.clone())?;
+        }
+        Some(Commands::HeadToHead { weights, as_spread, as_skew, output }) => {
+            run_head_to_head(&cli, weights.clone(), *as_spread, *as_skew, output.clone())?;
         }
         Some(Commands::Single) | None => {
             run_single(&cli)?;
@@ -1877,6 +1899,296 @@ fn run_compare(
     // Save results
     if let Some(ref output_path) = output {
         results.save_json(output_path.to_str().unwrap())?;
+        println!();
+        println!("Results saved to: {:?}", output_path);
+    }
+
+    Ok(())
+}
+
+/// Head-to-head comparison result for serialization
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct HeadToHeadResult {
+    ml_algorithm: AlgorithmMetrics,
+    as_algorithm: AlgorithmMetrics,
+    comparison: ComparisonSummary,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct AlgorithmMetrics {
+    name: String,
+    sharpe_ratio: f64,
+    total_return: f64,
+    max_drawdown: f64,
+    num_trades: usize,
+    win_rate: f64,
+    avg_trade_pnl: f64,
+    profit_factor: f64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ComparisonSummary {
+    sharpe_difference: f64,        // ML - AS
+    return_difference: f64,        // ML - AS
+    drawdown_difference: f64,      // ML - AS (negative = ML better)
+    trade_count_ratio: f64,        // ML / AS
+    winner: String,                // "ML", "AS", or "TIE"
+    ml_advantage_pct: f64,         // % improvement of ML over AS
+}
+
+fn run_head_to_head(
+    cli: &Cli,
+    weights_path: Option<std::path::PathBuf>,
+    as_spread: f64,
+    as_skew: f64,
+    output: Option<std::path::PathBuf>,
+) -> Result<()> {
+    use ingestor::backtest::replay::ParquetReplay;
+    use ingestor::backtest::harness::BacktestEngine;
+
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!("              HEAD-TO-HEAD: ML vs AVELLANEDA-STOIKOV                    ");
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!();
+    println!("Data:      {:?}", cli.data);
+    println!();
+
+    // Load data once
+    let replay_config = ReplayConfig {
+        data_dir: cli.data.clone(),
+        ..Default::default()
+    };
+
+    let mut replay = ParquetReplay::new(replay_config.clone());
+    let num_events = replay.load()?;
+    let events = replay.into_events();
+
+    println!("Loaded {} events", num_events);
+    println!();
+
+    // =========================================================================
+    // Run ML Algorithm
+    // =========================================================================
+    println!("Running ML Spread/Skew algorithm...");
+
+    let ml_weights = if let Some(ref path) = weights_path {
+        let json = std::fs::read_to_string(path)?;
+        serde_json::from_str::<MLModelWeights>(&json)?
+    } else {
+        println!("  (using default weights)");
+        MLModelWeights::default()
+    };
+
+    println!("  Spread weights: intercept={:.2}, w_entropy={:.2}, w_volatility={:.2}",
+        ml_weights.spread.intercept, ml_weights.spread.w_entropy, ml_weights.spread.w_volatility);
+    println!("  Skew weights: intercept={:.2}, w_inventory={:.2}, w_imbalance={:.2}",
+        ml_weights.skew.intercept, ml_weights.skew.w_inventory, ml_weights.skew.w_imbalance);
+
+    let ml_config = MLSpreadSkewConfig {
+        max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
+        quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
+        ..Default::default()
+    };
+    let ml_algo: Box<dyn MarketMakingAlgorithm> = Box::new(MLSpreadSkewAlgorithm::new(ml_config, ml_weights));
+
+    let backtest_config = BacktestConfig {
+        replay: replay_config.clone(),
+        mm: ingestor::market_maker::MMConfig::default(),
+        simulator: SimulatorConfig {
+            fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
+            ..Default::default()
+        },
+        fill_sim: ingestor::backtest::FillSimulatorConfig {
+            base_fill_probability: cli.fill_prob,
+            queue_position: cli.queue_pos,
+            fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
+            ..Default::default()
+        },
+        verbose: false,
+        use_realistic_fills: !cli.naive_fills,
+        ..Default::default()
+    };
+
+    let mut ml_engine = BacktestEngine::from_events_with_algorithm(
+        backtest_config.clone(),
+        events.clone(),
+        ml_algo,
+    );
+    let ml_results = ml_engine.run()?;
+
+    println!("  Sharpe: {:+.4}, Return: {:+.2}%, Trades: {}",
+        ml_results.metrics.sharpe_ratio,
+        ml_results.metrics.total_return * 100.0,
+        ml_results.metrics.num_trades);
+
+    // =========================================================================
+    // Run Avellaneda-Stoikov Algorithm
+    // =========================================================================
+    println!();
+    println!("Running Avellaneda-Stoikov algorithm...");
+    println!("  Spread: {:.1} bps, Skew: {:.2}", as_spread, as_skew);
+
+    let as_config = ingestor::market_maker::AvellanedaStoikovConfig {
+        max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
+        quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
+        regime_params: RegimeParams::uniform(as_spread, as_skew),
+        ..Default::default()
+    };
+    let as_algo: Box<dyn MarketMakingAlgorithm> = Box::new(AvellanedaStoikovAlgorithm::new(as_config));
+
+    let mut as_engine = BacktestEngine::from_events_with_algorithm(
+        backtest_config,
+        events,
+        as_algo,
+    );
+    let as_results = as_engine.run()?;
+
+    println!("  Sharpe: {:+.4}, Return: {:+.2}%, Trades: {}",
+        as_results.metrics.sharpe_ratio,
+        as_results.metrics.total_return * 100.0,
+        as_results.metrics.num_trades);
+
+    // =========================================================================
+    // Calculate comparison metrics
+    // =========================================================================
+    let sharpe_diff = ml_results.metrics.sharpe_ratio - as_results.metrics.sharpe_ratio;
+    let return_diff = ml_results.metrics.total_return - as_results.metrics.total_return;
+    let drawdown_diff = ml_results.metrics.max_drawdown - as_results.metrics.max_drawdown;
+    let trade_ratio = if as_results.metrics.num_trades > 0 {
+        ml_results.metrics.num_trades as f64 / as_results.metrics.num_trades as f64
+    } else {
+        f64::INFINITY
+    };
+
+    // Determine winner based on Sharpe ratio
+    let (winner, ml_advantage) = if sharpe_diff > 0.1 {
+        let adv = if as_results.metrics.sharpe_ratio.abs() > 0.001 {
+            (sharpe_diff / as_results.metrics.sharpe_ratio.abs()) * 100.0
+        } else {
+            100.0
+        };
+        ("ML".to_string(), adv)
+    } else if sharpe_diff < -0.1 {
+        let adv = if ml_results.metrics.sharpe_ratio.abs() > 0.001 {
+            (sharpe_diff / ml_results.metrics.sharpe_ratio.abs()) * 100.0
+        } else {
+            -100.0
+        };
+        ("AS".to_string(), adv)
+    } else {
+        ("TIE".to_string(), 0.0)
+    };
+
+    // =========================================================================
+    // Print comparison report
+    // =========================================================================
+    println!();
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!("                      COMPARISON RESULTS                                ");
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!();
+    println!("┌─────────────────────┬──────────────────┬──────────────────┬──────────┐");
+    println!("│ Metric              │ ML Spread/Skew   │ Avellaneda-Stoikov│ Δ (ML-AS)│");
+    println!("├─────────────────────┼──────────────────┼──────────────────┼──────────┤");
+    println!("│ Sharpe Ratio        │ {:>+16.4} │ {:>+16.4} │ {:>+8.4} │",
+        ml_results.metrics.sharpe_ratio, as_results.metrics.sharpe_ratio, sharpe_diff);
+    println!("│ Total Return        │ {:>15.2}% │ {:>15.2}% │ {:>+7.2}% │",
+        ml_results.metrics.total_return * 100.0, as_results.metrics.total_return * 100.0, return_diff * 100.0);
+    println!("│ Max Drawdown        │ {:>15.2}% │ {:>15.2}% │ {:>+7.2}% │",
+        ml_results.metrics.max_drawdown * 100.0, as_results.metrics.max_drawdown * 100.0, drawdown_diff * 100.0);
+    println!("│ Number of Trades    │ {:>16} │ {:>16} │ {:>+8} │",
+        ml_results.metrics.num_trades, as_results.metrics.num_trades,
+        ml_results.metrics.num_trades as i64 - as_results.metrics.num_trades as i64);
+    println!("│ Win Rate            │ {:>15.1}% │ {:>15.1}% │ {:>+7.1}% │",
+        ml_results.metrics.win_rate * 100.0, as_results.metrics.win_rate * 100.0,
+        (ml_results.metrics.win_rate - as_results.metrics.win_rate) * 100.0);
+    println!("│ Avg Trade PnL       │ {:>+16.6} │ {:>+16.6} │          │",
+        ml_results.metrics.avg_trade_pnl, as_results.metrics.avg_trade_pnl);
+    println!("└─────────────────────┴──────────────────┴──────────────────┴──────────┘");
+    println!();
+
+    // Print verdict
+    match winner.as_str() {
+        "ML" => {
+            println!("  >>> WINNER: ML Spread/Skew algorithm");
+            println!("      ML outperforms A-S by {:.2} Sharpe points", sharpe_diff);
+        }
+        "AS" => {
+            println!("  >>> WINNER: Avellaneda-Stoikov algorithm");
+            println!("      A-S outperforms ML by {:.2} Sharpe points", -sharpe_diff);
+        }
+        _ => {
+            println!("  >>> RESULT: TIE (difference < 0.1 Sharpe)");
+        }
+    }
+
+    // Additional insights
+    println!();
+    println!("INSIGHTS:");
+    if ml_results.metrics.num_trades > as_results.metrics.num_trades {
+        println!("  - ML generates {:.1}x more trades than A-S", trade_ratio);
+    } else if ml_results.metrics.num_trades < as_results.metrics.num_trades {
+        println!("  - A-S generates {:.1}x more trades than ML", 1.0 / trade_ratio);
+    }
+
+    if drawdown_diff < 0.0 {
+        println!("  - ML has {:.2}% lower max drawdown (better risk control)", -drawdown_diff * 100.0);
+    } else if drawdown_diff > 0.0 {
+        println!("  - A-S has {:.2}% lower max drawdown (better risk control)", drawdown_diff * 100.0);
+    }
+
+    println!("═══════════════════════════════════════════════════════════════════════");
+
+    // Build result struct for JSON output
+    let ml_profit_factor = if ml_results.metrics.win_rate > 0.0 && ml_results.metrics.win_rate < 1.0 {
+        ml_results.metrics.win_rate / (1.0 - ml_results.metrics.win_rate)
+    } else {
+        0.0
+    };
+
+    let as_profit_factor = if as_results.metrics.win_rate > 0.0 && as_results.metrics.win_rate < 1.0 {
+        as_results.metrics.win_rate / (1.0 - as_results.metrics.win_rate)
+    } else {
+        0.0
+    };
+
+    use rust_decimal::prelude::ToPrimitive;
+
+    let result = HeadToHeadResult {
+        ml_algorithm: AlgorithmMetrics {
+            name: "ML Spread/Skew".to_string(),
+            sharpe_ratio: ml_results.metrics.sharpe_ratio,
+            total_return: ml_results.metrics.total_return,
+            max_drawdown: ml_results.metrics.max_drawdown,
+            num_trades: ml_results.metrics.num_trades,
+            win_rate: ml_results.metrics.win_rate,
+            avg_trade_pnl: ml_results.metrics.avg_trade_pnl.to_f64().unwrap_or(0.0),
+            profit_factor: ml_profit_factor,
+        },
+        as_algorithm: AlgorithmMetrics {
+            name: format!("Avellaneda-Stoikov (spread={}, skew={})", as_spread, as_skew),
+            sharpe_ratio: as_results.metrics.sharpe_ratio,
+            total_return: as_results.metrics.total_return,
+            max_drawdown: as_results.metrics.max_drawdown,
+            num_trades: as_results.metrics.num_trades,
+            win_rate: as_results.metrics.win_rate,
+            avg_trade_pnl: as_results.metrics.avg_trade_pnl.to_f64().unwrap_or(0.0),
+            profit_factor: as_profit_factor,
+        },
+        comparison: ComparisonSummary {
+            sharpe_difference: sharpe_diff,
+            return_difference: return_diff,
+            drawdown_difference: drawdown_diff,
+            trade_count_ratio: trade_ratio,
+            winner,
+            ml_advantage_pct: ml_advantage,
+        },
+    };
+
+    // Save results
+    if let Some(ref output_path) = output {
+        let json = serde_json::to_string_pretty(&result)?;
+        std::fs::write(output_path, json)?;
         println!();
         println!("Results saved to: {:?}", output_path);
     }
