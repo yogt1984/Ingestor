@@ -30,8 +30,13 @@ use anyhow::Result;
 
 use ingestor::backtest::{BacktestEngine, BacktestConfig};
 use ingestor::backtest::replay::ReplayConfig;
+use ingestor::backtest::ml_trainer::{MLTrainer, MLTrainerConfig};
 use ingestor::market_maker::{MMConfig, RegimeParams, RegimeConfig};
 use ingestor::mm_simulator::SimulatorConfig;
+use ingestor::algorithms::{
+    AlgorithmType, MLSpreadSkewAlgorithm, MLSpreadSkewConfig, MLModelWeights,
+    AvellanedaStoikovAlgorithm, MarketMakingAlgorithm,
+};
 
 #[derive(Parser)]
 #[command(name = "backtest")]
@@ -340,6 +345,52 @@ enum Commands {
         #[arg(short, long)]
         output: Option<std::path::PathBuf>,
     },
+
+    /// Train ML weights using grid search optimization
+    TrainMl {
+        /// Training ratio (fraction of data for training, rest for test)
+        #[arg(long, default_value = "0.7")]
+        train_ratio: f64,
+
+        /// Spread intercept values to test (comma-separated)
+        #[arg(long, default_value = "1.0,2.0,3.0,4.0,5.0")]
+        spread_intercepts: String,
+
+        /// Spread entropy weight values to test (comma-separated)
+        #[arg(long, default_value = "-3.0,-2.0,-1.0,0.0")]
+        spread_entropy_weights: String,
+
+        /// Spread volatility weight values to test (comma-separated)
+        #[arg(long, default_value = "200.0,400.0,600.0")]
+        spread_vol_weights: String,
+
+        /// Skew intercept values to test (comma-separated)
+        #[arg(long, default_value = "0.3,0.5,0.7")]
+        skew_intercepts: String,
+
+        /// Skew inventory weight values to test (comma-separated)
+        #[arg(long, default_value = "-1.0,-0.8,-0.6,-0.4")]
+        skew_inv_weights: String,
+
+        /// Output file for trained weights (JSON)
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
+
+    /// Compare ML algorithm vs Avellaneda-Stoikov
+    Compare {
+        /// Algorithm to use: ml, as (avellaneda-stoikov)
+        #[arg(long, default_value = "ml")]
+        algorithm: String,
+
+        /// Path to ML weights file (JSON) - required for ml algorithm
+        #[arg(long)]
+        weights: Option<std::path::PathBuf>,
+
+        /// Output file for comparison results (JSON)
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -373,6 +424,12 @@ fn main() -> Result<()> {
         }
         Some(Commands::RegimeOptimize { spreads, skews, fill_prob, min_trades, allow_no_quote, output }) => {
             run_regime_optimize(&cli, spreads, skews, *fill_prob, *min_trades, *allow_no_quote, output.clone())?;
+        }
+        Some(Commands::TrainMl { train_ratio, spread_intercepts, spread_entropy_weights, spread_vol_weights, skew_intercepts, skew_inv_weights, output }) => {
+            run_train_ml(&cli, *train_ratio, spread_intercepts, spread_entropy_weights, spread_vol_weights, skew_intercepts, skew_inv_weights, output.clone())?;
+        }
+        Some(Commands::Compare { algorithm, weights, output }) => {
+            run_compare(&cli, algorithm, weights.clone(), output.clone())?;
         }
         Some(Commands::Single) | None => {
             run_single(&cli)?;
@@ -1582,6 +1639,244 @@ fn run_regime_optimize(
     // Save results
     if let Some(ref output_path) = output {
         results.save_json(output_path.to_str().unwrap_or("regime_opt_results.json"))?;
+        println!();
+        println!("Results saved to: {:?}", output_path);
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_train_ml(
+    cli: &Cli,
+    train_ratio: f64,
+    spread_intercepts: &str,
+    spread_entropy_weights: &str,
+    spread_vol_weights: &str,
+    skew_intercepts: &str,
+    skew_inv_weights: &str,
+    output: Option<std::path::PathBuf>,
+) -> Result<()> {
+    // Parse parameter grids
+    let spread_intercepts: Vec<f64> = spread_intercepts
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    let spread_entropy_weights: Vec<f64> = spread_entropy_weights
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    let spread_vol_weights: Vec<f64> = spread_vol_weights
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    let skew_intercepts: Vec<f64> = skew_intercepts
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    let skew_inv_weights: Vec<f64> = skew_inv_weights
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+
+    let total_combinations = spread_intercepts.len()
+        * spread_entropy_weights.len()
+        * spread_vol_weights.len()
+        * skew_intercepts.len()
+        * skew_inv_weights.len();
+
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!("              ML WEIGHT TRAINING (Grid Search)                          ");
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!();
+    println!("CONFIGURATION:");
+    println!("  Data:            {:?}", cli.data);
+    println!("  Train Ratio:     {:.0}%", train_ratio * 100.0);
+    println!();
+    println!("PARAMETER GRID:");
+    println!("  Spread Intercepts:      {:?}", spread_intercepts);
+    println!("  Spread Entropy Weights: {:?}", spread_entropy_weights);
+    println!("  Spread Vol Weights:     {:?}", spread_vol_weights);
+    println!("  Skew Intercepts:        {:?}", skew_intercepts);
+    println!("  Skew Inventory Weights: {:?}", skew_inv_weights);
+    println!();
+    println!("Total combinations: {}", total_combinations);
+    println!();
+
+    // Build config
+    let config = MLTrainerConfig {
+        data_dir: cli.data.clone(),
+        train_ratio,
+        spread_intercepts,
+        spread_entropy_weights,
+        spread_volatility_weights: spread_vol_weights,
+        skew_intercepts,
+        skew_inventory_weights: skew_inv_weights,
+        max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
+        quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
+        fill_probability: cli.fill_prob,
+        verbose: !cli.quiet,
+        ..Default::default()
+    };
+
+    // Run training
+    let mut trainer = MLTrainer::new(config)?;
+
+    println!("Training ML weights...");
+    println!();
+
+    let results = trainer.train()?;
+
+    // Print results
+    println!();
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!("                    TRAINING RESULTS                                    ");
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!();
+    println!("BEST WEIGHTS:");
+    println!("  Spread:");
+    println!("    intercept:         {:.4}", results.optimal_weights.spread.intercept);
+    println!("    w_entropy:         {:.4}", results.optimal_weights.spread.w_entropy);
+    println!("    w_volatility:      {:.4}", results.optimal_weights.spread.w_volatility);
+    println!("    w_imbalance:       {:.4}", results.optimal_weights.spread.w_imbalance);
+    println!("    w_interaction:     {:.4}", results.optimal_weights.spread.w_interaction);
+    println!("  Skew:");
+    println!("    intercept:         {:.4}", results.optimal_weights.skew.intercept);
+    println!("    w_entropy:         {:.4}", results.optimal_weights.skew.w_entropy);
+    println!("    w_volatility:      {:.4}", results.optimal_weights.skew.w_volatility);
+    println!("    w_imbalance:       {:.4}", results.optimal_weights.skew.w_imbalance);
+    println!("    w_inventory:       {:.4}", results.optimal_weights.skew.w_inventory);
+    println!();
+    println!("PERFORMANCE:");
+    println!("  Train Sharpe:     {:+.4}", results.train_sharpe);
+    println!("  Test Sharpe:      {:+.4}", results.test_sharpe);
+    println!("  Generalization Gap: {:.2}%", results.generalization_gap * 100.0);
+    println!();
+    println!("  Train Trades:     {}", results.train_trades);
+    println!("  Test Trades:      {}", results.test_trades);
+    println!("  Configs Tested:   {}/{}", results.valid_configurations, results.total_configurations);
+    println!("═══════════════════════════════════════════════════════════════════════");
+
+    // Save results
+    if let Some(ref output_path) = output {
+        let json = serde_json::to_string_pretty(&results)?;
+        std::fs::write(output_path, &json)?;
+        println!();
+        println!("Results saved to: {:?}", output_path);
+
+        // Also save just the weights for easy loading
+        let weights_path = output_path.with_extension("weights.json");
+        let weights_json = serde_json::to_string_pretty(&results.optimal_weights)?;
+        std::fs::write(&weights_path, weights_json)?;
+        println!("Weights saved to: {:?}", weights_path);
+    }
+
+    Ok(())
+}
+
+fn run_compare(
+    cli: &Cli,
+    algorithm: &str,
+    weights_path: Option<std::path::PathBuf>,
+    output: Option<std::path::PathBuf>,
+) -> Result<()> {
+    use ingestor::backtest::replay::ParquetReplay;
+    use ingestor::backtest::harness::BacktestEngine;
+
+    // Parse algorithm type
+    let algo_type = AlgorithmType::from_str(algorithm)
+        .map_err(|e| anyhow::anyhow!("Invalid algorithm: {}", e))?;
+
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!("              ALGORITHM COMPARISON                                      ");
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!();
+    println!("Algorithm: {} ({})", algo_type.display_name(), algo_type.as_str());
+    println!("Data:      {:?}", cli.data);
+    println!();
+
+    // Load data
+    let replay_config = ReplayConfig {
+        data_dir: cli.data.clone(),
+        ..Default::default()
+    };
+
+    let mut replay = ParquetReplay::new(replay_config.clone());
+    let num_events = replay.load()?;
+    let events = replay.into_events();
+
+    println!("Loaded {} events", num_events);
+    println!();
+
+    // Create algorithm based on type
+    let algorithm: Box<dyn MarketMakingAlgorithm> = match algo_type {
+        AlgorithmType::AvellanedaStoikov => {
+            let config = ingestor::market_maker::AvellanedaStoikovConfig {
+                max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
+                quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
+                regime_params: RegimeParams::uniform(cli.spread, cli.skew),
+                ..Default::default()
+            };
+            Box::new(AvellanedaStoikovAlgorithm::new(config))
+        }
+        AlgorithmType::MLSpreadSkew => {
+            // Load weights if provided, otherwise use default
+            let weights = if let Some(ref path) = weights_path {
+                let json = std::fs::read_to_string(path)?;
+                serde_json::from_str::<MLModelWeights>(&json)?
+            } else {
+                println!("WARNING: No weights file specified, using default weights");
+                MLModelWeights::default()
+            };
+
+            println!("ML Weights:");
+            println!("  Spread: intercept={:.2}, w_entropy={:.2}, w_volatility={:.2}",
+                weights.spread.intercept, weights.spread.w_entropy, weights.spread.w_volatility);
+            println!("  Skew: intercept={:.2}, w_inventory={:.2}, w_imbalance={:.2}",
+                weights.skew.intercept, weights.skew.w_inventory, weights.skew.w_imbalance);
+            println!();
+
+            let config = MLSpreadSkewConfig {
+                max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
+                quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
+                ..Default::default()
+            };
+            Box::new(MLSpreadSkewAlgorithm::new(config, weights))
+        }
+    };
+
+    // Build backtest config
+    let backtest_config = BacktestConfig {
+        replay: replay_config,
+        mm: ingestor::market_maker::MMConfig::default(),
+        simulator: SimulatorConfig {
+            fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
+            ..Default::default()
+        },
+        fill_sim: ingestor::backtest::FillSimulatorConfig {
+            base_fill_probability: cli.fill_prob,
+            queue_position: cli.queue_pos,
+            fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
+            ..Default::default()
+        },
+        verbose: !cli.quiet,
+        use_realistic_fills: !cli.naive_fills,
+        ..Default::default()
+    };
+
+    let mut engine = BacktestEngine::from_events_with_algorithm(backtest_config, events, algorithm);
+    let results = engine.run()?;
+
+    // Print results
+    if cli.stats {
+        results.print_summary_with_stats(1);
+    } else {
+        results.print_summary();
+    }
+
+    // Save results
+    if let Some(ref output_path) = output {
+        results.save_json(output_path.to_str().unwrap())?;
         println!();
         println!("Results saved to: {:?}", output_path);
     }
