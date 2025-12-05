@@ -45,6 +45,7 @@ pub mod oos_validation;
 pub mod multi_objective;
 pub mod regime_optimizer;
 pub mod ml_trainer;
+pub mod walk_forward_ml;
 
 pub use replay::{ParquetReplay, ReplayEvent, ReplayConfig};
 pub use harness::{BacktestEngine, BacktestConfig, BacktestResults};
@@ -57,3 +58,4 @@ pub use oos_validation::{OOSValidator, OOSConfig, ValidationReport, OverfitVerdi
 pub use multi_objective::{MultiObjectiveOptimizer, MOConfig, MOResults, Objective};
 pub use regime_optimizer::{RegimeOptimizer, RegimeOptimizerConfig, RegimeOptimizationResults};
 pub use ml_trainer::{MLTrainer, MLTrainerConfig, MLTrainingResults};
+pub use walk_forward_ml::{WalkForwardMLTrainer, WalkForwardMLConfig, WalkForwardMLResults};

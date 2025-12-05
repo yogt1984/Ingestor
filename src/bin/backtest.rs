@@ -31,6 +31,7 @@ use anyhow::Result;
 use ingestor::backtest::{BacktestEngine, BacktestConfig};
 use ingestor::backtest::replay::ReplayConfig;
 use ingestor::backtest::ml_trainer::{MLTrainer, MLTrainerConfig};
+use ingestor::backtest::walk_forward_ml::{WalkForwardMLTrainer, WalkForwardMLConfig};
 use ingestor::market_maker::{MMConfig, RegimeParams, RegimeConfig};
 use ingestor::mm_simulator::SimulatorConfig;
 use ingestor::algorithms::{
@@ -410,6 +411,57 @@ enum Commands {
         #[arg(short, long)]
         output: Option<std::path::PathBuf>,
     },
+
+    /// Walk-forward ML training (robust cross-validated ML weight optimization)
+    WalkForwardMl {
+        /// Number of folds for walk-forward validation
+        #[arg(long, default_value = "5")]
+        folds: usize,
+
+        /// Minimum training period in hours
+        #[arg(long, default_value = "100")]
+        min_train_hours: f64,
+
+        /// Test period in hours per fold
+        #[arg(long, default_value = "24")]
+        test_hours: f64,
+
+        /// Use rolling (vs anchored/expanding) window
+        #[arg(long)]
+        rolling: bool,
+
+        /// Embargo between train and test (hours)
+        #[arg(long, default_value = "1.0")]
+        embargo_hours: f64,
+
+        /// Spread intercept values to test (comma-separated)
+        #[arg(long, default_value = "1.0,2.0,3.0")]
+        spread_intercepts: String,
+
+        /// Spread entropy weight values to test (comma-separated)
+        #[arg(long, default_value = "-2.0,-1.0,0.0")]
+        spread_entropy_weights: String,
+
+        /// Spread volatility weight values to test (comma-separated)
+        #[arg(long, default_value = "200.0,400.0")]
+        spread_vol_weights: String,
+
+        /// Skew intercept values to test (comma-separated)
+        #[arg(long, default_value = "0.3,0.5,0.7")]
+        skew_intercepts: String,
+
+        /// Skew inventory weight values to test (comma-separated)
+        #[arg(long, default_value = "-1.0,-0.6")]
+        skew_inv_weights: String,
+
+        /// Output file for results (JSON)
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+
+        /// Output file for consensus weights (JSON)
+        #[arg(long)]
+        weights_output: Option<std::path::PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -452,6 +504,9 @@ fn main() -> Result<()> {
         }
         Some(Commands::HeadToHead { weights, as_spread, as_skew, output }) => {
             run_head_to_head(&cli, weights.clone(), *as_spread, *as_skew, output.clone())?;
+        }
+        Some(Commands::WalkForwardMl { folds, min_train_hours, test_hours, rolling, embargo_hours, spread_intercepts, spread_entropy_weights, spread_vol_weights, skew_intercepts, skew_inv_weights, output, weights_output }) => {
+            run_walk_forward_ml(&cli, *folds, *min_train_hours, *test_hours, *rolling, *embargo_hours, spread_intercepts, spread_entropy_weights, spread_vol_weights, skew_intercepts, skew_inv_weights, output.clone(), weights_output.clone())?;
         }
         Some(Commands::Single) | None => {
             run_single(&cli)?;
@@ -2191,6 +2246,104 @@ fn run_head_to_head(
         std::fs::write(output_path, json)?;
         println!();
         println!("Results saved to: {:?}", output_path);
+    }
+
+    Ok(())
+}
+
+fn run_walk_forward_ml(
+    cli: &Cli,
+    folds: usize,
+    min_train_hours: f64,
+    test_hours: f64,
+    rolling: bool,
+    embargo_hours: f64,
+    spread_intercepts: &str,
+    spread_entropy_weights: &str,
+    spread_vol_weights: &str,
+    skew_intercepts: &str,
+    skew_inv_weights: &str,
+    output: Option<PathBuf>,
+    weights_output: Option<PathBuf>,
+) -> Result<()> {
+    // Parse grid search parameters
+    let spread_ints: Vec<f64> = spread_intercepts
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    let spread_ents: Vec<f64> = spread_entropy_weights
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    let spread_vols: Vec<f64> = spread_vol_weights
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    let skew_ints: Vec<f64> = skew_intercepts
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    let skew_invs: Vec<f64> = skew_inv_weights
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+
+    let config = WalkForwardMLConfig {
+        data_dir: cli.data.clone(),
+        n_folds: folds,
+        min_train_hours,
+        test_hours,
+        anchored: !rolling,
+        embargo_hours,
+        spread_intercepts: spread_ints,
+        spread_entropy_weights: spread_ents,
+        spread_volatility_weights: spread_vols,
+        skew_intercepts: skew_ints,
+        skew_inventory_weights: skew_invs,
+        fill_probability: cli.fill_prob,
+        max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
+        quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
+        min_trades: 10,
+        verbose: !cli.quiet,
+    };
+
+    let total_configs = config.spread_intercepts.len()
+        * config.spread_entropy_weights.len()
+        * config.spread_volatility_weights.len()
+        * config.skew_intercepts.len()
+        * config.skew_inventory_weights.len();
+
+    if !cli.quiet {
+        println!("═══════════════════════════════════════════════════════");
+        println!("       WALK-FORWARD ML TRAINING                        ");
+        println!("═══════════════════════════════════════════════════════");
+        println!();
+        println!("Configuration:");
+        println!("  Data:              {:?}", cli.data);
+        println!("  Folds:             {}", folds);
+        println!("  Min Train Hours:   {}", min_train_hours);
+        println!("  Test Hours:        {}", test_hours);
+        println!("  Mode:              {}", if rolling { "Rolling" } else { "Anchored" });
+        println!("  Embargo Hours:     {}", embargo_hours);
+        println!("  Fill Probability:  {:.0}%", cli.fill_prob * 100.0);
+        println!("  Weight Combos:     {} per fold", total_configs);
+        println!();
+    }
+
+    let mut trainer = WalkForwardMLTrainer::new(config)?;
+    let results = trainer.run()?;
+
+    // Save results
+    if let Some(ref output_path) = output {
+        results.save_json(output_path.to_str().unwrap())?;
+        println!();
+        println!("Full results saved to: {:?}", output_path);
+    }
+
+    // Save consensus weights
+    if let Some(ref weights_path) = weights_output {
+        results.save_weights(weights_path.to_str().unwrap())?;
+        println!("Consensus weights saved to: {:?}", weights_path);
     }
 
     Ok(())
