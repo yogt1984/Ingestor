@@ -21,6 +21,8 @@ use crate::market_maker::{Fill, MMQuotes, MMState, PnLTracker};
 pub enum AlgorithmType {
     /// Avellaneda-Stoikov (2008) - Classic inventory-based market making
     AvellanedaStoikov,
+    /// ML-based spread and skew prediction using learned weights
+    MLSpreadSkew,
 }
 
 impl AlgorithmType {
@@ -34,6 +36,7 @@ impl AlgorithmType {
     pub fn as_str(&self) -> &'static str {
         match self {
             AlgorithmType::AvellanedaStoikov => "avellaneda_stoikov",
+            AlgorithmType::MLSpreadSkew => "ml_spread_skew",
         }
     }
 
@@ -43,19 +46,23 @@ impl AlgorithmType {
             "avellaneda_stoikov" | "avellaneda-stoikov" | "as" | "a-s" => {
                 Ok(AlgorithmType::AvellanedaStoikov)
             }
+            "ml_spread_skew" | "ml-spread-skew" | "ml" | "mlss" => {
+                Ok(AlgorithmType::MLSpreadSkew)
+            }
             _ => Err(AlgorithmError::UnknownAlgorithm(s.to_string())),
         }
     }
 
     /// Returns all available algorithm types.
     pub fn all() -> &'static [AlgorithmType] {
-        &[AlgorithmType::AvellanedaStoikov]
+        &[AlgorithmType::AvellanedaStoikov, AlgorithmType::MLSpreadSkew]
     }
 
     /// Returns a human-readable name for this algorithm.
     pub fn display_name(&self) -> &'static str {
         match self {
             AlgorithmType::AvellanedaStoikov => "Avellaneda-Stoikov",
+            AlgorithmType::MLSpreadSkew => "ML Spread-Skew",
         }
     }
 
@@ -64,6 +71,9 @@ impl AlgorithmType {
         match self {
             AlgorithmType::AvellanedaStoikov => {
                 "Inventory-based market making with optimal spread and skew (2008)"
+            }
+            AlgorithmType::MLSpreadSkew => {
+                "ML-based spread/skew prediction using learned linear weights"
             }
         }
     }
@@ -278,6 +288,7 @@ mod tests {
     #[test]
     fn test_algorithm_type_as_str() {
         assert_eq!(AlgorithmType::AvellanedaStoikov.as_str(), "avellaneda_stoikov");
+        assert_eq!(AlgorithmType::MLSpreadSkew.as_str(), "ml_spread_skew");
     }
 
     #[test]
@@ -302,6 +313,23 @@ mod tests {
             AlgorithmType::from_str("AVELLANEDA_STOIKOV").unwrap(),
             AlgorithmType::AvellanedaStoikov
         );
+        // ML Spread Skew variants
+        assert_eq!(
+            AlgorithmType::from_str("ml_spread_skew").unwrap(),
+            AlgorithmType::MLSpreadSkew
+        );
+        assert_eq!(
+            AlgorithmType::from_str("ml-spread-skew").unwrap(),
+            AlgorithmType::MLSpreadSkew
+        );
+        assert_eq!(
+            AlgorithmType::from_str("ml").unwrap(),
+            AlgorithmType::MLSpreadSkew
+        );
+        assert_eq!(
+            AlgorithmType::from_str("mlss").unwrap(),
+            AlgorithmType::MLSpreadSkew
+        );
     }
 
     #[test]
@@ -320,8 +348,9 @@ mod tests {
     #[test]
     fn test_algorithm_type_all() {
         let all = AlgorithmType::all();
-        assert_eq!(all.len(), 1);
+        assert_eq!(all.len(), 2);
         assert!(all.contains(&AlgorithmType::AvellanedaStoikov));
+        assert!(all.contains(&AlgorithmType::MLSpreadSkew));
     }
 
     #[test]
