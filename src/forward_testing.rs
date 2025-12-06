@@ -78,7 +78,9 @@ use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
 
+use crate::algorithms::AlgorithmType;
 use crate::market_maker::{Fill, QuoteSide, MMState};
+use crate::presets::ParameterPreset;
 
 /// Configuration for forward testing session
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +95,12 @@ pub struct ForwardTestConfig {
     pub sharpe_window: usize,
     /// Session name/identifier
     pub session_name: Option<String>,
+    /// Preset name being used (for comparison reports)
+    #[serde(default)]
+    pub preset_name: Option<String>,
+    /// Algorithm type being used
+    #[serde(default)]
+    pub algorithm_type: AlgorithmType,
 }
 
 impl Default for ForwardTestConfig {
@@ -103,6 +111,23 @@ impl Default for ForwardTestConfig {
             log_quotes: false, // Can be very large
             sharpe_window: 100,
             session_name: None,
+            preset_name: None,
+            algorithm_type: AlgorithmType::AvellanedaStoikov,
+        }
+    }
+}
+
+impl ForwardTestConfig {
+    /// Create config for a specific preset
+    pub fn for_preset(preset: &ParameterPreset) -> Self {
+        Self {
+            log_dir: PathBuf::from("./data/sessions"),
+            log_trades: true,
+            log_quotes: false,
+            sharpe_window: 100,
+            session_name: Some(preset.name.clone()),
+            preset_name: Some(preset.name.clone()),
+            algorithm_type: preset.algorithm_type.clone(),
         }
     }
 }
@@ -816,9 +841,382 @@ impl BacktestComparison {
     }
 }
 
+/// Comparison between preset expectations and live session results
+///
+/// This is simpler than BacktestComparison and uses the preset's stored
+/// expected values rather than running a full backtest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PresetComparison {
+    /// Preset name
+    pub preset_name: String,
+    /// Algorithm type
+    pub algorithm_type: AlgorithmType,
+    /// Expected metrics from preset (from backtest optimization)
+    pub expected: PresetExpectations,
+    /// Actual metrics from live session
+    pub actual: SessionMetrics,
+    /// Normalized metrics for comparison (same scale)
+    pub normalized: NormalizedComparison,
+    /// Assessment verdict
+    pub assessment: ComparisonVerdict,
+}
+
+/// Expected metrics stored in preset
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PresetExpectations {
+    /// Expected return (as decimal, e.g., 0.05 = 5%)
+    pub expected_return: f64,
+    /// Expected Sharpe ratio
+    pub expected_sharpe: f64,
+    /// Expected win rate (as decimal)
+    pub expected_win_rate: f64,
+    /// Expected number of trades (total in backtest period)
+    pub expected_trades: usize,
+    /// Backtest duration in hours (for normalization)
+    pub backtest_duration_hours: f64,
+    /// Fill probability assumption used
+    pub fill_prob_assumption: f64,
+}
+
+/// Normalized comparison (per-hour metrics for fair comparison)
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NormalizedComparison {
+    /// Expected trades per hour
+    pub expected_trades_per_hour: f64,
+    /// Actual trades per hour
+    pub actual_trades_per_hour: f64,
+    /// Trade rate ratio (actual / expected)
+    pub trade_rate_ratio: f64,
+    /// Win rate difference (actual - expected)
+    pub win_rate_diff: f64,
+    /// Sharpe difference (actual - expected)
+    pub sharpe_diff: f64,
+    /// Fill rate vs assumption
+    pub fill_rate_vs_assumption: f64,
+}
+
+/// Assessment verdict for the comparison
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComparisonVerdict {
+    /// Overall status
+    pub status: VerdictStatus,
+    /// Summary message
+    pub summary: String,
+    /// Detailed issues (if any)
+    pub issues: Vec<String>,
+    /// Recommendations
+    pub recommendations: Vec<String>,
+}
+
+/// Verdict status levels
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum VerdictStatus {
+    /// Results match or exceed expectations
+    Good,
+    /// Minor discrepancies
+    Warning,
+    /// Significant underperformance
+    Poor,
+    /// Insufficient data for comparison
+    InsufficientData,
+}
+
+impl PresetComparison {
+    /// Create a comparison from preset and session metrics
+    pub fn new(preset: &ParameterPreset, session_metrics: &SessionMetrics) -> Self {
+        // Estimate backtest duration from number of events
+        // Assuming ~1500 events per hour on average
+        let estimated_backtest_hours = preset.num_events as f64 / 1500.0;
+
+        let expected = PresetExpectations {
+            expected_return: preset.expected_return,
+            expected_sharpe: preset.expected_sharpe,
+            expected_win_rate: preset.expected_win_rate,
+            expected_trades: preset.expected_trades,
+            backtest_duration_hours: estimated_backtest_hours.max(1.0),
+            fill_prob_assumption: preset.fill_prob_assumption,
+        };
+
+        let session_hours = session_metrics.duration_secs / 3600.0;
+
+        let normalized = Self::calculate_normalized(&expected, session_metrics, session_hours);
+        let assessment = Self::generate_verdict(&expected, session_metrics, &normalized, session_hours);
+
+        Self {
+            preset_name: preset.name.clone(),
+            algorithm_type: preset.algorithm_type.clone(),
+            expected,
+            actual: session_metrics.clone(),
+            normalized,
+            assessment,
+        }
+    }
+
+    fn calculate_normalized(
+        expected: &PresetExpectations,
+        actual: &SessionMetrics,
+        session_hours: f64,
+    ) -> NormalizedComparison {
+        let expected_trades_per_hour = if expected.backtest_duration_hours > 0.0 {
+            expected.expected_trades as f64 / expected.backtest_duration_hours
+        } else {
+            0.0
+        };
+
+        let actual_trades_per_hour = if session_hours > 0.0 {
+            actual.total_trades as f64 / session_hours
+        } else {
+            0.0
+        };
+
+        let trade_rate_ratio = if expected_trades_per_hour > 0.0 {
+            actual_trades_per_hour / expected_trades_per_hour
+        } else {
+            0.0
+        };
+
+        // Calculate actual fill rate from session
+        let actual_fill_rate = if actual.quotes_generated > 0 {
+            actual.total_trades as f64 / actual.quotes_generated as f64
+        } else {
+            0.0
+        };
+
+        NormalizedComparison {
+            expected_trades_per_hour,
+            actual_trades_per_hour,
+            trade_rate_ratio,
+            win_rate_diff: actual.win_rate - expected.expected_win_rate,
+            sharpe_diff: actual.sharpe_ratio - expected.expected_sharpe,
+            fill_rate_vs_assumption: actual_fill_rate - expected.fill_prob_assumption,
+        }
+    }
+
+    fn generate_verdict(
+        expected: &PresetExpectations,
+        actual: &SessionMetrics,
+        normalized: &NormalizedComparison,
+        session_hours: f64,
+    ) -> ComparisonVerdict {
+        let mut issues = Vec::new();
+        let mut recommendations = Vec::new();
+
+        // Check if we have enough data
+        if session_hours < 0.5 || actual.total_trades < 5 {
+            return ComparisonVerdict {
+                status: VerdictStatus::InsufficientData,
+                summary: "Insufficient data for meaningful comparison".to_string(),
+                issues: vec![format!(
+                    "Session duration: {:.1} hours, trades: {}. Need at least 0.5 hours and 5 trades.",
+                    session_hours, actual.total_trades
+                )],
+                recommendations: vec!["Continue running the session to collect more data.".to_string()],
+            };
+        }
+
+        // Check trade rate
+        if normalized.trade_rate_ratio < 0.5 {
+            issues.push(format!(
+                "Trade rate {:.1}x lower than expected ({:.1}/hr vs {:.1}/hr expected)",
+                1.0 / normalized.trade_rate_ratio.max(0.01),
+                normalized.actual_trades_per_hour,
+                normalized.expected_trades_per_hour
+            ));
+            recommendations.push("Fill rate may be lower than assumed in backtest.".to_string());
+        } else if normalized.trade_rate_ratio > 2.0 {
+            issues.push(format!(
+                "Trade rate {:.1}x higher than expected - verify fill simulation",
+                normalized.trade_rate_ratio
+            ));
+        }
+
+        // Check win rate
+        if normalized.win_rate_diff < -0.1 {
+            issues.push(format!(
+                "Win rate {:.1}% vs {:.1}% expected ({:+.1}% diff)",
+                actual.win_rate * 100.0,
+                expected.expected_win_rate * 100.0,
+                normalized.win_rate_diff * 100.0
+            ));
+            recommendations.push("Market conditions may differ from backtest period.".to_string());
+        }
+
+        // Check Sharpe (only if we have meaningful data)
+        if actual.total_trades >= 20 && normalized.sharpe_diff < -1.0 {
+            issues.push(format!(
+                "Sharpe {:.2} vs {:.2} expected ({:+.2} diff)",
+                actual.sharpe_ratio,
+                expected.expected_sharpe,
+                normalized.sharpe_diff
+            ));
+            recommendations.push("Consider reviewing market regime detection.".to_string());
+        }
+
+        // Check fill rate vs assumption
+        if normalized.fill_rate_vs_assumption < -0.05 {
+            issues.push(format!(
+                "Fill rate {:.1}% below assumption ({:.1}%)",
+                -normalized.fill_rate_vs_assumption * 100.0,
+                expected.fill_prob_assumption * 100.0
+            ));
+            recommendations.push("Backtest may be too optimistic about fills.".to_string());
+        }
+
+        // Determine overall status
+        let status = if issues.is_empty() {
+            VerdictStatus::Good
+        } else if issues.len() <= 2 && !issues.iter().any(|i| i.contains("lower than expected")) {
+            VerdictStatus::Warning
+        } else {
+            VerdictStatus::Poor
+        };
+
+        let summary = match status {
+            VerdictStatus::Good => "Live results align with backtest expectations.".to_string(),
+            VerdictStatus::Warning => format!("Minor discrepancies detected: {} issue(s).", issues.len()),
+            VerdictStatus::Poor => format!("Significant underperformance: {} issue(s).", issues.len()),
+            VerdictStatus::InsufficientData => "Need more data.".to_string(),
+        };
+
+        if recommendations.is_empty() && status == VerdictStatus::Good {
+            recommendations.push("Continue monitoring. Consider extending session duration.".to_string());
+        }
+
+        ComparisonVerdict {
+            status,
+            summary,
+            issues,
+            recommendations,
+        }
+    }
+
+    /// Print a formatted comparison report
+    pub fn print_report(&self) {
+        let algo_label = match self.algorithm_type {
+            AlgorithmType::AvellanedaStoikov => "A-S",
+            AlgorithmType::MLSpreadSkew => "ML",
+        };
+
+        println!();
+        println!("════════════════════════════════════════════════════════════════");
+        println!("       PRESET vs LIVE SESSION COMPARISON");
+        println!("════════════════════════════════════════════════════════════════");
+        println!();
+        println!("Preset: {} [{}]", self.preset_name, algo_label);
+        println!("Session Duration: {:.1} hours", self.actual.duration_secs / 3600.0);
+        println!();
+
+        println!("{:<25} {:>15} {:>15}", "Metric", "Expected", "Actual");
+        println!("{}", "-".repeat(57));
+
+        println!("{:<25} {:>14.2}% {:>14.2}%",
+            "Return",
+            self.expected.expected_return * 100.0,
+            self.actual.net_pnl.to_f64().unwrap_or(0.0) * 100.0);
+
+        println!("{:<25} {:>15.2} {:>15.2}",
+            "Sharpe Ratio",
+            self.expected.expected_sharpe,
+            self.actual.sharpe_ratio);
+
+        println!("{:<25} {:>14.1}% {:>14.1}%",
+            "Win Rate",
+            self.expected.expected_win_rate * 100.0,
+            self.actual.win_rate * 100.0);
+
+        println!("{:<25} {:>15.1} {:>15.1}",
+            "Trades/Hour",
+            self.normalized.expected_trades_per_hour,
+            self.normalized.actual_trades_per_hour);
+
+        println!("{:<25} {:>14.1}% {:>14.1}%",
+            "Fill Rate (assumption)",
+            self.expected.fill_prob_assumption * 100.0,
+            if self.actual.quotes_generated > 0 {
+                self.actual.total_trades as f64 / self.actual.quotes_generated as f64 * 100.0
+            } else {
+                0.0
+            });
+
+        println!();
+
+        // Status with color indication
+        let status_str = match self.assessment.status {
+            VerdictStatus::Good => "GOOD",
+            VerdictStatus::Warning => "WARNING",
+            VerdictStatus::Poor => "POOR",
+            VerdictStatus::InsufficientData => "INSUFFICIENT DATA",
+        };
+
+        println!("STATUS: {} - {}", status_str, self.assessment.summary);
+
+        if !self.assessment.issues.is_empty() {
+            println!();
+            println!("Issues:");
+            for issue in &self.assessment.issues {
+                println!("  - {}", issue);
+            }
+        }
+
+        if !self.assessment.recommendations.is_empty() {
+            println!();
+            println!("Recommendations:");
+            for rec in &self.assessment.recommendations {
+                println!("  - {}", rec);
+            }
+        }
+
+        println!("════════════════════════════════════════════════════════════════");
+    }
+
+    /// Save comparison to JSON file
+    pub fn save(&self, path: &std::path::Path) -> Result<()> {
+        let json = serde_json::to_string_pretty(self)?;
+        std::fs::write(path, json)?;
+        Ok(())
+    }
+}
+
+/// Load a session summary from file
+pub fn load_session_summary(path: &std::path::Path) -> Result<SessionSummary> {
+    let content = std::fs::read_to_string(path)?;
+    let summary: SessionSummary = serde_json::from_str(&content)?;
+    Ok(summary)
+}
+
+/// List all session summaries in a directory
+pub fn list_sessions(dir: &std::path::Path) -> Result<Vec<SessionSummary>> {
+    let mut sessions = Vec::new();
+
+    if !dir.exists() {
+        return Ok(sessions);
+    }
+
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_file() {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with("summary_") && name.ends_with(".json") {
+                    if let Ok(summary) = load_session_summary(&path) {
+                        sessions.push(summary);
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort by session ID (which is timestamp-based)
+    sessions.sort_by(|a, b| b.session_id.cmp(&a.session_id));
+
+    Ok(sessions)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::algorithms::AlgorithmType;
 
     #[test]
     fn test_session_creation() {
@@ -877,5 +1275,195 @@ mod tests {
 
         let assessment = BacktestComparison::generate_assessment(&diff);
         assert!(assessment.contains("ISSUES"));
+    }
+
+    #[test]
+    fn test_config_for_preset() {
+        let mut preset = ParameterPreset::new("TestPreset", "manual", 2.0, 0.5, 0.7, 0.10);
+        preset.algorithm_type = AlgorithmType::MLSpreadSkew;
+
+        let config = ForwardTestConfig::for_preset(&preset);
+
+        assert_eq!(config.preset_name, Some("TestPreset".to_string()));
+        assert_eq!(config.algorithm_type, AlgorithmType::MLSpreadSkew);
+        assert_eq!(config.session_name, Some("TestPreset".to_string()));
+    }
+
+    #[test]
+    fn test_preset_comparison_insufficient_data() {
+        let preset = ParameterPreset::new("Test", "manual", 2.0, 0.5, 0.7, 0.10);
+
+        // Session with very little data
+        let metrics = SessionMetrics {
+            duration_secs: 60.0, // 1 minute
+            total_trades: 2,
+            ..Default::default()
+        };
+
+        let comparison = PresetComparison::new(&preset, &metrics);
+
+        assert_eq!(comparison.assessment.status, VerdictStatus::InsufficientData);
+        assert!(comparison.assessment.summary.contains("Insufficient"));
+    }
+
+    #[test]
+    fn test_preset_comparison_good_performance() {
+        let mut preset = ParameterPreset::new("Test", "manual", 2.0, 0.5, 0.7, 0.10);
+        preset.expected_return = 0.05;
+        preset.expected_sharpe = -1.0;
+        preset.expected_win_rate = 0.55;
+        preset.expected_trades = 100;
+        preset.num_events = 75000; // ~50 hours of data
+
+        // Session with good performance matching expectations
+        // Trade rate: 100 trades / 50 hours = 2 trades/hour expected
+        // We need ~4 trades in 2 hours to match expectations
+        let metrics = SessionMetrics {
+            duration_secs: 3600.0 * 2.0, // 2 hours
+            total_trades: 6,             // ~3 trades/hour, within 2x of expected
+            winning_trades: 4,
+            losing_trades: 2,
+            win_rate: 0.60,
+            sharpe_ratio: -0.8,
+            quotes_generated: 60,        // 10% fill rate matches assumption
+            ..Default::default()
+        };
+
+        let comparison = PresetComparison::new(&preset, &metrics);
+
+        // Should be Good or Warning (not Poor or InsufficientData)
+        assert!(comparison.assessment.status == VerdictStatus::Good
+            || comparison.assessment.status == VerdictStatus::Warning);
+    }
+
+    #[test]
+    fn test_preset_comparison_poor_performance() {
+        let mut preset = ParameterPreset::new("Test", "manual", 2.0, 0.5, 0.7, 0.10);
+        preset.expected_return = 0.05;
+        preset.expected_sharpe = 1.5;
+        preset.expected_win_rate = 0.65;
+        preset.expected_trades = 200;
+        preset.num_events = 75000;
+
+        // Session with much worse performance
+        let metrics = SessionMetrics {
+            duration_secs: 3600.0 * 2.0,
+            total_trades: 20,
+            winning_trades: 8,
+            losing_trades: 12,
+            win_rate: 0.40, // Much worse than expected 0.65
+            sharpe_ratio: -2.0,
+            quotes_generated: 500,
+            ..Default::default()
+        };
+
+        let comparison = PresetComparison::new(&preset, &metrics);
+
+        // Should detect issues
+        assert!(!comparison.assessment.issues.is_empty());
+        assert!(comparison.assessment.status == VerdictStatus::Warning
+            || comparison.assessment.status == VerdictStatus::Poor);
+    }
+
+    #[test]
+    fn test_normalized_comparison_trade_rate() {
+        let expected = PresetExpectations {
+            expected_trades: 100,
+            backtest_duration_hours: 50.0, // 2 trades/hour expected
+            ..Default::default()
+        };
+
+        let actual = SessionMetrics {
+            total_trades: 20,
+            duration_secs: 3600.0 * 5.0, // 5 hours -> 4 trades/hour
+            ..Default::default()
+        };
+
+        let normalized = PresetComparison::calculate_normalized(&expected, &actual, 5.0);
+
+        assert!((normalized.expected_trades_per_hour - 2.0).abs() < 0.01);
+        assert!((normalized.actual_trades_per_hour - 4.0).abs() < 0.01);
+        assert!((normalized.trade_rate_ratio - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_verdict_status_serialization() {
+        let status = VerdictStatus::Good;
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("Good"));
+
+        let deserialized: VerdictStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, VerdictStatus::Good);
+    }
+
+    #[test]
+    fn test_quote_logging() {
+        let mut config = ForwardTestConfig::default();
+        config.log_quotes = true;
+
+        let mut session = ForwardTestSession::new(config);
+        session.start();
+
+        session.log_quote(
+            1000,
+            Some(dec!(50000)),
+            Some(dec!(0.1)),
+            Some(dec!(50010)),
+            Some(dec!(0.1)),
+            dec!(50005),
+            dec!(0.05),
+            "HighEntropy",
+        );
+
+        assert_eq!(session.metrics().quotes_generated, 1);
+        assert_eq!(session.quotes.len(), 1);
+        assert_eq!(session.quotes[0].regime, "HighEntropy");
+    }
+
+    #[test]
+    fn test_touch_recording() {
+        let config = ForwardTestConfig::default();
+        let mut session = ForwardTestSession::new(config);
+        session.start();
+
+        // Simulate some touches
+        session.record_touch(true); // bid touch
+        session.record_touch(true); // bid touch
+        session.record_touch(false); // ask touch
+
+        assert_eq!(session.metrics().bid_touches, 2);
+        assert_eq!(session.metrics().ask_touches, 1);
+    }
+
+    #[test]
+    fn test_session_id_format() {
+        let config = ForwardTestConfig::default();
+        let session = ForwardTestSession::new(config);
+
+        // Session ID should be in YYYYMMDD_HHMMSS format
+        let id = session.session_id();
+        assert_eq!(id.len(), 15); // YYYYMMDD_HHMMSS
+        assert!(id.contains('_'));
+    }
+
+    #[test]
+    fn test_preset_expectations_default() {
+        let expectations = PresetExpectations::default();
+        assert_eq!(expectations.expected_return, 0.0);
+        assert_eq!(expectations.expected_trades, 0);
+    }
+
+    #[test]
+    fn test_comparison_verdict_creation() {
+        let verdict = ComparisonVerdict {
+            status: VerdictStatus::Warning,
+            summary: "Test warning".to_string(),
+            issues: vec!["Issue 1".to_string()],
+            recommendations: vec!["Fix it".to_string()],
+        };
+
+        assert_eq!(verdict.status, VerdictStatus::Warning);
+        assert_eq!(verdict.issues.len(), 1);
+        assert_eq!(verdict.recommendations.len(), 1);
     }
 }
