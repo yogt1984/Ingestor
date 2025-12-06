@@ -252,7 +252,6 @@ pub struct TestedParams {
     pub skew_factor: f64,
     pub fill_probability: f64,
     pub high_entropy_threshold: f64,
-    pub entropy_gate: bool,
 }
 
 /// Recommendation based on validation results
@@ -327,7 +326,6 @@ impl ValidationReport {
         println!("  Skew:            {:.2}", self.params_tested.skew_factor);
         println!("  Fill Prob:       {:.0}%", self.params_tested.fill_probability * 100.0);
         println!("  High Entropy:    {:.2}", self.params_tested.high_entropy_threshold);
-        println!("  Entropy Gate:    {}", if self.params_tested.entropy_gate { "ON" } else { "OFF" });
         println!();
 
         // Split information
@@ -606,7 +604,6 @@ impl OOSValidator {
             skew_factor: mm_config.regime_params.high_entropy.skew_factor,
             fill_probability: fill_prob,
             high_entropy_threshold: mm_config.regime_thresholds.high_entropy_threshold,
-            entropy_gate: !mm_config.regime_params.low_entropy.should_quote,
         };
 
         let report = ValidationReport {
@@ -1073,10 +1070,9 @@ mod tests {
             skew_factor: 0.3,
             fill_probability: 0.10,
             high_entropy_threshold: 0.7,
-            entropy_gate: false,
         };
 
         assert_eq!(params.spread_bps, 1.0);
-        assert!(!params.entropy_gate);
+        assert_eq!(params.high_entropy_threshold, 0.7);
     }
 }

@@ -17,7 +17,6 @@ fn test_preset_creation() {
 fn test_preset_defaults() {
     let preset = ParameterPreset::new("Default", "grid-search", 1.0, 0.3, 0.7, 0.10);
     assert_eq!(preset.low_entropy_threshold, 0.4);
-    assert!(!preset.entropy_gate);
     assert!(preset.data_range.is_empty());
     assert_eq!(preset.num_events, 0);
     assert_eq!(preset.expected_return, 0.0);
@@ -33,18 +32,8 @@ fn test_preset_to_mm_config() {
     assert_eq!(config.regime_params.high_entropy.skew_factor, 0.4);
     assert_eq!(config.regime_thresholds.high_entropy_threshold, 0.8);
     assert_eq!(config.regime_thresholds.low_entropy_threshold, 0.4);
-    // Without entropy gate, should_quote is true in low entropy
+    // should_quote is true in all regimes (no entropy gating)
     assert!(config.regime_params.low_entropy.should_quote);
-}
-
-#[test]
-fn test_preset_with_entropy_gate() {
-    let mut preset = ParameterPreset::new("Gated", "grid-search", 1.0, 0.3, 0.7, 0.10);
-    preset.entropy_gate = true;
-
-    let config = preset.to_mm_config();
-    // With entropy gate, should_quote is false in low entropy
-    assert!(!config.regime_params.low_entropy.should_quote);
 }
 
 #[test]
