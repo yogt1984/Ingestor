@@ -23,7 +23,8 @@ use ratatui::{
 
 use crate::feature_fusion::FeaturesSnapshot;
 use crate::market_maker::{MarketMakerEngine, MMConfig, MarketRegime};
-use crate::mm_simulator::{PaperTradingEngine, PaperTradingState, GenericPaperTradingEngine, SimulatorConfig};
+use crate::mm_simulator::{PaperTradingEngine, PaperTradingState, GenericPaperTradingEngine, RiskManagedPaperTradingEngine, RiskManagedState, SimulatorConfig};
+use crate::risk_manager::{RiskAction, RiskConfig};
 use ingestor::forward_testing::{ForwardTestSession, ForwardTestConfig};
 use crate::presets::{PresetStore, ParameterPreset};
 use crate::algorithms::AlgorithmType;
@@ -405,6 +406,26 @@ fn dec_to_f64(d: Option<Decimal>) -> f64 {
     d.and_then(|d| d.to_f64()).unwrap_or(0.0)
 }
 
+/// Format risk action for display
+fn format_risk_action(action: &RiskAction) -> &'static str {
+    match action {
+        RiskAction::Allow => "OK",
+        RiskAction::ReduceOnly => "REDUCE",
+        RiskAction::Halt { .. } => "HALT",
+        RiskAction::Emergency { .. } => "EMERG",
+    }
+}
+
+/// Get color for risk action
+fn risk_action_color(action: &RiskAction) -> Color {
+    match action {
+        RiskAction::Allow => Color::Green,
+        RiskAction::ReduceOnly => Color::Yellow,
+        RiskAction::Halt { .. } => Color::Red,
+        RiskAction::Emergency { .. } => Color::Magenta,
+    }
+}
+
 /// Academic feature descriptions
 fn get_feature_descriptions() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
@@ -529,8 +550,8 @@ fn main_loop(
         sim_config,
     );
 
-    // Generic paper trading engine for preset mode (supports multiple algorithms)
-    let mut generic_paper_trading: Option<GenericPaperTradingEngine> = None;
+    // Risk-managed paper trading engine for preset mode (supports multiple algorithms with risk controls)
+    let mut risk_managed_paper_trading: Option<RiskManagedPaperTradingEngine> = None;
 
     // Forward testing session for trade logging
     let mut forward_session = ForwardTestSession::new(ForwardTestConfig::default());
@@ -621,7 +642,7 @@ fn main_loop(
                             }
                         }
                         KeyCode::Enter => {
-                            // Select preset and start paper trading
+                            // Select preset and start paper trading with risk management
                             if let Some(preset) = preset_store.get(selected_preset_idx) {
                                 // Use queue position model for more realistic fills
                                 let sim_config = SimulatorConfig {
@@ -632,7 +653,9 @@ fn main_loop(
 
                                 // Create algorithm from preset (supports A-S and ML)
                                 let algorithm = preset.create_algorithm();
-                                generic_paper_trading = Some(GenericPaperTradingEngine::new(
+
+                                // Create risk-managed engine with default risk config
+                                risk_managed_paper_trading = Some(RiskManagedPaperTradingEngine::with_default_risk(
                                     algorithm,
                                     sim_config,
                                 ));
@@ -655,16 +678,31 @@ fn main_loop(
                                 }
                             }
                             active_preset = None;
-                            generic_paper_trading = None;
+                            risk_managed_paper_trading = None;
                             mode = AppMode::Menu;
                         }
                         KeyCode::Char('r') => {
-                            // Reset but keep preset
-                            if let Some(ref mut engine) = generic_paper_trading {
+                            // Reset but keep preset (including risk manager)
+                            if let Some(ref mut engine) = risk_managed_paper_trading {
                                 engine.reset();
                             }
                             forward_session = ForwardTestSession::new(ForwardTestConfig::default());
                             forward_session.start();
+                        }
+                        KeyCode::Char('h') => {
+                            // Manual halt toggle - useful for emergency situations
+                            if let Some(ref mut engine) = risk_managed_paper_trading {
+                                let current_time = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_millis() as u64;
+                                let state = engine.state();
+                                if matches!(state.risk_action, RiskAction::Halt { .. } | RiskAction::Emergency { .. }) {
+                                    engine.manual_reset(current_time);
+                                } else {
+                                    engine.manual_halt(current_time);
+                                }
+                            }
                         }
                         _ => {}
                     },
@@ -779,7 +817,7 @@ fn main_loop(
                             }
                         }
                         AppMode::PaperTradePreset => {
-                            if let Some(ref mut engine) = generic_paper_trading {
+                            if let Some(ref mut engine) = risk_managed_paper_trading {
                                 let quotes = engine.on_features(
                                     microprice,
                                     mid_price,
@@ -799,8 +837,8 @@ fn main_loop(
                                         quotes.ask.as_ref().map(|q| q.price),
                                         quotes.ask.as_ref().map(|q| q.size),
                                         mid_price,
-                                        state.mm_state.inventory,
-                                        &format!("{:?}", quotes.regime),
+                                        state.trading_state.mm_state.inventory,
+                                        &format!("{:?} [{}]", quotes.regime, format_risk_action(&state.risk_action)),
                                     );
                                 }
                             }
@@ -846,10 +884,10 @@ fn main_loop(
                 terminal.draw(|f| {
                     if !has_data {
                         draw_waiting(f);
-                    } else if let Some(ref engine) = generic_paper_trading {
+                    } else if let Some(ref engine) = risk_managed_paper_trading {
                         let state = engine.state();
-                        let max_inv = engine.algorithm.max_inventory();
-                        draw_live_mm(f, &symbol, &current_features, &state, max_inv, &forward_session, active_preset.as_ref());
+                        let max_inv = engine.max_inventory();
+                        draw_live_mm_with_risk(f, &symbol, &current_features, &state, max_inv, &forward_session, active_preset.as_ref());
                     } else {
                         // Fallback if no engine (shouldn't happen in this mode)
                         draw_waiting(f);
@@ -1560,6 +1598,315 @@ fn draw_live_mm(
             .border_style(Style::default().fg(Color::DarkGray)),
     );
     f.render_widget(mkt_para, rows[5]);
+}
+
+/// Draw live MM screen with risk management status
+fn draw_live_mm_with_risk(
+    f: &mut ratatui::Frame,
+    symbol: &str,
+    feat: &AveragedFeatures,
+    state: &RiskManagedState,
+    max_inventory: Decimal,
+    session: &ForwardTestSession,
+    active_preset: Option<&ParameterPreset>,
+) {
+    let size = f.size();
+    let trading_state = &state.trading_state;
+
+    // Layout: title + Risk Status + MM panel + PnL panel + Quotes panel + Market Data
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(1),   // Title
+            Constraint::Length(4),   // Risk Status (new)
+            Constraint::Length(8),   // MM State & Regime
+            Constraint::Length(6),   // PnL & Position
+            Constraint::Length(5),   // Current Quotes
+            Constraint::Length(5),   // Simulator Stats
+            Constraint::Min(3),      // Market data summary
+        ])
+        .split(size);
+
+    // Title with session info and preset info
+    let now = chrono::Local::now().format("%H:%M:%S");
+    let session_info = if session.is_active() {
+        let m = session.metrics();
+        format!("Quotes: {}", m.quotes_generated)
+    } else {
+        "inactive".to_string()
+    };
+
+    // Show algorithm type in title
+    let algo_badge = match trading_state.algorithm_type {
+        AlgorithmType::AvellanedaStoikov => "[A-S]",
+        AlgorithmType::MLSpreadSkew => "[ML]",
+    };
+
+    let preset_info = if let Some(preset) = active_preset {
+        format!("{} {} ({})", algo_badge, preset.name, preset.created_at_local())
+    } else {
+        algo_badge.to_string()
+    };
+
+    let title_para = Paragraph::new(Line::from(vec![
+        Span::styled(format!(" {} ", symbol), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(preset_info, Style::default().fg(Color::Yellow)),
+        Span::raw("  "),
+        Span::styled(format!("{} ", now), Style::default().fg(Color::DarkGray)),
+        Span::styled(session_info, Style::default().fg(Color::DarkGray)),
+        Span::raw("  "),
+        Span::styled("[r] Reset  [h] Halt/Resume  [q] Exit", Style::default().fg(Color::DarkGray)),
+    ]));
+    f.render_widget(title_para, rows[0]);
+
+    // Risk Status Panel
+    let risk_color = risk_action_color(&state.risk_action);
+    let risk_status = format_risk_action(&state.risk_action);
+    let risk_reason = match &state.risk_action {
+        RiskAction::Allow => "Trading normally".to_string(),
+        RiskAction::ReduceOnly => "Reduce-only mode active".to_string(),
+        RiskAction::Halt { reason } => reason.to_string(),
+        RiskAction::Emergency { reason } => format!("EMERGENCY: {}", reason),
+    };
+
+    let risk_lines = vec![
+        Line::from(vec![
+            Span::styled("RISK STATUS ", Style::default().fg(Color::White)),
+            Span::styled(risk_status, Style::default().fg(risk_color).add_modifier(Modifier::BOLD)),
+            Span::raw("  "),
+            Span::styled(&risk_reason, Style::default().fg(risk_color)),
+        ]),
+        Line::from(vec![
+            Span::styled("BLOCKED ", Style::default().fg(Color::Gray)),
+            Span::styled("Quotes: ", Style::default().fg(Color::Yellow)),
+            Span::raw(format!("{}", state.quotes_blocked)),
+            Span::raw("  "),
+            Span::styled("Fills: ", Style::default().fg(Color::Yellow)),
+            Span::raw(format!("{}", state.fills_blocked)),
+            Span::raw("  "),
+            Span::styled("Halts: ", Style::default().fg(Color::Red)),
+            Span::raw(format!("{}", state.risk_stats.halt_count)),
+            Span::raw("  "),
+            Span::styled("ReduceOnly: ", Style::default().fg(Color::Yellow)),
+            Span::raw(format!("{}", state.risk_stats.reduce_only_count)),
+        ]),
+    ];
+
+    let risk_border_color = match state.risk_action {
+        RiskAction::Allow => Color::Green,
+        RiskAction::ReduceOnly => Color::Yellow,
+        RiskAction::Halt { .. } => Color::Red,
+        RiskAction::Emergency { .. } => Color::Magenta,
+    };
+
+    let risk_para = Paragraph::new(risk_lines).block(
+        Block::default()
+            .title(" RISK MANAGER ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(risk_border_color)),
+    );
+    f.render_widget(risk_para, rows[1]);
+
+    // MM State & Regime Panel
+    let regime = trading_state.last_quotes.as_ref().map(|q| q.regime).unwrap_or(MarketRegime::MediumEntropy);
+    let regime_str = match regime {
+        MarketRegime::HighEntropy => ("HIGH ENTROPY", Color::Green),
+        MarketRegime::MediumEntropy => ("MEDIUM ENTROPY", Color::Yellow),
+        MarketRegime::LowEntropy => ("LOW ENTROPY", Color::Red),
+    };
+
+    let inv_color = if trading_state.mm_state.inventory.is_zero() {
+        Color::Gray
+    } else if trading_state.mm_state.inventory.is_sign_positive() {
+        Color::Green
+    } else {
+        Color::Red
+    };
+
+    let mm_lines = vec![
+        Line::from(vec![
+            Span::styled("REGIME ", Style::default().fg(Color::Yellow)),
+            Span::styled(regime_str.0, Style::default().fg(regime_str.1).add_modifier(Modifier::BOLD)),
+            Span::raw("  "),
+            Span::styled("ENTROPY ", Style::default().fg(Color::Magenta)),
+            Span::raw(format!("{:.3}", feat.tick_entropy_5s)),
+        ]),
+        Line::from(vec![
+            Span::styled("FAIR VALUE ", Style::default().fg(Color::Cyan)),
+            Span::raw(format!("{:.2}", trading_state.last_quotes.as_ref().map(|q| q.fair_value).unwrap_or_default())),
+            Span::raw("  "),
+            Span::styled("HALF SPREAD ", Style::default().fg(Color::Yellow)),
+            Span::raw(format!("{:.2}", trading_state.last_quotes.as_ref().map(|q| q.half_spread).unwrap_or_default())),
+            Span::raw("  "),
+            Span::styled("SKEW ", Style::default().fg(Color::Gray)),
+            Span::raw(format!("{:.2}", trading_state.last_quotes.as_ref().map(|q| q.skew).unwrap_or_default())),
+        ]),
+        Line::from(vec![
+            Span::styled("INVENTORY ", Style::default().fg(inv_color)),
+            Span::raw(format!("{:+.6}", trading_state.mm_state.inventory)),
+            Span::raw("  "),
+            Span::styled("AVG ENTRY ", Style::default().fg(Color::Gray)),
+            Span::raw(format!("{:.2}", trading_state.mm_state.avg_entry_price)),
+            Span::raw("  "),
+            Span::styled("MAX ", Style::default().fg(Color::DarkGray)),
+            Span::raw(format!("{:.4}", max_inventory)),
+        ]),
+        Line::from(vec![
+            Span::styled("VOLATILITY ", Style::default().fg(Color::Yellow)),
+            Span::raw(format!("{:.6}", feat.realized_volatility_100)),
+            Span::raw("  "),
+            Span::styled("TOXICITY ", Style::default().fg(Color::Red)),
+            Span::raw(format!("{:.2}", feat.toxicity_index)),
+        ]),
+    ];
+
+    let mm_para = Paragraph::new(mm_lines).block(
+        Block::default()
+            .title(" MARKET MAKER STATE ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
+    f.render_widget(mm_para, rows[2]);
+
+    // PnL Panel
+    let pnl = &trading_state.mm_state.pnl;
+    let realized_color = if pnl.realized_pnl.is_sign_positive() { Color::Green } else { Color::Red };
+    let unrealized_color = if pnl.unrealized_pnl.is_sign_positive() { Color::Green } else { Color::Red };
+    let total_color = if pnl.total_pnl.is_sign_positive() { Color::Green } else { Color::Red };
+
+    let pnl_lines = vec![
+        Line::from(vec![
+            Span::styled("REALIZED ", Style::default().fg(realized_color)),
+            Span::raw(format!("{:+.4}", pnl.realized_pnl)),
+            Span::raw("  "),
+            Span::styled("UNREALIZED ", Style::default().fg(unrealized_color)),
+            Span::raw(format!("{:+.4}", pnl.unrealized_pnl)),
+            Span::raw("  "),
+            Span::styled("TOTAL ", Style::default().fg(total_color).add_modifier(Modifier::BOLD)),
+            Span::raw(format!("{:+.4}", pnl.total_pnl)),
+        ]),
+        Line::from(vec![
+            Span::styled("FEES PAID ", Style::default().fg(Color::Red)),
+            Span::raw(format!("{:.6}", pnl.fees_paid)),
+            Span::raw("  "),
+            Span::styled("TRADES ", Style::default().fg(Color::Gray)),
+            Span::raw(format!("{}", pnl.num_trades)),
+            Span::raw("  "),
+            Span::styled("VOLUME ", Style::default().fg(Color::Gray)),
+            Span::raw(format!("{:.4}", pnl.total_volume)),
+        ]),
+    ];
+
+    let pnl_para = Paragraph::new(pnl_lines).block(
+        Block::default()
+            .title(" P&L ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Green)),
+    );
+    f.render_widget(pnl_para, rows[3]);
+
+    // Quotes Panel
+    let quotes = trading_state.last_quotes.as_ref();
+    let bid_price = quotes.and_then(|q| q.bid.as_ref()).map(|b| format!("{:.2}", b.price)).unwrap_or_else(|| "---".to_string());
+    let bid_size = quotes.and_then(|q| q.bid.as_ref()).map(|b| format!("{:.4}", b.size)).unwrap_or_else(|| "---".to_string());
+    let ask_price = quotes.and_then(|q| q.ask.as_ref()).map(|a| format!("{:.2}", a.price)).unwrap_or_else(|| "---".to_string());
+    let ask_size = quotes.and_then(|q| q.ask.as_ref()).map(|a| format!("{:.4}", a.size)).unwrap_or_else(|| "---".to_string());
+
+    let quote_lines = vec![
+        Line::from(vec![
+            Span::styled("  BID ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw(format!("{} x {}", bid_price, bid_size)),
+            Span::raw("      "),
+            Span::styled("ASK ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::raw(format!("{} x {}", ask_price, ask_size)),
+        ]),
+        Line::from(vec![
+            Span::styled("  MID ", Style::default().fg(Color::Cyan)),
+            Span::raw(format!("{:.2}", feat.mid_price)),
+            Span::raw("  "),
+            Span::styled("MICRO ", Style::default().fg(Color::Cyan)),
+            Span::raw(format!("{:.2}", feat.microprice)),
+            Span::raw("  "),
+            Span::styled("SPREAD ", Style::default().fg(Color::Yellow)),
+            Span::raw(format!("{:.2}", feat.spread)),
+        ]),
+    ];
+
+    let quote_para = Paragraph::new(quote_lines).block(
+        Block::default()
+            .title(" QUOTES ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow)),
+    );
+    f.render_widget(quote_para, rows[4]);
+
+    // Simulator Stats Panel
+    let sim = &trading_state.sim_stats;
+    let fill_rate = sim.fill_rate() * 100.0;
+
+    let sim_lines = vec![
+        Line::from(vec![
+            Span::styled("TRADES SEEN ", Style::default().fg(Color::Gray)),
+            Span::raw(format!("{}", sim.trades_seen)),
+            Span::raw("  "),
+            Span::styled("BID FILLS ", Style::default().fg(Color::Green)),
+            Span::raw(format!("{}", sim.bid_fills)),
+            Span::raw("  "),
+            Span::styled("ASK FILLS ", Style::default().fg(Color::Red)),
+            Span::raw(format!("{}", sim.ask_fills)),
+            Span::raw("  "),
+            Span::styled("FILL RATE ", Style::default().fg(Color::Magenta)),
+            Span::raw(format!("{:.1}%", fill_rate)),
+        ]),
+        Line::from(vec![
+            Span::styled("BID MISSES ", Style::default().fg(Color::DarkGray)),
+            Span::raw(format!("{}", sim.bid_misses)),
+            Span::raw("  "),
+            Span::styled("ASK MISSES ", Style::default().fg(Color::DarkGray)),
+            Span::raw(format!("{}", sim.ask_misses)),
+            Span::raw("  "),
+            Span::styled("FILL VOL ", Style::default().fg(Color::Cyan)),
+            Span::raw(format!("{:.4}", sim.total_fill_volume)),
+        ]),
+    ];
+
+    let sim_para = Paragraph::new(sim_lines).block(
+        Block::default()
+            .title(" SIMULATOR ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Magenta)),
+    );
+    f.render_widget(sim_para, rows[5]);
+
+    // Condensed Market Data
+    let mkt_lines = vec![
+        Line::from(vec![
+            Span::styled("IMB ", Style::default().fg(Color::Yellow)),
+            Span::raw(format!("{:+.1}%", feat.imbalance * 100.0)),
+            Span::raw("  "),
+            Span::styled("PWI ", Style::default().fg(Color::Blue)),
+            Span::raw(format!("{:+.1}%", feat.pwi_50 * 100.0)),
+            Span::raw("  "),
+            Span::styled("FLOW ", Style::default().fg(Color::Magenta)),
+            Span::raw(format!("{:+.2}", feat.order_flow_imbalance)),
+            Span::raw("  "),
+            Span::styled("ENT ", Style::default().fg(Color::Magenta)),
+            Span::raw(format!("{:.2} / {:.2} / {:.2}",
+                feat.tick_entropy_1s, feat.tick_entropy_5s, feat.tick_entropy_10s)),
+            Span::raw("  "),
+            Span::styled("VPIN ", Style::default().fg(Color::Red)),
+            Span::raw(format!("{:.2}", feat.vpin)),
+        ]),
+    ];
+
+    let mkt_para = Paragraph::new(mkt_lines).block(
+        Block::default()
+            .title(" MARKET ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
+    f.render_widget(mkt_para, rows[6]);
 }
 
 fn draw_features(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
