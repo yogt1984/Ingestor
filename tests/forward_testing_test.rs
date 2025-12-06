@@ -92,6 +92,7 @@ fn test_forward_config_custom() {
         log_quotes: true,
         sharpe_window: 50,
         session_name: Some("TestSession".to_string()),
+        ..Default::default()
     };
 
     assert!(config.log_quotes);
