@@ -1338,10 +1338,17 @@ fn draw_live_mm(
     } else {
         "inactive".to_string()
     };
+
+    // Show algorithm type in title
+    let algo_badge = match state.algorithm_type {
+        AlgorithmType::AvellanedaStoikov => "[A-S]",
+        AlgorithmType::MLSpreadSkew => "[ML]",
+    };
+
     let preset_info = if let Some(preset) = active_preset {
-        format!("Preset: {} ({})", preset.name, preset.created_at_local())
+        format!("{} {} ({})", algo_badge, preset.name, preset.created_at_local())
     } else {
-        "Default params".to_string()
+        format!("{} Default params", algo_badge)
     };
     let title = format!(
         " {} | {} | {} | {} | [r] reset [q] menu ",
@@ -1951,10 +1958,17 @@ fn draw_preset_select(f: &mut ratatui::Frame, preset_store: &PresetStore, select
                 Style::default().fg(Color::White)
             };
 
-            // Main preset line
+            // Algorithm type badge
+            let (algo_badge, algo_color) = match preset.algorithm_type {
+                AlgorithmType::AvellanedaStoikov => ("[A-S]", Color::Blue),
+                AlgorithmType::MLSpreadSkew => ("[ML]", Color::Magenta),
+            };
+
+            // Main preset line with algorithm badge
             lines.push(Line::from(vec![
                 Span::styled(prefix, style),
                 Span::styled(format!("[{}] ", i + 1), Style::default().fg(Color::Green)),
+                Span::styled(format!("{} ", algo_badge), Style::default().fg(algo_color).add_modifier(Modifier::BOLD)),
                 Span::styled(&preset.name, style),
             ]));
 
@@ -1969,14 +1983,26 @@ fn draw_preset_select(f: &mut ratatui::Frame, preset_store: &PresetStore, select
                 if is_selected { Style::default().fg(Color::Cyan) } else { Style::default().fg(Color::DarkGray) },
             )));
 
-            // Parameters line
-            let params = format!(
-                "       Spread: {:.1}bps | Skew: {:.2} | Entropy: {:.2} | Fill Prob: {:.0}%",
-                preset.spread_bps,
-                preset.skew,
-                preset.high_entropy_threshold,
-                preset.fill_prob_assumption * 100.0
-            );
+            // Parameters line - different for ML vs A-S
+            let params = match preset.algorithm_type {
+                AlgorithmType::AvellanedaStoikov => format!(
+                    "       Spread: {:.1}bps | Skew: {:.2} | Entropy: {:.2} | Fill Prob: {:.0}%",
+                    preset.spread_bps,
+                    preset.skew,
+                    preset.high_entropy_threshold,
+                    preset.fill_prob_assumption * 100.0
+                ),
+                AlgorithmType::MLSpreadSkew => {
+                    let model_version = preset.ml_weights.as_ref()
+                        .map(|w| w.version.as_str())
+                        .unwrap_or("default");
+                    format!(
+                        "       Model: {} | Fill Prob: {:.0}% | Dynamic spread/skew",
+                        model_version,
+                        preset.fill_prob_assumption * 100.0
+                    )
+                }
+            };
             lines.push(Line::from(Span::styled(
                 params,
                 if is_selected { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::DarkGray) },
