@@ -33,7 +33,6 @@ pub struct ParameterPreset {
     pub skew: f64,
     pub high_entropy_threshold: f64,
     pub low_entropy_threshold: f64,
-    pub entropy_gate: bool,
     pub fill_prob_assumption: f64,
     /// Notes
     pub notes: String,
@@ -63,7 +62,6 @@ impl ParameterPreset {
             skew,
             high_entropy_threshold: high_entropy,
             low_entropy_threshold: 0.4,
-            entropy_gate: false,
             fill_prob_assumption: fill_prob,
             notes: String::new(),
         }
@@ -71,11 +69,7 @@ impl ParameterPreset {
 
     /// Convert to MMConfig
     pub fn to_mm_config(&self) -> MMConfig {
-        // Build regime params with optional gating
-        let mut regime_params = RegimeParams::uniform(self.spread_bps, self.skew);
-        if self.entropy_gate {
-            regime_params.low_entropy.should_quote = false;
-        }
+        let regime_params = RegimeParams::uniform(self.spread_bps, self.skew);
 
         MMConfig {
             regime_thresholds: RegimeThresholds {
@@ -160,7 +154,7 @@ impl PresetStore {
         // Best from grid search (Dec 3, 2025)
         let mut best = ParameterPreset::new(
             "GridSearch-Best",
-            "grid-search --test-gate",
+            "grid-search",
             1.0,  // spread
             0.3,  // skew
             0.7,  // high entropy
@@ -181,7 +175,7 @@ impl PresetStore {
         // Conservative variant
         let mut conservative = ParameterPreset::new(
             "GridSearch-Conservative",
-            "grid-search --test-gate",
+            "grid-search",
             1.0,
             0.3,
             0.7,

@@ -98,10 +98,6 @@ struct Cli {
     #[arg(long, default_value = "0.4")]
     low_entropy: f64,
 
-    /// Pull quotes entirely in low entropy regime (entropy gate)
-    #[arg(long)]
-    entropy_gate: bool,
-
     /// Output results as JSON (for scripting/Optuna)
     #[arg(long)]
     json: bool,
@@ -201,10 +197,6 @@ enum Commands {
         /// High entropy threshold values (comma-separated)
         #[arg(long, default_value = "0.6,0.7,0.8")]
         high_entropies: String,
-
-        /// Test both gated and ungated modes
-        #[arg(long)]
-        test_gate: bool,
 
         /// Fill probability values to test (comma-separated)
         #[arg(long, default_value = "0.05,0.10,0.15")]
@@ -481,8 +473,8 @@ fn main() -> Result<()> {
         Some(Commands::Info) => {
             show_info(&cli)?;
         }
-        Some(Commands::GridSearch { spreads, skews, high_entropies, test_gate, fill_probs, output }) => {
-            run_grid_search(&cli, spreads, skews, high_entropies, *test_gate, fill_probs, output.clone())?;
+        Some(Commands::GridSearch { spreads, skews, high_entropies, fill_probs, output }) => {
+            run_grid_search(&cli, spreads, skews, high_entropies, fill_probs, output.clone())?;
         }
         Some(Commands::RegimeSearch { high_spreads, med_spreads, low_spreads, high_skews, med_skews, low_skews, fill_probs, output }) => {
             run_regime_search(&cli, high_spreads, med_spreads, low_spreads, high_skews, med_skews, low_skews, fill_probs, output.clone())?;
@@ -537,8 +529,7 @@ fn run_single(cli: &Cli) -> Result<()> {
                 "spread": cli.spread,
                 "skew": cli.skew,
                 "fill_prob": cli.fill_prob,
-                "high_entropy": cli.high_entropy,
-                "entropy_gate": cli.entropy_gate
+                "high_entropy": cli.high_entropy
             }
         });
         println!("{}", json_output);
@@ -561,7 +552,6 @@ fn run_single(cli: &Cli) -> Result<()> {
         println!("  Fill Prob:     {:.0}%", cli.fill_prob * 100.0);
         println!("  Queue Pos:     {:.0}%", cli.queue_pos * 100.0);
     }
-    println!("  Entropy Gate:  {}", if cli.entropy_gate { "ON (no quotes in low entropy)" } else { "OFF (spread widening only)" });
     println!("  High Entropy:  {} (above = aggressive)", cli.high_entropy);
     println!("  Low Entropy:   {} (below = defensive)", cli.low_entropy);
     println!();
@@ -774,12 +764,8 @@ fn build_config(cli: &Cli) -> BacktestConfig {
             },
         }
     } else {
-        // Uniform parameters with optional entropy gate
-        let mut params = RegimeParams::uniform(cli.spread, cli.skew);
-        if cli.entropy_gate {
-            params.low_entropy.should_quote = false;
-        }
-        params
+        // Uniform parameters across all regimes
+        RegimeParams::uniform(cli.spread, cli.skew)
     };
 
     let mm_config = MMConfig {
@@ -912,7 +898,6 @@ struct GridSearchResult {
     spread: f64,
     skew: f64,
     high_entropy_threshold: f64,
-    entropy_gate: bool,
     fill_prob: f64,
     sharpe: f64,
     total_return: f64,
@@ -927,7 +912,6 @@ fn run_grid_search(
     spreads_str: &str,
     skews_str: &str,
     high_entropies_str: &str,
-    test_gate: bool,
     fill_probs_str: &str,
     output: Option<PathBuf>,
 ) -> Result<()> {
@@ -938,9 +922,7 @@ fn run_grid_search(
     let high_entropies: Vec<f64> = high_entropies_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
     let fill_probs: Vec<f64> = fill_probs_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
 
-    let gate_modes: Vec<bool> = if test_gate { vec![false, true] } else { vec![false] };
-
-    let total_combinations = spreads.len() * skews.len() * high_entropies.len() * gate_modes.len() * fill_probs.len();
+    let total_combinations = spreads.len() * skews.len() * high_entropies.len() * fill_probs.len();
 
     println!("═══════════════════════════════════════════════════════");
     println!("           EXTENDED GRID SEARCH                        ");
@@ -950,7 +932,6 @@ fn run_grid_search(
     println!("  Spreads:          {:?}", spreads);
     println!("  Skews:            {:?}", skews);
     println!("  High Entropies:   {:?}", high_entropies);
-    println!("  Entropy Gate:     {:?}", gate_modes);
     println!("  Fill Probs:       {:?}", fill_probs);
     println!();
     println!("Total combinations: {}", total_combinations);
@@ -967,17 +948,12 @@ fn run_grid_search(
     for &spread in &spreads {
         for &skew in &skews {
             for &high_entropy in &high_entropies {
-                for &gate in &gate_modes {
-                    for &fill_prob in &fill_probs {
-                        count += 1;
+                for &fill_prob in &fill_probs {
+                    count += 1;
 
-                        // Build regime params with optional gating in low entropy
-                        let mut regime_params = RegimeParams::uniform(spread, skew);
-                        if gate {
-                            regime_params.low_entropy.should_quote = false;
-                        }
+                    let regime_params = RegimeParams::uniform(spread, skew);
 
-                        let mm_config = MMConfig {
+                    let mm_config = MMConfig {
                             max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
                             quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
                             regime_thresholds: RegimeThresholds {
@@ -1016,32 +992,29 @@ fn run_grid_search(
                             0.0
                         };
 
-                        let grid_result = GridSearchResult {
-                            spread,
-                            skew,
-                            high_entropy_threshold: high_entropy,
-                            entropy_gate: gate,
-                            fill_prob,
-                            sharpe: results.metrics.sharpe_ratio,
-                            total_return: results.metrics.total_return,
-                            max_drawdown: results.metrics.max_drawdown,
-                            num_trades: results.metrics.num_trades,
-                            win_rate: results.metrics.win_rate,
-                            avg_trade_pnl,
-                        };
+                    let grid_result = GridSearchResult {
+                        spread,
+                        skew,
+                        high_entropy_threshold: high_entropy,
+                        fill_prob,
+                        sharpe: results.metrics.sharpe_ratio,
+                        total_return: results.metrics.total_return,
+                        max_drawdown: results.metrics.max_drawdown,
+                        num_trades: results.metrics.num_trades,
+                        win_rate: results.metrics.win_rate,
+                        avg_trade_pnl,
+                    };
 
-                        let gate_str = if gate { "GATE" } else { "WIDE" };
-                        println!(
-                            "[{:>4}/{}] s={:.1} k={:.1} ent={:.1} {} fp={:.2} => Sharpe={:+.2} Ret={:+.2}% Tr={}",
-                            count, total_combinations,
-                            spread, skew, high_entropy, gate_str, fill_prob,
-                            grid_result.sharpe,
-                            grid_result.total_return * 100.0,
-                            grid_result.num_trades,
-                        );
+                    println!(
+                        "[{:>4}/{}] s={:.1} k={:.1} ent={:.1} fp={:.2} => Sharpe={:+.2} Ret={:+.2}% Tr={}",
+                        count, total_combinations,
+                        spread, skew, high_entropy, fill_prob,
+                        grid_result.sharpe,
+                        grid_result.total_return * 100.0,
+                        grid_result.num_trades,
+                    );
 
-                        all_results.push(grid_result);
-                    }
+                    all_results.push(grid_result);
                 }
             }
         }
@@ -1056,52 +1029,14 @@ fn run_grid_search(
     println!("═══════════════════════════════════════════════════════");
 
     for (i, r) in all_results.iter().take(10).enumerate() {
-        let gate_str = if r.entropy_gate { "GATE" } else { "WIDE" };
         println!(
-            "{:>2}. Spread={:.1} Skew={:.1} Entropy={:.1} {} FillP={:.2}",
-            i + 1, r.spread, r.skew, r.high_entropy_threshold, gate_str, r.fill_prob
+            "{:>2}. Spread={:.1} Skew={:.1} Entropy={:.1} FillP={:.2}",
+            i + 1, r.spread, r.skew, r.high_entropy_threshold, r.fill_prob
         );
         println!(
             "    Sharpe={:+.2} Return={:+.2}% DD={:.2}% WinRate={:.1}% Trades={}",
             r.sharpe, r.total_return * 100.0, r.max_drawdown * 100.0, r.win_rate * 100.0, r.num_trades
         );
-    }
-
-    // Compare gated vs ungated if test_gate is true
-    if test_gate {
-        println!();
-        println!("═══════════════════════════════════════════════════════");
-        println!("ENTROPY GATE COMPARISON:");
-        println!("═══════════════════════════════════════════════════════");
-
-        let gated: Vec<_> = all_results.iter().filter(|r| r.entropy_gate).collect();
-        let ungated: Vec<_> = all_results.iter().filter(|r| !r.entropy_gate).collect();
-
-        let avg_sharpe_gated: f64 = gated.iter().map(|r| r.sharpe).sum::<f64>() / gated.len() as f64;
-        let avg_sharpe_ungated: f64 = ungated.iter().map(|r| r.sharpe).sum::<f64>() / ungated.len() as f64;
-
-        let avg_return_gated: f64 = gated.iter().map(|r| r.total_return).sum::<f64>() / gated.len() as f64;
-        let avg_return_ungated: f64 = ungated.iter().map(|r| r.total_return).sum::<f64>() / ungated.len() as f64;
-
-        let avg_trades_gated: f64 = gated.iter().map(|r| r.num_trades as f64).sum::<f64>() / gated.len() as f64;
-        let avg_trades_ungated: f64 = ungated.iter().map(|r| r.num_trades as f64).sum::<f64>() / ungated.len() as f64;
-
-        println!("                    UNGATED (spread widen)  vs  GATED (no quotes)");
-        println!("  Avg Sharpe:       {:+.3}                     {:+.3}", avg_sharpe_ungated, avg_sharpe_gated);
-        println!("  Avg Return:       {:+.2}%                    {:+.2}%", avg_return_ungated * 100.0, avg_return_gated * 100.0);
-        println!("  Avg Trades:       {:.0}                       {:.0}", avg_trades_ungated, avg_trades_gated);
-
-        let sharpe_diff = avg_sharpe_gated - avg_sharpe_ungated;
-        if sharpe_diff > 0.1 {
-            println!();
-            println!("  >>> GATED mode shows +{:.2} Sharpe improvement!", sharpe_diff);
-        } else if sharpe_diff < -0.1 {
-            println!();
-            println!("  >>> UNGATED mode shows +{:.2} Sharpe advantage!", -sharpe_diff);
-        } else {
-            println!();
-            println!("  >>> No significant difference between modes.");
-        }
     }
 
     // Best overall
@@ -1113,7 +1048,6 @@ fn run_grid_search(
         println!("  base_spread_bps:            {}", best.spread);
         println!("  inventory_skew_factor:      {}", best.skew);
         println!("  high_entropy_threshold:     {}", best.high_entropy_threshold);
-        println!("  pull_quotes_in_low_entropy: {}", best.entropy_gate);
         println!("  base_fill_probability:      {}", best.fill_prob);
         println!();
         println!("Expected Performance:");
