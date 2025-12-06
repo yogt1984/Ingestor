@@ -11,6 +11,7 @@ mod entropy;
 mod volatility;
 mod toxicity;
 mod market_maker;
+mod risk_manager;
 mod mm_simulator;
 mod presets;
 mod tui;
