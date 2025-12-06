@@ -327,16 +327,56 @@ impl PresetStore {
 
         store.presets.push(conservative);
 
-        // ML algorithm with default weights (Dec 6, 2025)
-        let mut ml_default = ParameterPreset::new_ml(
-            "ML-Default",
+        // ML algorithm with trained weights from walk-forward optimization (Dec 6, 2025)
+        let trained_weights = MLModelWeights {
+            spread: crate::algorithms::SpreadWeights {
+                intercept: 1.0,
+                w_entropy: -2.0,      // Widen spread in low entropy (trending) markets
+                w_volatility: 200.0,  // Widen spread in high volatility
+                w_imbalance: 1.0,
+                w_interaction: -100.0,
+            },
+            skew: crate::algorithms::SkewWeights {
+                intercept: 0.5,
+                w_entropy: -0.2,
+                w_volatility: 50.0,
+                w_imbalance: 0.1,
+                w_inventory: -1.0,    // Skew against inventory
+            },
+            version: "walk-forward-v1".to_string(),
+            training_info: Some(crate::algorithms::TrainingInfo {
+                trained_on: "2025-12-06T16:29:04Z".to_string(),
+                num_samples: 101254,
+                train_sharpe: -1.49,
+                validation_sharpe: Some(0.0),
+            }),
+        };
+        let mut ml_trained = ParameterPreset::new_ml(
+            "ML-Trained",
             "walk-forward-ml",
+            0.10,
+            trained_weights,
+        );
+        ml_trained.data_range = "Oct 16 - Dec 6, 2025 (50 days)".to_string();
+        ml_trained.num_events = 101254;
+        ml_trained.expected_return = 0.032; // +3.2% on training
+        ml_trained.expected_sharpe = -1.49;
+        ml_trained.expected_trades = 14;
+        ml_trained.notes = "Walk-forward trained ML weights. Spread widens in low entropy/high vol. Skew adjusts for inventory.".to_string();
+        ml_trained.created_at = "2025-12-06T16:30:00Z".parse().unwrap_or(Utc::now());
+
+        store.presets.push(ml_trained);
+
+        // ML algorithm with default/baseline weights for comparison
+        let mut ml_default = ParameterPreset::new_ml(
+            "ML-Baseline",
+            "manual",
             0.10,
             MLModelWeights::default(),
         );
         ml_default.data_range = "Oct 16 - Dec 2, 2025 (47 days)".to_string();
         ml_default.num_events = 73000;
-        ml_default.notes = "ML Spread/Skew predictor with baseline weights. Dynamically adjusts spread based on entropy and volatility.".to_string();
+        ml_default.notes = "ML Spread/Skew predictor with baseline weights. Compare against ML-Trained.".to_string();
         ml_default.created_at = "2025-12-06T12:00:00Z".parse().unwrap_or(Utc::now());
 
         store.presets.push(ml_default);
