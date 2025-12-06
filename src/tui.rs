@@ -23,9 +23,10 @@ use ratatui::{
 
 use crate::feature_fusion::FeaturesSnapshot;
 use crate::market_maker::{MarketMakerEngine, MMConfig, MarketRegime};
-use crate::mm_simulator::{PaperTradingEngine, SimulatorConfig};
+use crate::mm_simulator::{PaperTradingEngine, PaperTradingState, GenericPaperTradingEngine, SimulatorConfig};
 use ingestor::forward_testing::{ForwardTestSession, ForwardTestConfig};
 use crate::presets::{PresetStore, ParameterPreset};
+use crate::algorithms::AlgorithmType;
 
 type Term = Terminal<CrosstermBackend<io::Stdout>>;
 
@@ -520,13 +521,16 @@ fn main_loop(
     let mut entropy_hist: VecDeque<f64> = VecDeque::with_capacity(MAX_HISTORY);
     let mut volatility_hist: VecDeque<f64> = VecDeque::with_capacity(MAX_HISTORY);
 
-    // Market maker state
+    // Market maker state - default engine for LiveMM mode
     let mm_config = MMConfig::default();
     let sim_config = SimulatorConfig::default();
     let mut paper_trading = PaperTradingEngine::new(
         MarketMakerEngine::new(mm_config),
         sim_config,
     );
+
+    // Generic paper trading engine for preset mode (supports multiple algorithms)
+    let mut generic_paper_trading: Option<GenericPaperTradingEngine> = None;
 
     // Forward testing session for trade logging
     let mut forward_session = ForwardTestSession::new(ForwardTestConfig::default());
@@ -619,17 +623,20 @@ fn main_loop(
                         KeyCode::Enter => {
                             // Select preset and start paper trading
                             if let Some(preset) = preset_store.get(selected_preset_idx) {
-                                let mm_config = preset.to_mm_config();
                                 // Use queue position model for more realistic fills
                                 let sim_config = SimulatorConfig {
                                     use_queue_model: true,
                                     queue_position_fraction: 0.5, // Middle of queue
                                     ..Default::default()
                                 };
-                                paper_trading = PaperTradingEngine::new(
-                                    MarketMakerEngine::new(mm_config),
+
+                                // Create algorithm from preset (supports A-S and ML)
+                                let algorithm = preset.create_algorithm();
+                                generic_paper_trading = Some(GenericPaperTradingEngine::new(
+                                    algorithm,
                                     sim_config,
-                                );
+                                ));
+
                                 active_preset = Some(preset.clone());
                                 forward_session = ForwardTestSession::new(ForwardTestConfig::default());
                                 forward_session.start();
@@ -648,11 +655,14 @@ fn main_loop(
                                 }
                             }
                             active_preset = None;
+                            generic_paper_trading = None;
                             mode = AppMode::Menu;
                         }
                         KeyCode::Char('r') => {
                             // Reset but keep preset
-                            paper_trading.reset();
+                            if let Some(ref mut engine) = generic_paper_trading {
+                                engine.reset();
+                            }
                             forward_session = ForwardTestSession::new(ForwardTestConfig::default());
                             forward_session.start();
                         }
@@ -721,51 +731,81 @@ fn main_loop(
                 }
 
                 // Update MM engine with latest features
-                if mode == AppMode::LiveMM || mode == AppMode::PaperTradePreset {
-                    if let Some(ref snap) = last_snapshot {
-                        let microprice = snap.microprice.unwrap_or(snap.mid_price.unwrap_or_default());
-                        let mid_price = snap.mid_price.unwrap_or_default();
-                        let volatility = snap.realized_volatility_100.unwrap_or(0.001);
+                if let Some(ref snap) = last_snapshot {
+                    let microprice = snap.microprice.unwrap_or(snap.mid_price.unwrap_or_default());
+                    let mid_price = snap.mid_price.unwrap_or_default();
+                    let volatility = snap.realized_volatility_100.unwrap_or(0.001);
 
-                        // Compute entropy score from tick entropies
-                        let entropy_score = paper_trading.mm.compute_entropy_score(
-                            snap.tick_entropy_1s,
-                            snap.tick_entropy_5s,
-                            snap.tick_entropy_10s,
-                        );
+                    // Compute entropy score from tick entropies using algorithms module
+                    let entropy_score = crate::algorithms::compute_entropy_score(
+                        snap.tick_entropy_1s,
+                        snap.tick_entropy_5s,
+                        snap.tick_entropy_10s,
+                    );
 
-                        // Compute flow imbalance from aggressor ratios
-                        let buy_vol = snap.aggr_ratio_100.unwrap_or(Decimal::new(5, 1)); // 0.5 default
-                        let sell_vol = Decimal::ONE - buy_vol;
-                        let flow_imbalance = paper_trading.mm.compute_flow_imbalance(buy_vol, sell_vol);
+                    // Compute flow imbalance from aggressor ratios using algorithms module
+                    let buy_vol = snap.aggr_ratio_100.unwrap_or(Decimal::new(5, 1)); // 0.5 default
+                    let sell_vol = Decimal::ONE - buy_vol;
+                    let flow_imbalance = crate::algorithms::compute_flow_imbalance(buy_vol, sell_vol);
 
-                        let timestamp_ms = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_millis() as u64;
+                    let timestamp_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64;
 
-                        let quotes = paper_trading.on_features(
-                            microprice,
-                            mid_price,
-                            volatility,
-                            entropy_score,
-                            flow_imbalance,
-                            timestamp_ms,
-                        );
-
-                        // Log quotes to forward testing session
-                        if forward_session.is_active() {
-                            forward_session.log_quote(
-                                timestamp_ms,
-                                quotes.bid.as_ref().map(|q| q.price),
-                                quotes.bid.as_ref().map(|q| q.size),
-                                quotes.ask.as_ref().map(|q| q.price),
-                                quotes.ask.as_ref().map(|q| q.size),
+                    match mode {
+                        AppMode::LiveMM => {
+                            let quotes = paper_trading.on_features(
+                                microprice,
                                 mid_price,
-                                paper_trading.mm.inventory(),
-                                &format!("{:?}", quotes.regime),
+                                volatility,
+                                entropy_score,
+                                flow_imbalance,
+                                timestamp_ms,
                             );
+
+                            // Log quotes to forward testing session
+                            if forward_session.is_active() {
+                                forward_session.log_quote(
+                                    timestamp_ms,
+                                    quotes.bid.as_ref().map(|q| q.price),
+                                    quotes.bid.as_ref().map(|q| q.size),
+                                    quotes.ask.as_ref().map(|q| q.price),
+                                    quotes.ask.as_ref().map(|q| q.size),
+                                    mid_price,
+                                    paper_trading.mm.inventory(),
+                                    &format!("{:?}", quotes.regime),
+                                );
+                            }
                         }
+                        AppMode::PaperTradePreset => {
+                            if let Some(ref mut engine) = generic_paper_trading {
+                                let quotes = engine.on_features(
+                                    microprice,
+                                    mid_price,
+                                    volatility,
+                                    entropy_score,
+                                    flow_imbalance,
+                                    timestamp_ms,
+                                );
+
+                                // Log quotes to forward testing session
+                                if forward_session.is_active() {
+                                    let state = engine.state();
+                                    forward_session.log_quote(
+                                        timestamp_ms,
+                                        quotes.bid.as_ref().map(|q| q.price),
+                                        quotes.bid.as_ref().map(|q| q.size),
+                                        quotes.ask.as_ref().map(|q| q.price),
+                                        quotes.ask.as_ref().map(|q| q.size),
+                                        mid_price,
+                                        state.mm_state.inventory,
+                                        &format!("{:?}", quotes.regime),
+                                    );
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
 
@@ -793,7 +833,9 @@ fn main_loop(
                     if !has_data {
                         draw_waiting(f);
                     } else {
-                        draw_live_mm(f, &symbol, &current_features, &paper_trading, &forward_session, None);
+                        let state = paper_trading.state();
+                        let max_inv = paper_trading.mm.config().max_inventory;
+                        draw_live_mm(f, &symbol, &current_features, &state, max_inv, &forward_session, None);
                     }
                 })?;
             }
@@ -804,8 +846,13 @@ fn main_loop(
                 terminal.draw(|f| {
                     if !has_data {
                         draw_waiting(f);
+                    } else if let Some(ref engine) = generic_paper_trading {
+                        let state = engine.state();
+                        let max_inv = engine.algorithm.max_inventory();
+                        draw_live_mm(f, &symbol, &current_features, &state, max_inv, &forward_session, active_preset.as_ref());
                     } else {
-                        draw_live_mm(f, &symbol, &current_features, &paper_trading, &forward_session, active_preset.as_ref());
+                        // Fallback if no engine (shouldn't happen in this mode)
+                        draw_waiting(f);
                     }
                 })?;
             }
@@ -1262,12 +1309,12 @@ fn draw_live_mm(
     f: &mut ratatui::Frame,
     symbol: &str,
     feat: &AveragedFeatures,
-    paper_trading: &PaperTradingEngine,
+    state: &PaperTradingState,
+    max_inventory: Decimal,
     session: &ForwardTestSession,
     active_preset: Option<&ParameterPreset>,
 ) {
     let size = f.size();
-    let state = paper_trading.state();
 
     // Layout: title + MM panel + PnL panel + Quotes panel + Market Data (condensed)
     let rows = Layout::default()
@@ -1322,8 +1369,6 @@ fn draw_live_mm(
     } else {
         Color::Red
     };
-
-    let max_inventory = paper_trading.mm.config().max_inventory;
 
     let mm_lines = vec![
         Line::from(vec![
@@ -1444,7 +1489,7 @@ fn draw_live_mm(
 
     // Simulator Stats Panel
     let sim = &state.sim_stats;
-    let fill_rate = paper_trading.simulator.fill_rate() * 100.0;
+    let fill_rate = sim.fill_rate() * 100.0;
 
     let sim_lines = vec![
         Line::from(vec![

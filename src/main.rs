@@ -14,6 +14,7 @@ mod market_maker;
 mod mm_simulator;
 mod presets;
 mod tui;
+mod algorithms;
 
 use crossbeam::channel;
 use std::sync::Arc;
