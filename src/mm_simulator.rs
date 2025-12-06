@@ -706,6 +706,11 @@ impl RiskManagedPaperTradingEngine {
         self.inner.state()
     }
 
+    /// Get max inventory from the underlying algorithm
+    pub fn max_inventory(&self) -> Decimal {
+        self.inner.algorithm.max_inventory()
+    }
+
     /// Reset everything including risk manager
     pub fn reset(&mut self) {
         self.inner.reset();
