@@ -85,6 +85,12 @@ impl fmt::Display for AlgorithmType {
     }
 }
 
+impl Default for AlgorithmType {
+    fn default() -> Self {
+        AlgorithmType::AvellanedaStoikov
+    }
+}
+
 // ============================================================================
 // Algorithm Error Type
 // ============================================================================

@@ -10,6 +10,7 @@ use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 
+use crate::algorithms::{AlgorithmType, MarketInput, MarketMakingAlgorithm};
 use crate::market_maker::{Quote, QuoteSide, Fill, MarketMakerEngine, MMQuotes};
 use crate::tradeslog::Trade;
 
@@ -57,6 +58,18 @@ pub struct SimulatorStats {
     pub bid_misses: u64,
     pub ask_misses: u64,
     pub total_fill_volume: Decimal,
+}
+
+impl SimulatorStats {
+    /// Calculate fill rate as ratio of fills to total opportunities
+    pub fn fill_rate(&self) -> f64 {
+        let total_opportunities = self.bid_fills + self.ask_fills
+            + self.bid_misses + self.ask_misses;
+        if total_opportunities == 0 {
+            return 0.0;
+        }
+        (self.bid_fills + self.ask_fills) as f64 / total_opportunities as f64
+    }
 }
 
 impl MMSimulator {
@@ -244,6 +257,7 @@ impl PaperTradingEngine {
             mm_state: self.mm.get_state(),
             sim_stats: self.simulator.stats().clone(),
             last_quotes: self.last_quotes.clone(),
+            algorithm_type: AlgorithmType::AvellanedaStoikov,
         }
     }
 
@@ -255,11 +269,151 @@ impl PaperTradingEngine {
     }
 }
 
+/// Generic paper trading engine that works with any MarketMakingAlgorithm
+pub struct GenericPaperTradingEngine {
+    pub algorithm: Box<dyn MarketMakingAlgorithm>,
+    pub simulator: MMSimulator,
+    last_quotes: Option<MMQuotes>,
+    /// Cached best bid for computing MarketInput
+    last_best_bid: Decimal,
+    /// Cached best ask for computing MarketInput
+    last_best_ask: Decimal,
+}
+
+impl GenericPaperTradingEngine {
+    /// Create a new generic paper trading engine with any algorithm
+    pub fn new(algorithm: Box<dyn MarketMakingAlgorithm>, sim_config: SimulatorConfig) -> Self {
+        Self {
+            algorithm,
+            simulator: MMSimulator::new(sim_config),
+            last_quotes: None,
+            last_best_bid: dec!(0),
+            last_best_ask: dec!(0),
+        }
+    }
+
+    /// Create from a MarketMakerEngine (backwards compatibility)
+    pub fn from_mm_engine(mm: MarketMakerEngine, sim_config: SimulatorConfig) -> Self {
+        use crate::algorithms::AvellanedaStoikovAlgorithm;
+        let config = mm.config().clone();
+        let algorithm = Box::new(AvellanedaStoikovAlgorithm::new(config));
+        Self::new(algorithm, sim_config)
+    }
+
+    /// Get the algorithm type
+    pub fn algorithm_type(&self) -> AlgorithmType {
+        self.algorithm.algorithm_type()
+    }
+
+    /// Get the algorithm name
+    pub fn algorithm_name(&self) -> &'static str {
+        self.algorithm.name()
+    }
+
+    /// Process a feature snapshot and compute new quotes
+    pub fn on_features(
+        &mut self,
+        _microprice: Decimal,
+        mid_price: Decimal,
+        volatility: f64,
+        entropy_score: f64,
+        flow_imbalance: f64,
+        timestamp_ms: u64,
+    ) -> MMQuotes {
+        // Calculate best bid/ask from mid_price (approximation when not provided)
+        // In practice, these should be the actual order book best prices
+        let half_spread = mid_price * dec!(0.00005); // Assume 0.5 bps market spread
+        let best_bid = mid_price - half_spread;
+        let best_ask = mid_price + half_spread;
+
+        self.on_features_with_book(
+            best_bid,
+            best_ask,
+            volatility,
+            entropy_score,
+            flow_imbalance,
+            timestamp_ms,
+        )
+    }
+
+    /// Process a feature snapshot with actual order book prices
+    pub fn on_features_with_book(
+        &mut self,
+        best_bid: Decimal,
+        best_ask: Decimal,
+        volatility: f64,
+        entropy_score: f64,
+        book_imbalance: f64,
+        timestamp_ms: u64,
+    ) -> MMQuotes {
+        // Store for later use
+        self.last_best_bid = best_bid;
+        self.last_best_ask = best_ask;
+
+        // Create MarketInput for the algorithm
+        let input = MarketInput {
+            best_bid,
+            best_ask,
+            volatility,
+            entropy: entropy_score,
+            book_imbalance,
+            timestamp_ms,
+        };
+
+        let quotes = self.algorithm.compute_quotes(&input);
+
+        self.simulator.update_quotes(&quotes);
+        self.last_quotes = Some(quotes.clone());
+
+        // Update mark-to-market
+        let mid_price = input.mid_price();
+        self.algorithm.update_mark_to_market(mid_price);
+
+        quotes
+    }
+
+    /// Process an incoming trade for potential fills
+    pub fn on_trade(&mut self, trade: &Trade, current_time_ms: u64) -> Vec<Fill> {
+        let fills = self.simulator.process_trade(trade, current_time_ms);
+
+        // Process fills in algorithm
+        for fill in &fills {
+            self.algorithm.process_fill(fill.clone(), self.simulator.config.fee_rate);
+        }
+
+        fills
+    }
+
+    /// Get current state
+    pub fn state(&self) -> PaperTradingState {
+        PaperTradingState {
+            mm_state: self.algorithm.get_state(),
+            sim_stats: self.simulator.stats().clone(),
+            last_quotes: self.last_quotes.clone(),
+            algorithm_type: self.algorithm.algorithm_type(),
+        }
+    }
+
+    /// Reset everything
+    pub fn reset(&mut self) {
+        self.algorithm.reset();
+        self.simulator.reset();
+        self.last_quotes = None;
+    }
+
+    /// Get algorithm parameters as JSON
+    pub fn parameters_json(&self) -> serde_json::Value {
+        self.algorithm.parameters_json()
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PaperTradingState {
     pub mm_state: crate::market_maker::MMState,
     pub sim_stats: SimulatorStats,
     pub last_quotes: Option<MMQuotes>,
+    #[serde(default)]
+    pub algorithm_type: AlgorithmType,
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
+use crate::algorithms::{AlgorithmType, MLModelWeights};
 use crate::market_maker::{MMConfig, RegimeThresholds, RegimeParams};
 
 /// A saved parameter preset with metadata
@@ -36,10 +37,19 @@ pub struct ParameterPreset {
     pub fill_prob_assumption: f64,
     /// Notes
     pub notes: String,
+    /// Algorithm type (avellaneda_stoikov or ml_spread_skew)
+    #[serde(default)]
+    pub algorithm_type: AlgorithmType,
+    /// ML model weights (only used if algorithm_type is MLSpreadSkew)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ml_weights: Option<MLModelWeights>,
+    /// Path to ML weights file (alternative to embedding weights)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ml_weights_path: Option<String>,
 }
 
 impl ParameterPreset {
-    /// Create a new preset with current timestamp
+    /// Create a new preset with current timestamp (defaults to A-S algorithm)
     pub fn new(
         name: &str,
         method: &str,
@@ -64,6 +74,113 @@ impl ParameterPreset {
             low_entropy_threshold: 0.4,
             fill_prob_assumption: fill_prob,
             notes: String::new(),
+            algorithm_type: AlgorithmType::AvellanedaStoikov,
+            ml_weights: None,
+            ml_weights_path: None,
+        }
+    }
+
+    /// Create a new ML preset with embedded weights
+    pub fn new_ml(
+        name: &str,
+        method: &str,
+        fill_prob: f64,
+        weights: MLModelWeights,
+    ) -> Self {
+        Self {
+            name: name.to_string(),
+            created_at: Utc::now(),
+            optimization_method: method.to_string(),
+            data_range: String::new(),
+            num_events: 0,
+            expected_return: 0.0,
+            expected_sharpe: 0.0,
+            expected_trades: 0,
+            expected_win_rate: 0.0,
+            spread_bps: 0.0, // Not used for ML
+            skew: 0.0,       // Not used for ML
+            high_entropy_threshold: 0.7,
+            low_entropy_threshold: 0.4,
+            fill_prob_assumption: fill_prob,
+            notes: String::new(),
+            algorithm_type: AlgorithmType::MLSpreadSkew,
+            ml_weights: Some(weights),
+            ml_weights_path: None,
+        }
+    }
+
+    /// Create a new ML preset with weights loaded from file
+    pub fn new_ml_from_file(
+        name: &str,
+        method: &str,
+        fill_prob: f64,
+        weights_path: &str,
+    ) -> Self {
+        Self {
+            name: name.to_string(),
+            created_at: Utc::now(),
+            optimization_method: method.to_string(),
+            data_range: String::new(),
+            num_events: 0,
+            expected_return: 0.0,
+            expected_sharpe: 0.0,
+            expected_trades: 0,
+            expected_win_rate: 0.0,
+            spread_bps: 0.0,
+            skew: 0.0,
+            high_entropy_threshold: 0.7,
+            low_entropy_threshold: 0.4,
+            fill_prob_assumption: fill_prob,
+            notes: String::new(),
+            algorithm_type: AlgorithmType::MLSpreadSkew,
+            ml_weights: None,
+            ml_weights_path: Some(weights_path.to_string()),
+        }
+    }
+
+    /// Get ML weights, loading from file if necessary
+    pub fn get_ml_weights(&self) -> Option<MLModelWeights> {
+        // First check embedded weights
+        if self.ml_weights.is_some() {
+            return self.ml_weights.clone();
+        }
+
+        // Try loading from path
+        if let Some(ref path) = self.ml_weights_path {
+            if let Ok(weights) = MLModelWeights::load_from_file(path) {
+                return Some(weights);
+            }
+        }
+
+        // Fall back to default weights for ML algorithm
+        if self.algorithm_type == AlgorithmType::MLSpreadSkew {
+            return Some(MLModelWeights::default());
+        }
+
+        None
+    }
+
+    /// Create the appropriate algorithm from this preset
+    pub fn create_algorithm(&self) -> Box<dyn crate::algorithms::MarketMakingAlgorithm> {
+        use crate::algorithms::{
+            AvellanedaStoikovAlgorithm, MLSpreadSkewAlgorithm, MLSpreadSkewConfig,
+        };
+        use rust_decimal_macros::dec;
+
+        match self.algorithm_type {
+            AlgorithmType::AvellanedaStoikov => {
+                let config = self.to_mm_config();
+                Box::new(AvellanedaStoikovAlgorithm::new(config))
+            }
+            AlgorithmType::MLSpreadSkew => {
+                let weights = self.get_ml_weights().unwrap_or_default();
+                let config = MLSpreadSkewConfig {
+                    max_inventory: dec!(0.1),
+                    quote_size: dec!(0.001),
+                    ..Default::default()
+                };
+                Box::new(MLSpreadSkewAlgorithm::new(config, weights))
+            }
         }
     }
 
@@ -89,14 +206,32 @@ impl ParameterPreset {
 
     /// Short description for menu
     pub fn menu_description(&self) -> String {
-        format!(
-            "{} ({}): spread={:.1}bps, skew={:.1}, exp={:+.1}%",
-            self.name,
-            self.created_at_local(),
-            self.spread_bps,
-            self.skew,
-            self.expected_return * 100.0
-        )
+        let algo_label = match self.algorithm_type {
+            AlgorithmType::AvellanedaStoikov => "A-S",
+            AlgorithmType::MLSpreadSkew => "ML",
+        };
+
+        match self.algorithm_type {
+            AlgorithmType::AvellanedaStoikov => format!(
+                "[{}] {} ({}): spread={:.1}bps, skew={:.1}, exp={:+.1}%",
+                algo_label,
+                self.name,
+                self.created_at_local(),
+                self.spread_bps,
+                self.skew,
+                self.expected_return * 100.0
+            ),
+            AlgorithmType::MLSpreadSkew => format!(
+                "[{}] {} ({}): model={}, exp={:+.1}%",
+                algo_label,
+                self.name,
+                self.created_at_local(),
+                self.ml_weights.as_ref()
+                    .map(|w| w.version.as_str())
+                    .unwrap_or("default"),
+                self.expected_return * 100.0
+            ),
+        }
     }
 }
 
@@ -191,6 +326,20 @@ impl PresetStore {
         conservative.created_at = "2025-12-03T16:00:00Z".parse().unwrap_or(Utc::now());
 
         store.presets.push(conservative);
+
+        // ML algorithm with default weights (Dec 6, 2025)
+        let mut ml_default = ParameterPreset::new_ml(
+            "ML-Default",
+            "walk-forward-ml",
+            0.10,
+            MLModelWeights::default(),
+        );
+        ml_default.data_range = "Oct 16 - Dec 2, 2025 (47 days)".to_string();
+        ml_default.num_events = 73000;
+        ml_default.notes = "ML Spread/Skew predictor with baseline weights. Dynamically adjusts spread based on entropy and volatility.".to_string();
+        ml_default.created_at = "2025-12-06T12:00:00Z".parse().unwrap_or(Utc::now());
+
+        store.presets.push(ml_default);
 
         store
     }
