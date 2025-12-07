@@ -10,6 +10,7 @@ pub mod market_maker;
 pub mod risk_manager;
 pub mod mm_simulator;
 pub mod backtest;
+pub mod forward_testing_core;
 pub mod forward_testing;
 pub mod presets;
 pub mod lob_feed_manager;
