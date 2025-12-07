@@ -47,6 +47,7 @@ pub mod regime_optimizer;
 pub mod ml_trainer;
 pub mod walk_forward_ml;
 pub mod paper_validation;
+pub mod session_runner;
 
 pub use replay::{ParquetReplay, ReplayEvent, ReplayConfig};
 pub use harness::{BacktestEngine, BacktestConfig, BacktestResults};
@@ -63,4 +64,8 @@ pub use walk_forward_ml::{WalkForwardMLTrainer, WalkForwardMLConfig, WalkForward
 pub use paper_validation::{
     SessionValidator, ValidationConfig, SessionValidationReport,
     AggregatedValidationReport, Verdict, ValidationCheck,
+};
+pub use session_runner::{
+    SessionRunner, SessionRunnerConfig, SessionState, SessionProgress,
+    SessionResult, FillRateStats, SimulatedEvent, SimulatedTrade,
 };

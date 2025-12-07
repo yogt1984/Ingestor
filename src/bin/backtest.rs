@@ -33,6 +33,7 @@ use ingestor::backtest::replay::ReplayConfig;
 use ingestor::backtest::ml_trainer::{MLTrainer, MLTrainerConfig};
 use ingestor::backtest::walk_forward_ml::{WalkForwardMLTrainer, WalkForwardMLConfig};
 use ingestor::backtest::paper_validation::{SessionValidator, ValidationConfig};
+use ingestor::backtest::session_runner::{SessionRunner, SessionRunnerConfig, SimulatedEvent, FillRateStats};
 use ingestor::market_maker::{MMConfig, RegimeParams, RegimeConfig};
 use ingestor::mm_simulator::SimulatorConfig;
 use ingestor::algorithms::{
@@ -428,6 +429,33 @@ enum Commands {
         output: Option<std::path::PathBuf>,
     },
 
+    /// Simulate a paper trading session using historical data
+    SimulateSession {
+        /// Session duration in hours
+        #[arg(long, default_value = "1.0")]
+        duration: f64,
+
+        /// Preset name to use (optional)
+        #[arg(long)]
+        preset: Option<String>,
+
+        /// Base spread in bps (if no preset)
+        #[arg(long, default_value = "2.0")]
+        spread: f64,
+
+        /// Inventory skew factor (if no preset)
+        #[arg(long, default_value = "0.5")]
+        skew: f64,
+
+        /// Output directory for session files
+        #[arg(long, default_value = "./data/sessions")]
+        sessions_dir: std::path::PathBuf,
+
+        /// Output file for session result (JSON)
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
+
     /// Walk-forward ML training (robust cross-validated ML weight optimization)
     WalkForwardMl {
         /// Number of folds for walk-forward validation
@@ -526,6 +554,9 @@ fn main() -> Result<()> {
         }
         Some(Commands::ValidateSession { session, sessions_dir, min_hours, min_trades, output }) => {
             run_validate_session(session.clone(), sessions_dir.clone(), *min_hours, *min_trades, output.clone())?;
+        }
+        Some(Commands::SimulateSession { duration, preset, spread, skew, sessions_dir, output }) => {
+            run_simulate_session(&cli, *duration, preset.clone(), *spread, *skew, sessions_dir.clone(), output.clone())?;
         }
         Some(Commands::Single) | None => {
             run_single(&cli)?;
@@ -2398,6 +2429,211 @@ fn run_validate_session(
                 println!("  INSUFFICIENT DATA for validation - continue paper trading");
             }
         }
+    }
+
+    println!("═══════════════════════════════════════════════════════════════════════");
+
+    Ok(())
+}
+
+/// Simulate a paper trading session using historical data from the backtest dataset
+fn run_simulate_session(
+    cli: &Cli,
+    duration_hours: f64,
+    preset: Option<String>,
+    spread: f64,
+    skew: f64,
+    sessions_dir: PathBuf,
+    output: Option<PathBuf>,
+) -> Result<()> {
+    use ingestor::backtest::replay::{ParquetReplay, ReplayConfig as ParquetReplayConfig};
+
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!("              PAPER TRADING SESSION SIMULATION                          ");
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!();
+
+    // Build MM config
+    let mut mm_config = MMConfig::default();
+    // Apply spread to all regimes
+    mm_config.regime_params.high_entropy.spread_bps = spread;
+    mm_config.regime_params.medium_entropy.spread_bps = spread;
+    mm_config.regime_params.low_entropy.spread_bps = spread;
+    // Apply skew to all regimes
+    mm_config.regime_params.high_entropy.skew_factor = skew;
+    mm_config.regime_params.medium_entropy.skew_factor = skew;
+    mm_config.regime_params.low_entropy.skew_factor = skew;
+
+    // Build session runner config
+    let runner_config = SessionRunnerConfig {
+        duration_hours,
+        min_duration_hours: 0.1, // Allow short sessions for testing
+        preset_name: preset.clone(),
+        symbol: "BTCUSDT".to_string(),
+        output_dir: sessions_dir.clone(),
+        log_quotes: false,
+        fee_rate: dec!(0.0001),
+        mm_config: Some(mm_config),
+        risk_config: None,
+        sim_config: None,
+        checkpoint_interval_secs: 300,
+        progress_interval: 1000,
+        min_trades: 5,
+    };
+
+    println!("Configuration:");
+    println!("  Duration: {:.1} hours", duration_hours);
+    if let Some(ref p) = preset {
+        println!("  Preset: {}", p);
+    } else {
+        println!("  Spread: {:.1} bps", spread);
+        println!("  Skew: {:.2}", skew);
+    }
+    println!("  Output dir: {:?}", sessions_dir);
+    println!();
+
+    // Create runner
+    let mut runner = SessionRunner::new(runner_config)?;
+    runner.initialize()?;
+
+    // Load historical data
+    println!("Loading historical data from {:?}...", cli.data);
+    let replay_config = ParquetReplayConfig {
+        data_dir: cli.data.clone(),
+        start_time: None,
+        end_time: None,
+        speed: 0.0, // As fast as possible
+    };
+    let mut replay = ParquetReplay::new(replay_config);
+    let _count = replay.load()?;
+    let events = replay.into_events();
+
+    if events.is_empty() {
+        anyhow::bail!("No events loaded from data directory");
+    }
+
+    println!("Loaded {} events", events.len());
+    println!();
+
+    // Calculate how many events correspond to our duration
+    // (we'll use a subset if the data is longer than requested)
+    let first_ts = events.first().map(|e| e.timestamp_ms).unwrap_or(0);
+    let last_ts = events.last().map(|e| e.timestamp_ms).unwrap_or(0);
+    let data_duration_hours = (last_ts - first_ts) as f64 / 3600_000.0;
+
+    println!("Data spans {:.1} hours", data_duration_hours);
+
+    // Use all events if data is shorter than requested duration
+    let target_end_ts = first_ts + (duration_hours * 3600_000.0) as i64;
+
+    println!();
+    println!("Running simulation...");
+    println!();
+
+    // Process events
+    let mut processed = 0;
+    let mut total_fills = 0;
+    let update_interval = events.len() / 20; // Update progress ~20 times
+
+    for event in &events {
+        // Stop if we've exceeded our target duration
+        if event.timestamp_ms > target_end_ts {
+            break;
+        }
+
+        // Convert backtest event to simulated event
+        let sim_event = match SimulatedEvent::from_replay_event(event) {
+            Some(e) => e,
+            None => continue, // Skip events with missing data
+        };
+
+        let fills = runner.process_event(&sim_event)?;
+        total_fills += fills.len();
+        processed += 1;
+
+        // Progress update
+        if update_interval > 0 && processed % update_interval == 0 {
+            let progress = runner.progress();
+            print!("\r  Events: {} | Trades: {} | Fill rate: {:.2}%        ",
+                   progress.events_processed,
+                   progress.metrics.total_trades,
+                   runner.current_fill_rate() * 100.0);
+            std::io::Write::flush(&mut std::io::stdout())?;
+        }
+    }
+
+    println!();
+    println!();
+
+    // Finalize session
+    let result = runner.finalize()?;
+
+    // Print summary
+    println!("Session Results:");
+    println!("{}", "-".repeat(60));
+    println!("  Session ID: {}", result.summary.session_id);
+    println!("  Duration: {:.1} hours", result.summary.metrics.duration_secs / 3600.0);
+    println!("  Events processed: {}", result.events_processed);
+    println!();
+    println!("  Trading Metrics:");
+    println!("    Total trades: {}", result.summary.metrics.total_trades);
+    println!("    Buy/Sell: {} / {}", result.summary.metrics.buy_trades, result.summary.metrics.sell_trades);
+    println!("    Quotes generated: {}", result.summary.metrics.quotes_generated);
+    println!();
+
+    // Fill rate analysis (critical for backtest calibration)
+    let fill_stats = FillRateStats::from_metrics(&result.summary.metrics);
+    println!("  Fill Rate Analysis (CRITICAL):");
+    println!("    Overall fill rate: {:.2}%", fill_stats.overall_fill_rate * 100.0);
+    println!("    Bid fill rate: {:.2}%", fill_stats.bid_fill_rate * 100.0);
+    println!("    Ask fill rate: {:.2}%", fill_stats.ask_fill_rate * 100.0);
+    println!("    95% CI: [{:.2}%, {:.2}%]",
+             fill_stats.ci_lower * 100.0,
+             fill_stats.ci_upper * 100.0);
+
+    // Compare to backtest assumption
+    let backtest_assumption = 0.10;
+    if fill_stats.differs_from_assumption(backtest_assumption, 0.95) {
+        println!();
+        println!("    WARNING: Fill rate differs significantly from backtest assumption (10%)");
+        println!("    Consider recalibrating backtest fill probability!");
+    }
+
+    println!();
+    println!("  Performance:");
+    println!("    Net PnL: {:+.6}", result.summary.metrics.net_pnl);
+    println!("    Win rate: {:.1}%", result.summary.metrics.win_rate * 100.0);
+    println!("    Sharpe ratio: {:.2}", result.summary.metrics.sharpe_ratio);
+    println!("    Max drawdown: {:.2}%", result.summary.metrics.max_drawdown * 100.0);
+    println!();
+    println!("  Files saved:");
+    println!("    Summary: {:?}", result.summary_path);
+    if let Some(ref trades_path) = result.trades_path {
+        println!("    Trades: {:?}", trades_path);
+    }
+
+    if !result.warnings.is_empty() {
+        println!();
+        println!("  Warnings:");
+        for w in &result.warnings {
+            println!("    - {}", w);
+        }
+    }
+
+    // Validity check
+    println!();
+    if result.is_valid_for_validation {
+        println!("  Status: Session is VALID for validation with validate-session");
+    } else {
+        println!("  Status: Session does NOT meet minimum requirements for validation");
+    }
+
+    // Save result JSON if requested
+    if let Some(ref output_path) = output {
+        let json = serde_json::to_string_pretty(&result)?;
+        std::fs::write(output_path, json)?;
+        println!();
+        println!("Full result saved to: {:?}", output_path);
     }
 
     println!("═══════════════════════════════════════════════════════════════════════");
