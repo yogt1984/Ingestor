@@ -116,7 +116,7 @@ impl LogFeedManager {
                                                     }
                                                 }
                                                 Ok(Message::Binary(bin)) => {
-                                                    if let Ok(text) = String::from_utf8(bin) {
+                                                    if let Ok(text) = String::from_utf8(bin.to_vec()) {
                                                         debug!("Trade Message (binary): {}", text);
                                                     }
                                                 }

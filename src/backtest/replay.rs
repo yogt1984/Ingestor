@@ -278,7 +278,7 @@ impl ParquetReplay {
     /// Get a String value from a DataFrame column
     fn get_string(&self, df: &DataFrame, col: &str, row: usize) -> Option<String> {
         df.column(col).ok().and_then(|s| {
-            s.utf8().ok().and_then(|ca| ca.get(row).map(|s| s.to_string()))
+            s.str().ok().and_then(|ca| ca.get(row).map(|s| s.to_string()))
         })
     }
 

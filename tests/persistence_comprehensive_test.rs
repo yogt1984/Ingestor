@@ -191,10 +191,10 @@ fn test_complex_vectors_persisted() {
     assert!(df.column("volume_vector").is_ok());
     assert!(df.column("pwi_vector").is_ok());
     
-    let vol_vec_str = df.column("volume_vector").unwrap().utf8().unwrap().get(0).unwrap();
+    let vol_vec_str = df.column("volume_vector").unwrap().str().unwrap().get(0).unwrap();
     assert!(vol_vec_str.contains("100.0"), "volume_vector should contain price data");
     
-    let pwi_vec_str = df.column("pwi_vector").unwrap().utf8().unwrap().get(0).unwrap();
+    let pwi_vec_str = df.column("pwi_vector").unwrap().str().unwrap().get(0).unwrap();
     assert!(pwi_vec_str.contains("100.5"), "pwi_vector should contain price data");
 }
 
@@ -314,7 +314,7 @@ fn test_timestamp_persisted() {
         std::fs::File::open(&path).unwrap()
     ).finish().unwrap();
     
-    let ts_col = df.column("timestamp").unwrap().utf8().unwrap().get(0).unwrap();
+    let ts_col = df.column("timestamp").unwrap().str().unwrap().get(0).unwrap();
     assert_eq!(ts_col, &expected_ts);
 }
 
@@ -330,11 +330,11 @@ fn test_top_bids_asks_json_serialization() {
         std::fs::File::open(&path).unwrap()
     ).finish().unwrap();
     
-    let top_bids = df.column("top_bids").unwrap().utf8().unwrap().get(0).unwrap();
+    let top_bids = df.column("top_bids").unwrap().str().unwrap().get(0).unwrap();
     assert!(top_bids.contains("100.50"), "top_bids should contain price");
     assert!(top_bids.contains("10.0"), "top_bids should contain volume");
     
-    let top_asks = df.column("top_asks").unwrap().utf8().unwrap().get(0).unwrap();
+    let top_asks = df.column("top_asks").unwrap().str().unwrap().get(0).unwrap();
     assert!(top_asks.contains("101.00"), "top_asks should contain price");
 }
 
