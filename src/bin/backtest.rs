@@ -32,6 +32,7 @@ use ingestor::backtest::{BacktestEngine, BacktestConfig};
 use ingestor::backtest::replay::ReplayConfig;
 use ingestor::backtest::ml_trainer::{MLTrainer, MLTrainerConfig};
 use ingestor::backtest::walk_forward_ml::{WalkForwardMLTrainer, WalkForwardMLConfig};
+use ingestor::backtest::paper_validation::{SessionValidator, ValidationConfig};
 use ingestor::market_maker::{MMConfig, RegimeParams, RegimeConfig};
 use ingestor::mm_simulator::SimulatorConfig;
 use ingestor::algorithms::{
@@ -404,6 +405,29 @@ enum Commands {
         output: Option<std::path::PathBuf>,
     },
 
+    /// Validate paper trading sessions against backtest expectations
+    ValidateSession {
+        /// Path to session summary JSON file (optional, validates all if not specified)
+        #[arg(long)]
+        session: Option<std::path::PathBuf>,
+
+        /// Directory containing session files
+        #[arg(long, default_value = "./data/sessions")]
+        sessions_dir: std::path::PathBuf,
+
+        /// Minimum duration in hours for valid comparison
+        #[arg(long, default_value = "0.5")]
+        min_hours: f64,
+
+        /// Minimum trades for valid comparison
+        #[arg(long, default_value = "5")]
+        min_trades: usize,
+
+        /// Output file for validation report (JSON)
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
+
     /// Walk-forward ML training (robust cross-validated ML weight optimization)
     WalkForwardMl {
         /// Number of folds for walk-forward validation
@@ -499,6 +523,9 @@ fn main() -> Result<()> {
         }
         Some(Commands::WalkForwardMl { folds, min_train_hours, test_hours, rolling, embargo_hours, spread_intercepts, spread_entropy_weights, spread_vol_weights, skew_intercepts, skew_inv_weights, output, weights_output }) => {
             run_walk_forward_ml(&cli, *folds, *min_train_hours, *test_hours, *rolling, *embargo_hours, spread_intercepts, spread_entropy_weights, spread_vol_weights, skew_intercepts, skew_inv_weights, output.clone(), weights_output.clone())?;
+        }
+        Some(Commands::ValidateSession { session, sessions_dir, min_hours, min_trades, output }) => {
+            run_validate_session(session.clone(), sessions_dir.clone(), *min_hours, *min_trades, output.clone())?;
         }
         Some(Commands::Single) | None => {
             run_single(&cli)?;
@@ -2279,6 +2306,101 @@ fn run_walk_forward_ml(
         results.save_weights(weights_path.to_str().unwrap())?;
         println!("Consensus weights saved to: {:?}", weights_path);
     }
+
+    Ok(())
+}
+
+/// Validate paper trading sessions against backtest expectations
+fn run_validate_session(
+    session: Option<PathBuf>,
+    sessions_dir: PathBuf,
+    min_hours: f64,
+    min_trades: usize,
+    output: Option<PathBuf>,
+) -> Result<()> {
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!("              PAPER TRADING VALIDATION                                  ");
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!();
+
+    let config = ValidationConfig {
+        min_duration_hours: min_hours,
+        min_trades,
+        sessions_dir: sessions_dir.clone(),
+        ..Default::default()
+    };
+
+    let validator = SessionValidator::new(config)?;
+
+    if let Some(session_path) = session {
+        // Validate single session
+        println!("Validating single session: {:?}", session_path);
+        println!();
+
+        let report = validator.validate_session(&session_path)?;
+        report.print_report();
+
+        // Save report if output specified
+        if let Some(ref output_path) = output {
+            report.save(output_path)?;
+            println!();
+            println!("Report saved to: {:?}", output_path);
+        }
+
+        // Return exit code based on verdict
+        match report.verdict {
+            ingestor::backtest::Verdict::Pass => {
+                println!();
+                println!("Result: Session PASSED validation");
+            }
+            ingestor::backtest::Verdict::Warning => {
+                println!();
+                println!("Result: Session passed with WARNINGS");
+            }
+            ingestor::backtest::Verdict::Fail => {
+                println!();
+                println!("Result: Session FAILED validation");
+            }
+            ingestor::backtest::Verdict::InsufficientData => {
+                println!();
+                println!("Result: INSUFFICIENT DATA for validation");
+            }
+        }
+    } else {
+        // Validate all sessions in directory
+        println!("Validating all sessions in: {:?}", sessions_dir);
+        println!();
+
+        let report = validator.validate_all_sessions(&sessions_dir)?;
+        report.print_report();
+
+        // Save report if output specified
+        if let Some(ref output_path) = output {
+            report.save(output_path)?;
+            println!();
+            println!("Report saved to: {:?}", output_path);
+        }
+
+        // Summary
+        println!();
+        println!("Overall Result:");
+        match report.verdict {
+            ingestor::backtest::Verdict::Pass => {
+                println!("  Paper trading VALIDATES backtest expectations");
+            }
+            ingestor::backtest::Verdict::Warning => {
+                println!("  Paper trading shows MIXED results - more data needed");
+            }
+            ingestor::backtest::Verdict::Fail => {
+                println!("  Paper trading DOES NOT VALIDATE backtest expectations");
+            }
+            ingestor::backtest::Verdict::InsufficientData => {
+                println!("  INSUFFICIENT DATA for validation - continue paper trading");
+            }
+        }
+    }
+
+    println!("═══════════════════════════════════════════════════════════════════════");
 
     Ok(())
 }
