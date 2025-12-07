@@ -176,7 +176,7 @@ impl LobFeedManager {
                                                         }
                                                     }
                                                     Ok(Message::Binary(bin)) => {
-                                                        if let Ok(text) = String::from_utf8(bin) {
+                                                        if let Ok(text) = String::from_utf8(bin.to_vec()) {
                                                             if let Ok(parsed) = serde_json::from_str::<BinanceDepthUpdate>(&text) {
                                                                 debug!("Parsed Binance depth update (binary)");
                                                                 let parsed_bids = Self::parse_levels(parsed.bids);

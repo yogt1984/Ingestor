@@ -604,7 +604,7 @@ mod tests {
         // Verify top_bids JSON serialization
         let file = fs::File::open(path)?;
         let df = ParquetReader::new(file).finish()?;
-        let json_str = df.column("top_bids")?.utf8()?.get(0).unwrap();
+        let json_str = df.column("top_bids")?.str()?.get(0).unwrap();
         assert!(json_str.contains("100.50"));
         assert!(json_str.contains("10.0"));
         
