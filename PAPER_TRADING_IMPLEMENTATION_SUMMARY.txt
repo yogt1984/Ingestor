@@ -1,0 +1,381 @@
+================================================================================
+  PAPER TRADING INFRASTRUCTURE - IMPLEMENTATION CHECKLIST
+================================================================================
+
+PROJECT: Ingestor - Real-Time Market Microstructure & Market Making
+STATUS: 70-80% Complete for 4-Week Validation Feature
+ANALYSIS DATE: 2025-12-07
+
+================================================================================
+  1. CORE PAPER TRADING (100% COMPLETE)
+================================================================================
+
+✅ MMSimulator (src/mm_simulator.rs:1-197)
+   - Queue position-based fill simulation
+   - SimulatorStats tracking (bid/ask fills, misses, volume)
+   - Configurable minimum quote age & queue position
+   - 4 unit tests included
+
+✅ GenericPaperTradingEngine (src/mm_simulator.rs:273-409)
+   - Algorithm-agnostic wrapper (supports Avellaneda-Stoikov & ML)
+   - on_features_with_book() - quote generation
+   - on_trade() - fill processing
+   - Mark-to-market updates
+   - 0 state dependencies
+
+✅ RiskManagedPaperTradingEngine (src/mm_simulator.rs:462-785)
+   - Pre-quote risk checks (volatility, inventory, drawdown)
+   - Post-fill updates (PnL tracking, state transitions)
+   - State machine: Normal → ReduceOnly → Halt → Emergency
+   - Reduce-only quote/fill filtering
+   - 16 comprehensive unit tests
+
+✅ Risk Manager Integration (src/risk_manager.rs)
+   - Max inventory limits (soft & hard)
+   - Drawdown kill switch
+   - Daily/per-trade loss limits
+   - Volatility circuit breaker
+   - Rate limiting (quotes/fills per minute)
+   - 14 unit tests
+
+LINES OF CODE: 1,244 + 1,392 = 2,636 LOC
+TESTS: 30+ comprehensive unit tests
+STATUS: PRODUCTION READY
+
+================================================================================
+  2. SESSION LOGGING & PERSISTENCE (100% COMPLETE)
+================================================================================
+
+✅ ForwardTestSession (src/forward_testing_core.rs:284-659)
+   - Session ID generation (YYYYMMDD_HHMMSS format)
+   - Trade record logging (24 fields per trade)
+   - Quote record logging (12 fields per quote)
+   - Real-time metrics calculation
+   - Rolling Sharpe ratio computation
+
+✅ SessionMetrics (src/forward_testing_core.rs:179-282)
+   - 24 performance metrics:
+     * Trading: total trades, buy/sell, volume, inventory
+     * Performance: gross/net/realized/unrealized PnL
+     * Quality: Sharpe, win rate, profit factor, avg slippage
+     * Fills: bid/ask fill rates, quote generation
+     * Risk: max drawdown, peak inventory
+
+✅ Session Persistence
+   - JSON serialization to ./data/sessions/
+   - Trades file: trades_*.json
+   - Summary file: summary_*.json
+   - Full test coverage (5+ tests)
+
+DATA LOCATION: ./data/sessions/ (currently: 1 test session)
+LINES OF CODE: 1,469 LOC
+TESTS: 20+ unit tests
+STATUS: PRODUCTION READY (never tested with real trades)
+
+================================================================================
+  3. TUI OPTION [6] - PAPER TRADING WITH PRESETS (100% COMPLETE)
+================================================================================
+
+✅ Menu Integration (src/tui.rs:971-981)
+   - Option [6]: "Paper Trade w/ Preset"
+   - Shows available preset count
+   - Display latest preset date
+
+✅ UI Modes for Paper Trading
+   - AppMode::PresetSelect
+     * Arrow key navigation through presets
+     * Display preset name, spread, skew, expected return
+     * Confirm selection with Enter
+   
+   - AppMode::PaperTradePreset
+     * Live ticker with real-time features
+     * Paper trading engine running
+     * Risk state visualization (Normal/ReduceOnly/Halt)
+     * Trade counter, PnL updates, inventory display
+     * Session metrics on bottom panel
+
+✅ Preset Selection Flow (src/tui.rs:554-666)
+   - Load PresetStore from ./data/presets.json
+   - Render preset list with descriptions
+   - Handle up/down arrow keys
+   - Create algorithm from selected preset
+   - Initialize RiskManagedPaperTradingEngine
+   - Create ForwardTestSession with preset config
+
+LINES OF CODE: ~600 LOC (spread across tui.rs)
+INTEGRATION: Fully wired into main event loop
+STATUS: PRODUCTION READY
+
+================================================================================
+  4. PRESET SYSTEM (100% COMPLETE)
+================================================================================
+
+✅ ParameterPreset (src/presets.rs:14-49)
+   - Human-readable name
+   - Creation timestamp & optimization method
+   - Expected metrics (return, Sharpe, trades, win rate)
+   - Parameters: spread, skew, entropy thresholds
+   - Notes field
+   - Algorithm type (Avellaneda-Stoikov or MLSpreadSkew)
+   - ML weights (optional, embedded or file path)
+
+✅ PresetStore (src/presets.rs:239-386)
+   - Load/save from ./data/presets.json
+   - 4 default presets included:
+     1. GridSearch-Best (A-S, +5.14% expected)
+     2. GridSearch-Conservative (A-S, +1.09% expected)
+     3. ML-Trained (ML, walk-forward, +3.2% expected)
+     4. ML-Baseline (ML, default weights)
+
+✅ Algorithm Creation (src/presets.rs:164-185)
+   - to_mm_config() - Convert to MarketMakerConfig
+   - create_algorithm() - Returns Box<dyn MarketMakingAlgorithm>
+   - Support for both A-S and ML algorithms
+
+LINES OF CODE: 407 LOC
+PRESETS: 4 ready to use
+STATUS: PRODUCTION READY
+
+================================================================================
+  5. COMPARISON & VALIDATION (100% COMPLETE)
+================================================================================
+
+✅ PresetComparison (src/forward_testing_core.rs:846-1178)
+   - Expected vs Actual metrics
+   - Normalization for duration (trades/hour)
+   - Verdict generation (Good/Warning/Poor/InsufficientData)
+   - Issues & recommendations
+   - 8 unit tests
+
+✅ BacktestComparison (src/forward_testing_core.rs:670-842)
+   - Backtest metrics vs session metrics
+   - Side-by-side comparison (Sharpe, return, drawdown, win rate)
+   - Difference calculation
+   - Assessment string (identifies overfitting, execution issues)
+
+✅ Advanced Forward Testing (src/forward_testing/, 5,105 LOC)
+   - A/B Testing Framework (39KB)
+     * Multi-variant comparison
+     * Statistical significance testing
+     * Bootstrap confidence intervals
+     * Sequential analysis support
+   
+   - Drift Detection (27KB)
+     * Sharpe degradation alerts
+     * Fill rate changes
+     * Win rate shifts
+   
+   - Regime Monitoring (51KB)
+     * Per-regime performance metrics
+     * Regime transition tracking
+   
+   - Statistical Tools (41KB)
+     * T-tests, Mann-Whitney U
+     * Bootstrap CI, Cohen's d
+
+STATUS: COMPREHENSIVE FRAMEWORK EXISTS
+
+================================================================================
+  6. WHAT'S MISSING FOR "4-WEEK VALIDATION"
+================================================================================
+
+❌ MISSING 1: Multi-Session Campaign Management
+   - ValidationCampaign struct
+   - Schedule multiple paper trades over 4 weeks
+   - Combine metrics across sessions
+   - Estimate: 300-400 LOC
+
+❌ MISSING 2: Daily/Weekly Metrics Aggregation
+   - DailyMetrics struct
+   - WeeklyMetrics struct
+   - CampaignMetrics struct
+   - Consistency scoring (Sharpe of daily returns)
+   - Estimate: 400-500 LOC
+
+❌ MISSING 3: Persistent Checkpoints
+   - ValidationCheckpoint struct
+   - Save/load for crash recovery
+   - Resume capability
+   - Estimate: 200-300 LOC
+
+❌ MISSING 4: Automated Session Comparison
+   - on_session_end() hook
+   - Auto-generate PresetComparison report
+   - Save to ./data/validation_reports/
+   - Integration into TUI
+   - Estimate: 200-300 LOC
+
+❌ MISSING 5: Validation Gates & Decision Engine
+   - ValidationGates struct (thresholds)
+   - ValidationDecision enum (GoLive/Continue/Investigate/Abort)
+   - Auto-decided based on gates
+   - Estimate: 200-300 LOC
+
+❌ MISSING 6: Stability Metrics
+   - Sharpe of daily returns
+   - Coefficient of variation
+   - Consistency score
+   - Estimate: 150-200 LOC
+
+❌ MISSING 7: TUI Campaign Dashboard
+   - AppMode::ValidationCampaign
+   - Campaign overview screen
+   - Daily/weekly metrics display
+   - Session history
+   - Approval gates UI
+   - Estimate: 500-700 LOC
+
+❌ MISSING 8: Session Comparison Reports
+   - SessionComparison struct
+   - Compare metrics across sessions
+   - Regime-wise breakdown
+   - Alert generation
+   - Estimate: 200-300 LOC
+
+❌ MISSING 9: Drift Alerts Integration
+   - Hook drift detection into campaign
+   - Alert on Sharpe degradation
+   - Fill rate changes
+   - Estimate: 150-200 LOC
+
+❌ MISSING 10: Regime Coverage Tracking
+   - Track regimes seen during campaign
+   - Compare against backtest coverage
+   - Alert if missing regimes
+   - Estimate: 150-200 LOC
+
+TOTAL MISSING: ~2,500-3,500 LOC
+EFFORT ESTIMATE: 3-4 weeks for full feature
+
+================================================================================
+  7. QUICK START: WHERE TO ADD CODE
+================================================================================
+
+FILE 1: Create src/validation_campaign.rs (NEW, ~1000 LOC)
+   - ValidationCampaign struct
+   - DailyMetrics, WeeklyMetrics, CampaignMetrics
+   - ValidationGates, ValidationDecision
+   - Aggregation functions
+   - Session comparison logic
+
+FILE 2: Extend src/forward_testing_core.rs (~300 LOC)
+   - ValidationCheckpoint struct
+   - save_checkpoint() / load_checkpoint()
+   - session_to_daily_metrics()
+   - daily_to_weekly_metrics()
+
+FILE 3: Extend src/tui.rs (~500 LOC)
+   - AppMode::ValidationCampaign
+   - draw_campaign_dashboard()
+   - Campaign event handlers
+   - Session end hook
+
+FILE 4: Extend src/main.rs (~100 LOC)
+   - Wire up campaign scheduler
+   - Call session_end() hook
+   - Check validation gates
+   - Schedule next session
+
+FILE 5: Extend src/mm_simulator.rs (~100 LOC)
+   - Maybe: campaign_id field in RiskManagedPaperTradingEngine
+   - Tracking across multiple sessions
+
+================================================================================
+  8. FILE MANIFEST & LINE COUNTS
+================================================================================
+
+Core Infrastructure (Ready):
+  ✅ src/mm_simulator.rs                    1,244 lines
+  ✅ src/forward_testing_core.rs            1,469 lines
+  ✅ src/risk_manager.rs                    1,392 lines
+  ✅ src/presets.rs                           407 lines
+  ✅ src/tui.rs (partial)                     600 lines (paper trading)
+  ✅ src/forward_testing/ab_testing.rs       39 KB
+  ✅ src/forward_testing/drift_detection.rs  27 KB
+  ✅ src/forward_testing/regime_monitor.rs   51 KB
+  ✅ src/forward_testing/statistical.rs      41 KB
+  
+SUBTOTAL READY: ~6,100 LOC + 158 KB
+
+Missing for 4-Week Validation:
+  ❌ src/validation_campaign.rs (NEW)       ~1,000 lines
+  ❌ src/forward_testing_core.rs (extend)     ~300 lines
+  ❌ src/tui.rs (extend)                      ~500 lines
+  ❌ src/main.rs (extend)                     ~100 lines
+  ❌ src/mm_simulator.rs (extend)             ~100 lines
+
+SUBTOTAL MISSING: ~2,000 lines
+
+TOTAL WHEN COMPLETE: ~8,100 LOC
+
+================================================================================
+  9. RISK ASSESSMENT
+================================================================================
+
+Current Implementation Risk: LOW
+  - Core engines are well-tested (30+ tests)
+  - Risk manager has state machine safeguards
+  - Session logging is straightforward
+  - Single-session workflows are complete
+
+4-Week Validation Risk: MEDIUM
+  - New code needs careful state management
+  - Multi-session aggregation can be tricky
+  - Checkpoint/recovery logic is critical
+  - UI complexity increases significantly
+
+Mitigation Strategies:
+  1. Build incrementally (start with campaign struct)
+  2. Add comprehensive tests for aggregation logic
+  3. Use existing comparison infrastructure
+  4. Leverage StatisticalTester for decision gates
+  5. Keep checkpoint save frequency reasonable (every session end)
+
+================================================================================
+  10. DEPENDENCIES & INTEGRATION POINTS
+================================================================================
+
+New Code Depends On:
+  ✅ RiskManagedPaperTradingEngine (ready)
+  ✅ ForwardTestSession (ready)
+  ✅ PresetComparison (ready)
+  ✅ BacktestComparison (ready)
+  ✅ StatisticalTester (ready)
+  ✅ PresetStore (ready)
+
+New Code Will Provide:
+  ✅ ValidationCampaign
+  ✅ Campaign scheduling
+  ✅ Multi-session aggregation
+  ✅ Decision gates
+  ✅ TUI dashboard
+
+Integration Points:
+  1. TUI [6] → Create ValidationCampaign → Run daily
+  2. ForwardTestSession.end() → Generate comparison → Check gates
+  3. ValidationGates → Decide Continue/GoLive/Abort
+  4. Campaign Dashboard → Show 4-week status
+
+================================================================================
+  SUMMARY: Ready to Build
+================================================================================
+
+Positive:
+  ✅ 70-80% of code is DONE
+  ✅ Core engines are production-ready
+  ✅ Rich comparison infrastructure exists
+  ✅ Session logging is complete
+  ✅ Risk management is integrated
+
+To Do:
+  ❌ Campaign management (500 lines)
+  ❌ Session aggregation (600 lines)
+  ❌ Persistent checkpoints (200 lines)
+  ❌ Decision engine (300 lines)
+  ❌ TUI campaign dashboard (500 lines)
+
+Effort: 2-4 weeks for full 4-week validation feature
+Complexity: Medium (state management + aggregation)
+Risk: Low (builds on proven infrastructure)
+
+================================================================================
