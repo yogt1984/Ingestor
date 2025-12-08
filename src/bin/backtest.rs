@@ -34,6 +34,9 @@ use ingestor::backtest::ml_trainer::{MLTrainer, MLTrainerConfig};
 use ingestor::backtest::walk_forward_ml::{WalkForwardMLTrainer, WalkForwardMLConfig};
 use ingestor::backtest::paper_validation::{SessionValidator, ValidationConfig};
 use ingestor::backtest::session_runner::{SessionRunner, SessionRunnerConfig, SimulatedEvent, FillRateStats};
+use ingestor::backtest::validation_campaign::{
+    ValidationCampaign, CampaignConfig, CampaignReport, ValidationGates, ValidationVerdict,
+};
 use ingestor::market_maker::{MMConfig, RegimeParams, RegimeConfig};
 use ingestor::mm_simulator::SimulatorConfig;
 use ingestor::algorithms::{
@@ -506,6 +509,65 @@ enum Commands {
         #[arg(long)]
         weights_output: Option<std::path::PathBuf>,
     },
+
+    /// Simulate a 4-week validation campaign using historical data
+    SimulateCampaign {
+        /// Number of weeks to simulate (default 4)
+        #[arg(long, default_value = "4")]
+        weeks: u8,
+
+        /// Hours per daily session (default 8.0)
+        #[arg(long, default_value = "8.0")]
+        session_hours: f64,
+
+        /// Minimum sessions per week for valid week (default 5)
+        #[arg(long, default_value = "5")]
+        min_sessions_per_week: u8,
+
+        /// Preset name to use (optional)
+        #[arg(long)]
+        preset: Option<String>,
+
+        /// Base spread in bps (if no preset)
+        #[arg(long, default_value = "2.0")]
+        spread: f64,
+
+        /// Inventory skew factor (if no preset)
+        #[arg(long, default_value = "0.5")]
+        skew: f64,
+
+        /// Expected fill rate from backtest (for comparison)
+        #[arg(long, default_value = "0.10")]
+        expected_fill_rate: f64,
+
+        /// Expected Sharpe from backtest
+        #[arg(long, default_value = "1.0")]
+        expected_sharpe: f64,
+
+        /// Expected return from backtest
+        #[arg(long, default_value = "0.05")]
+        expected_return: f64,
+
+        /// Minimum weekly trades for gate pass
+        #[arg(long, default_value = "50")]
+        min_weekly_trades: usize,
+
+        /// Maximum drawdown percentage for gate pass
+        #[arg(long, default_value = "5.0")]
+        max_drawdown_pct: f64,
+
+        /// Minimum win rate for gate pass
+        #[arg(long, default_value = "0.40")]
+        min_win_rate: f64,
+
+        /// Output directory for campaign files
+        #[arg(long, default_value = "./data/campaigns")]
+        campaigns_dir: std::path::PathBuf,
+
+        /// Output file for campaign report (JSON)
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -557,6 +619,9 @@ fn main() -> Result<()> {
         }
         Some(Commands::SimulateSession { duration, preset, spread, skew, sessions_dir, output }) => {
             run_simulate_session(&cli, *duration, preset.clone(), *spread, *skew, sessions_dir.clone(), output.clone())?;
+        }
+        Some(Commands::SimulateCampaign { weeks, session_hours, min_sessions_per_week, preset, spread, skew, expected_fill_rate, expected_sharpe, expected_return, min_weekly_trades, max_drawdown_pct, min_win_rate, campaigns_dir, output }) => {
+            run_simulate_campaign(&cli, *weeks, *session_hours, *min_sessions_per_week, preset.clone(), *spread, *skew, *expected_fill_rate, *expected_sharpe, *expected_return, *min_weekly_trades, *max_drawdown_pct, *min_win_rate, campaigns_dir.clone(), output.clone())?;
         }
         Some(Commands::Single) | None => {
             run_single(&cli)?;
@@ -2639,4 +2704,356 @@ fn run_simulate_session(
     println!("═══════════════════════════════════════════════════════════════════════");
 
     Ok(())
+}
+
+/// Simulate a 4-week validation campaign using historical data
+#[allow(clippy::too_many_arguments)]
+fn run_simulate_campaign(
+    cli: &Cli,
+    weeks: u8,
+    session_hours: f64,
+    min_sessions_per_week: u8,
+    preset: Option<String>,
+    spread: f64,
+    skew: f64,
+    expected_fill_rate: f64,
+    expected_sharpe: f64,
+    expected_return: f64,
+    min_weekly_trades: usize,
+    max_drawdown_pct: f64,
+    min_win_rate: f64,
+    campaigns_dir: PathBuf,
+    output: Option<PathBuf>,
+) -> Result<()> {
+    use ingestor::backtest::replay::{ParquetReplay, ReplayConfig as ParquetReplayConfig};
+    use chrono::{Utc, TimeZone, NaiveDate};
+    use std::collections::BTreeMap;
+
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!("              VALIDATION CAMPAIGN SIMULATION                            ");
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!();
+
+    // Build campaign config
+    let preset_name = preset.clone().unwrap_or_else(|| format!("CLI-{:.1}bps-{:.2}skew", spread, skew));
+    let campaign_config = CampaignConfig {
+        preset_name: preset_name.clone(),
+        target_weeks: weeks,
+        session_hours_per_day: session_hours,
+        min_sessions_per_week,
+        symbol: "BTCUSDT".to_string(),
+        output_dir: campaigns_dir.clone(),
+        expected_fill_rate,
+        expected_sharpe,
+        expected_return,
+        gates: ValidationGates {
+            min_weekly_trades,
+            min_fill_rate_ratio: 0.5,
+            max_drawdown_pct,
+            min_win_rate,
+            fill_rate_warning_ratio: 0.7,
+            sharpe_warning: 0.5,
+            pnl_warning_ratio: 0.6,
+        },
+    };
+
+    println!("Campaign Configuration:");
+    println!("  Preset: {}", preset_name);
+    println!("  Target weeks: {}", weeks);
+    println!("  Session hours/day: {:.1}", session_hours);
+    println!("  Min sessions/week: {}", min_sessions_per_week);
+    println!("  Expected fill rate: {:.1}%", expected_fill_rate * 100.0);
+    println!("  Expected Sharpe: {:.2}", expected_sharpe);
+    println!("  Expected return: {:.2}%", expected_return * 100.0);
+    println!();
+    println!("Validation Gates:");
+    println!("  Min weekly trades: {}", min_weekly_trades);
+    println!("  Max drawdown: {:.1}%", max_drawdown_pct);
+    println!("  Min win rate: {:.1}%", min_win_rate * 100.0);
+    println!();
+
+    // Create campaign
+    let mut campaign = ValidationCampaign::new(campaign_config)?;
+
+    // Build MM config
+    let mut mm_config = MMConfig::default();
+    mm_config.regime_params.high_entropy.spread_bps = spread;
+    mm_config.regime_params.medium_entropy.spread_bps = spread;
+    mm_config.regime_params.low_entropy.spread_bps = spread;
+    mm_config.regime_params.high_entropy.skew_factor = skew;
+    mm_config.regime_params.medium_entropy.skew_factor = skew;
+    mm_config.regime_params.low_entropy.skew_factor = skew;
+
+    // Load historical data
+    println!("Loading historical data from {:?}...", cli.data);
+    let replay_config = ParquetReplayConfig {
+        data_dir: cli.data.clone(),
+        start_time: None,
+        end_time: None,
+        speed: 0.0,
+    };
+    let mut replay = ParquetReplay::new(replay_config);
+    let _count = replay.load()?;
+    let events = replay.into_events();
+
+    if events.is_empty() {
+        anyhow::bail!("No events loaded from data directory");
+    }
+
+    println!("Loaded {} events", events.len());
+
+    // Group events by day
+    let mut events_by_day: BTreeMap<NaiveDate, Vec<_>> = BTreeMap::new();
+    for event in events {
+        let datetime = Utc.timestamp_millis_opt(event.timestamp_ms).single()
+            .ok_or_else(|| anyhow::anyhow!("Invalid timestamp: {}", event.timestamp_ms))?;
+        let date = datetime.date_naive();
+        events_by_day.entry(date).or_default().push(event);
+    }
+
+    let total_days = events_by_day.len();
+    let required_days = (weeks as usize) * 7;
+    println!("Data spans {} days (need {} for {} weeks)", total_days, required_days, weeks);
+    println!();
+
+    if total_days < min_sessions_per_week as usize {
+        anyhow::bail!(
+            "Insufficient data: {} days available, need at least {} days",
+            total_days, min_sessions_per_week
+        );
+    }
+
+    // Start campaign
+    campaign.start()?;
+    println!("Campaign started: {}", campaign.campaign_id);
+    println!();
+    println!("Running daily sessions...");
+    println!("{}", "-".repeat(70));
+
+    // Process each day as a session
+    let mut session_count = 0;
+    let target_days = required_days.min(total_days);
+
+    for (day_idx, (date, day_events)) in events_by_day.iter().enumerate() {
+        if day_idx >= target_days {
+            break;
+        }
+
+        // Skip days with too few events
+        if day_events.len() < 100 {
+            println!("  Day {} ({}) - Skipping: only {} events", day_idx + 1, date, day_events.len());
+            continue;
+        }
+
+        // Calculate session duration from events
+        let first_ts = day_events.first().map(|e| e.timestamp_ms).unwrap_or(0);
+        let last_ts = day_events.last().map(|e| e.timestamp_ms).unwrap_or(0);
+        let day_duration_hours = (last_ts - first_ts) as f64 / 3600_000.0;
+
+        // Use actual day duration or configured session_hours, whichever is smaller
+        let effective_hours = day_duration_hours.min(session_hours);
+
+        // Skip if session would be too short
+        if effective_hours < 0.1 {
+            println!("  Day {} ({}) - Skipping: duration {:.2}h too short", day_idx + 1, date, effective_hours);
+            continue;
+        }
+
+        // Build session runner config for this day
+        let runner_config = SessionRunnerConfig {
+            duration_hours: effective_hours,
+            min_duration_hours: 0.1,
+            preset_name: preset.clone(),
+            symbol: "BTCUSDT".to_string(),
+            output_dir: campaigns_dir.join("sessions"),
+            log_quotes: false,
+            fee_rate: dec!(0.0001),
+            mm_config: Some(mm_config.clone()),
+            risk_config: None,
+            sim_config: None,
+            checkpoint_interval_secs: 300,
+            progress_interval: 5000,
+            min_trades: 1,
+        };
+
+        // Create and run session
+        let mut runner = SessionRunner::new(runner_config)?;
+        runner.initialize()?;
+
+        // Process day's events
+        let target_end_ts = first_ts + (effective_hours * 3600_000.0) as i64;
+        for event in day_events {
+            if event.timestamp_ms > target_end_ts {
+                break;
+            }
+            if let Some(sim_event) = SimulatedEvent::from_replay_event(event) {
+                let _ = runner.process_event(&sim_event)?;
+            }
+        }
+
+        // Finalize session
+        let result = runner.finalize()?;
+        session_count += 1;
+
+        // Print session summary
+        let metrics = &result.summary.metrics;
+        print!("  Day {:2} ({}) | ", day_idx + 1, date);
+        print!("Trades: {:4} | ", metrics.total_trades);
+        print!("PnL: {:+.6} | ", metrics.net_pnl);
+        print!("WR: {:5.1}% | ", metrics.win_rate * 100.0);
+        print!("Fill: {:5.2}%",
+            if metrics.quotes_generated > 0 {
+                (metrics.total_trades as f64 / metrics.quotes_generated as f64) * 100.0
+            } else {
+                0.0
+            }
+        );
+        println!();
+
+        // Add session to campaign
+        campaign.add_session(result)?;
+
+        // Check for weekly gate after each week
+        let sessions_this_week = (day_idx + 1) % 7;
+        if sessions_this_week == 0 {
+            let week_num = ((day_idx + 1) / 7) as u8;
+            if let Some(gate) = campaign.check_weekly_gate() {
+                println!();
+                println!("  Week {} Gate: {:?}", week_num, gate);
+                println!();
+            }
+        }
+    }
+
+    println!("{}", "-".repeat(70));
+    println!();
+    println!("Campaign simulation complete: {} sessions processed", session_count);
+    println!();
+
+    // Stop campaign and generate report
+    campaign.stop()?;
+    let report = campaign.generate_report();
+
+    // Print report
+    print_campaign_report(&report);
+
+    // Save report if output specified
+    if let Some(ref output_path) = output {
+        let json = serde_json::to_string_pretty(&report)?;
+        std::fs::write(output_path, &json)?;
+        println!();
+        println!("Campaign report saved to: {:?}", output_path);
+    }
+
+    println!("═══════════════════════════════════════════════════════════════════════");
+
+    Ok(())
+}
+
+/// Print a formatted campaign report
+fn print_campaign_report(report: &CampaignReport) {
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!("                     CAMPAIGN REPORT                                    ");
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!();
+
+    let metrics = &report.campaign_metrics;
+
+    println!("Campaign Summary:");
+    println!("  Preset: {}", report.config.preset_name);
+    println!("  Status: {:?}", report.status);
+    println!("  Duration: {} weeks, {} sessions", metrics.weeks_completed, metrics.total_sessions);
+    println!("  Total hours: {:.1}", metrics.total_hours);
+    println!();
+
+    println!("Trading Metrics:");
+    println!("  Total trades: {}", metrics.total_trades);
+    println!("  Total PnL: {:+.6}", metrics.total_pnl);
+    println!("  Win rate: {:.1}%", metrics.overall_win_rate * 100.0);
+    println!("  Max drawdown: {:.2}%", metrics.max_drawdown);
+    println!();
+
+    println!("Statistical Analysis:");
+    println!("  Sharpe ratio: {:.2}", metrics.overall_sharpe);
+    println!("  Sharpe 95% CI: [{:.2}, {:.2}]", metrics.sharpe_ci_lower, metrics.sharpe_ci_upper);
+    println!("  PSR (prob. Sharpe > 0): {:.1}%", metrics.psr * 100.0);
+    println!();
+
+    println!("Fill Rate Calibration:");
+    println!("  Actual fill rate: {:.2}%", metrics.overall_fill_rate * 100.0);
+    println!("  Expected fill rate: {:.2}%", report.config.expected_fill_rate * 100.0);
+    println!("  Calibration ratio: {:.1}%", metrics.fill_rate_calibration * 100.0);
+    println!("  Fill rate 95% CI: [{:.2}%, {:.2}%]",
+             metrics.fill_rate_ci_lower * 100.0,
+             metrics.fill_rate_ci_upper * 100.0);
+    println!();
+
+    println!("Comparison to Backtest Expectations:");
+    println!("  PnL vs expected: {:.1}%", metrics.pnl_vs_expected * 100.0);
+    println!("  Sharpe vs expected: {:.1}%", metrics.sharpe_vs_expected * 100.0);
+    println!();
+
+    // Weekly summaries
+    if !report.weekly_summaries.is_empty() {
+        println!("Weekly Summaries:");
+        println!("{}", "-".repeat(70));
+        for week in &report.weekly_summaries {
+            println!("  Week {}: {} sessions, {} trades, PnL: {:+.6}, Sharpe: {:.2}, Gate: {:?}",
+                     week.week_number,
+                     week.session_count,
+                     week.total_trades,
+                     week.cumulative_pnl,
+                     week.weekly_sharpe,
+                     week.gate_result);
+        }
+        println!("{}", "-".repeat(70));
+        println!();
+    }
+
+    // Verdict
+    println!("VALIDATION VERDICT: {:?}", report.verdict);
+    println!();
+    if !report.verdict_reasons.is_empty() {
+        println!("Reasons:");
+        for reason in &report.verdict_reasons {
+            println!("  - {}", reason);
+        }
+        println!();
+    }
+
+    // Recommendations
+    if !report.recommendations.is_empty() {
+        println!("Recommendations:");
+        for rec in &report.recommendations {
+            println!("  - {}", rec);
+        }
+        println!();
+    }
+
+    // Action summary based on verdict
+    match report.verdict {
+        ValidationVerdict::GoLive => {
+            println!("ACTION: Strategy is ready for LIVE TRADING");
+            println!("  - All validation gates passed");
+            println!("  - Statistical significance confirmed (PSR > 90%)");
+            println!("  - Fill rate calibration acceptable");
+        }
+        ValidationVerdict::Recalibrate => {
+            println!("ACTION: RECALIBRATE backtest assumptions before proceeding");
+            println!("  - Update fill probability based on actual fill rate");
+            println!("  - Re-run backtest with calibrated parameters");
+            println!("  - Run another validation campaign");
+        }
+        ValidationVerdict::Reject => {
+            println!("ACTION: REJECT this strategy configuration");
+            println!("  - Do not proceed to live trading");
+            println!("  - Review strategy parameters");
+            println!("  - Consider different spread/skew settings");
+        }
+        ValidationVerdict::Incomplete => {
+            println!("ACTION: EXTEND validation period");
+            println!("  - Insufficient data for conclusive validation");
+            println!("  - Continue collecting paper trading data");
+        }
+    }
 }
