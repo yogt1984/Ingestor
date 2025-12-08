@@ -14,6 +14,7 @@
 //! - `oos_validation`: Out-of-sample validation and overfitting detection
 //! - `regime_optimizer`: Regime-specific parameter optimization
 //! - `ml_trainer`: ML weight training with grid search optimization
+//! - `validation_campaign`: 4-week validation campaign infrastructure
 //!
 //! # Usage
 //!
@@ -48,6 +49,7 @@ pub mod ml_trainer;
 pub mod walk_forward_ml;
 pub mod paper_validation;
 pub mod session_runner;
+pub mod validation_campaign;
 
 pub use replay::{ParquetReplay, ReplayEvent, ReplayConfig};
 pub use harness::{BacktestEngine, BacktestConfig, BacktestResults};
@@ -68,4 +70,9 @@ pub use paper_validation::{
 pub use session_runner::{
     SessionRunner, SessionRunnerConfig, SessionState, SessionProgress,
     SessionResult, FillRateStats, SimulatedEvent, SimulatedTrade,
+};
+pub use validation_campaign::{
+    ValidationCampaign, CampaignConfig, CampaignStatus, CampaignProgress,
+    CampaignReport, CampaignMetrics, WeeklyMetrics, DailyMetrics,
+    ValidationGates, GateResult, ValidationVerdict,
 };
