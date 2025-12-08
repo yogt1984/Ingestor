@@ -46,6 +46,7 @@ enum AppMode {
     Backtest,        // Running backtest
     WalkForward,     // Walk-forward validation
     DataQuality,     // Data quality check
+    CampaignSimulation, // Simulated 4-week validation campaign
 }
 
 /// Settings for the application
@@ -588,6 +589,10 @@ fn main_loop(
                             mode = AppMode::PresetSelect;
                             scroll_offset = 0;
                         }
+                        KeyCode::Char('7') => {
+                            mode = AppMode::CampaignSimulation;
+                            scroll_offset = 0;
+                        }
                         KeyCode::Char('p') => {
                             settings.persist_features = !settings.persist_features;
                         }
@@ -722,7 +727,7 @@ fn main_loop(
                         }
                         _ => {}
                     },
-                    AppMode::Backtest | AppMode::WalkForward | AppMode::DataQuality => match key.code {
+                    AppMode::Backtest | AppMode::WalkForward | AppMode::DataQuality | AppMode::CampaignSimulation => match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => mode = AppMode::Menu,
                         KeyCode::Up | KeyCode::Char('k') => {
                             scroll_offset = scroll_offset.saturating_sub(1);
@@ -906,6 +911,9 @@ fn main_loop(
             AppMode::DataQuality => {
                 terminal.draw(|f| draw_dataquality_screen(f, &mut scroll_offset))?;
             }
+            AppMode::CampaignSimulation => {
+                terminal.draw(|f| draw_campaign_screen(f, &mut scroll_offset))?;
+            }
         }
     }
 }
@@ -995,6 +1003,11 @@ fn draw_menu(f: &mut ratatui::Frame, symbol: &str, settings: &TuiSettings, prese
             Span::styled("  [5] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
             Span::raw("Data Quality Check"),
             Span::styled(" - validate data before backtesting", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled("  [7] ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+            Span::raw("Campaign Simulation"),
+            Span::styled(" - simulate 4-week validation campaign on historical data", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(""),
         Line::from(Span::styled("  INFO", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
@@ -2392,5 +2405,127 @@ fn draw_preset_select(f: &mut ratatui::Frame, preset_store: &PresetStore, select
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Magenta)),
     );
+    f.render_widget(para, size);
+}
+
+/// Draw campaign simulation screen (informational - runs via CLI)
+fn draw_campaign_screen(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
+    let size = f.size();
+    let data_dir = std::path::PathBuf::from("./data/features");
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  4-WEEK VALIDATION CAMPAIGN SIMULATION",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "  Simulate a complete validation campaign using historical data",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+    ];
+
+    // Check data availability
+    let (file_count, total_days) = if data_dir.exists() {
+        let files: Vec<_> = std::fs::read_dir(&data_dir)
+            .map(|rd| rd.filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map(|x| x == "parquet").unwrap_or(false))
+                .collect())
+            .unwrap_or_default();
+        let days = files.len() as f64 / 2.0; // Rough estimate: ~2 files per day
+        (files.len(), days as usize)
+    } else {
+        (0, 0)
+    };
+
+    if file_count == 0 {
+        lines.push(Line::from(Span::styled(
+            "  No data found in ./data/features",
+            Style::default().fg(Color::Red),
+        )));
+        lines.push(Line::from("  Run option [0] or [1] first to collect data."));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled("  Data Available: ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                format!("{} files (~{} days)", file_count, total_days),
+                Style::default().fg(Color::Green),
+            ),
+        ]));
+
+        let enough_data = total_days >= 28;
+        if !enough_data {
+            lines.push(Line::from(Span::styled(
+                format!("  Warning: 4-week campaign needs ~28 days of data (have ~{})", total_days),
+                Style::default().fg(Color::Yellow),
+            )));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("  ABOUT CAMPAIGN SIMULATION", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+        lines.push(Line::from(""));
+        lines.push(Line::from("  The simulate-campaign command replays historical data as if running"));
+        lines.push(Line::from("  a real 4-week paper trading validation campaign:"));
+        lines.push(Line::from(""));
+        lines.push(Line::from("    - Simulates daily 8-hour trading sessions"));
+        lines.push(Line::from("    - Applies weekly validation gates (Sharpe, PSR, drawdown)"));
+        lines.push(Line::from("    - Tracks fill rate calibration (expected vs actual)"));
+        lines.push(Line::from("    - Generates comprehensive validation report"));
+        lines.push(Line::from("    - Produces GoLive/Recalibrate/Reject verdict"));
+        lines.push(Line::from(""));
+
+        lines.push(Line::from(Span::styled("  HOW TO RUN", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+        lines.push(Line::from(""));
+        lines.push(Line::from("  Run from terminal (this is a long-running process):"));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "    cargo run --release --bin backtest -- simulate-campaign",
+            Style::default().fg(Color::Green),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("  OPTIONS", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+        lines.push(Line::from(""));
+        lines.push(Line::from("    --weeks <N>           Number of weeks (default: 4)"));
+        lines.push(Line::from("    --session-hours <H>   Hours per session (default: 8.0)"));
+        lines.push(Line::from("    --spread <BPS>        Spread in basis points (default: 1.0)"));
+        lines.push(Line::from("    --skew <S>            Inventory skew factor (default: 0.3)"));
+        lines.push(Line::from("    --min-sharpe <S>      Weekly Sharpe gate (default: -0.5)"));
+        lines.push(Line::from("    --min-psr <P>         Weekly PSR gate (default: 0.3)"));
+        lines.push(Line::from("    --max-drawdown <D>    Max drawdown gate (default: 0.05)"));
+        lines.push(Line::from("    --fill-prob <P>       Fill probability (default: 0.10)"));
+        lines.push(Line::from("    -o, --output <FILE>   Save report to JSON file"));
+        lines.push(Line::from("    -v, --verbose         Show detailed progress"));
+        lines.push(Line::from(""));
+
+        lines.push(Line::from(Span::styled("  EXAMPLE", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "    cargo run --release --bin backtest -- simulate-campaign \\",
+            Style::default().fg(Color::Green),
+        )));
+        lines.push(Line::from(Span::styled(
+            "      --weeks 4 --spread 1.0 --skew 0.3 -v -o campaign_report.json",
+            Style::default().fg(Color::Green),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  [q] Back to menu  [up/down] Scroll",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let max_scroll = lines.len().saturating_sub(size.height as usize) as u16;
+    *scroll_offset = (*scroll_offset).min(max_scroll);
+
+    let para = Paragraph::new(lines)
+        .scroll((*scroll_offset, 0))
+        .block(
+            Block::default()
+                .title(" CAMPAIGN SIMULATION ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Magenta)),
+        );
     f.render_widget(para, size);
 }
