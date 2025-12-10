@@ -55,6 +55,14 @@ struct Cli {
     #[arg(short, long, default_value = "./data/features")]
     data: PathBuf,
 
+    /// Algorithm to use for backtesting (as, ml, or use 'algorithms' subcommand to list)
+    #[arg(short, long, default_value = "as")]
+    algorithm: String,
+
+    /// Path to ML weights file (required for ML algorithm)
+    #[arg(long)]
+    weights_file: Option<PathBuf>,
+
     /// Base spread in basis points (per side)
     #[arg(long, default_value = "2.0")]
     spread: f64,
@@ -146,6 +154,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// List available algorithms and their parameters
+    Algorithms {
+        /// Show detailed information for a specific algorithm
+        #[arg(long)]
+        algo: Option<String>,
+
+        /// Output as JSON (for scripting)
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Run a single backtest
     Single,
 
@@ -575,6 +594,9 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
+        Some(Commands::Algorithms { algo, json }) => {
+            show_algorithms(algo.clone(), *json)?;
+        }
         Some(Commands::Sweep { spreads, skews }) => {
             run_sweep(&cli, spreads, skews)?;
         }
@@ -631,6 +653,129 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Show available algorithms and their parameters
+fn show_algorithms(algo: Option<String>, json_output: bool) -> Result<()> {
+    // Define algorithm metadata
+    let algorithms = vec![
+        AlgorithmInfo {
+            id: "as",
+            full_name: "Avellaneda-Stoikov",
+            description: "Classic inventory-based market making (2008)",
+            category: "Rule-Based",
+            trainable: false,
+            parameters: vec![
+                ParamInfo { name: "spread", description: "Base half-spread in bps", default: "2.0", tunable: true },
+                ParamInfo { name: "skew", description: "Inventory skew factor", default: "0.5", tunable: true },
+                ParamInfo { name: "max_inventory", description: "Maximum position size", default: "0.1", tunable: false },
+                ParamInfo { name: "quote_size", description: "Quote size per order", default: "0.001", tunable: false },
+                ParamInfo { name: "high_entropy", description: "High entropy threshold", default: "0.7", tunable: true },
+                ParamInfo { name: "low_entropy", description: "Low entropy threshold", default: "0.4", tunable: true },
+            ],
+        },
+        AlgorithmInfo {
+            id: "ml",
+            full_name: "ML Spread/Skew Predictor",
+            description: "Linear model for dynamic spread/skew based on market features",
+            category: "Statistical/ML",
+            trainable: true,
+            parameters: vec![
+                ParamInfo { name: "spread_intercept", description: "Base spread intercept", default: "2.0", tunable: true },
+                ParamInfo { name: "spread_entropy_weight", description: "Entropy weight for spread", default: "-1.0", tunable: true },
+                ParamInfo { name: "spread_vol_weight", description: "Volatility weight for spread", default: "400.0", tunable: true },
+                ParamInfo { name: "skew_intercept", description: "Base skew intercept", default: "0.5", tunable: true },
+                ParamInfo { name: "skew_inventory_weight", description: "Inventory weight for skew", default: "-0.6", tunable: true },
+                ParamInfo { name: "max_inventory", description: "Maximum position size", default: "0.1", tunable: false },
+                ParamInfo { name: "quote_size", description: "Quote size per order", default: "0.001", tunable: false },
+            ],
+        },
+    ];
+
+    if json_output {
+        let json = serde_json::json!({
+            "algorithms": algorithms.iter().map(|a| {
+                serde_json::json!({
+                    "id": a.id,
+                    "name": a.full_name,
+                    "description": a.description,
+                    "category": a.category,
+                    "trainable": a.trainable,
+                    "parameters": a.parameters.iter().map(|p| {
+                        serde_json::json!({
+                            "name": p.name,
+                            "description": p.description,
+                            "default": p.default,
+                            "tunable": p.tunable,
+                        })
+                    }).collect::<Vec<_>>()
+                })
+            }).collect::<Vec<_>>()
+        });
+        println!("{}", serde_json::to_string_pretty(&json)?);
+        return Ok(());
+    }
+
+    if let Some(algo_id) = algo {
+        // Show details for specific algorithm
+        let algo_info = algorithms.iter().find(|a| a.id == algo_id || a.full_name.to_lowercase().contains(&algo_id.to_lowercase()));
+        match algo_info {
+            Some(info) => {
+                println!("Algorithm: {} ({})", info.full_name, info.id);
+                println!("Category:  {}", info.category);
+                println!("Trainable: {}", if info.trainable { "Yes" } else { "No" });
+                println!();
+                println!("Description:");
+                println!("  {}", info.description);
+                println!();
+                println!("Parameters:");
+                println!("  {:<25} {:<10} {:<8} {}", "Name", "Default", "Tunable", "Description");
+                println!("  {}", "-".repeat(75));
+                for p in &info.parameters {
+                    println!("  {:<25} {:<10} {:<8} {}", p.name, p.default, if p.tunable { "Yes" } else { "No" }, p.description);
+                }
+            }
+            None => {
+                println!("Unknown algorithm: {}", algo_id);
+                println!("Available algorithms: as, ml");
+            }
+        }
+    } else {
+        // Show list of all algorithms
+        println!("Available Algorithms");
+        println!("====================");
+        println!();
+        for info in &algorithms {
+            let trainable_marker = if info.trainable { " [trainable]" } else { "" };
+            println!("{} ({}){}:", info.full_name, info.id, trainable_marker);
+            println!("  Category: {}", info.category);
+            println!("  {}", info.description);
+            println!("  Parameters: {}", info.parameters.iter().filter(|p| p.tunable).map(|p| p.name).collect::<Vec<_>>().join(", "));
+            println!();
+        }
+        println!("Use --algo <id> for detailed parameter info");
+        println!("Use -a <id> to select algorithm for backtest (default: as)");
+    }
+
+    Ok(())
+}
+
+/// Algorithm information structure
+struct AlgorithmInfo {
+    id: &'static str,
+    full_name: &'static str,
+    description: &'static str,
+    category: &'static str,
+    trainable: bool,
+    parameters: Vec<ParamInfo>,
+}
+
+/// Parameter information structure
+struct ParamInfo {
+    name: &'static str,
+    description: &'static str,
+    default: &'static str,
+    tunable: bool,
+}
+
 fn run_single(cli: &Cli) -> Result<()> {
     // JSON mode: minimal output, just the results
     if cli.json {
@@ -659,11 +804,19 @@ fn run_single(cli: &Cli) -> Result<()> {
         return Ok(());
     }
 
+    // Parse algorithm type
+    let algo_name = match cli.algorithm.to_lowercase().as_str() {
+        "as" | "avellaneda_stoikov" | "avellaneda-stoikov" | "a-s" => "Avellaneda-Stoikov",
+        "ml" | "ml_spread_skew" | "ml-spread-skew" | "mlss" => "ML Spread/Skew",
+        _ => &cli.algorithm,
+    };
+
     println!("═══════════════════════════════════════════════════════");
     println!("           INGESTOR BACKTEST ENGINE                     ");
     println!("═══════════════════════════════════════════════════════");
     println!();
     println!("Configuration:");
+    println!("  Algorithm:     {}", algo_name);
     println!("  Data:          {:?}", cli.data);
     println!("  Spread:        {} bps", cli.spread);
     println!("  Skew Factor:   {}", cli.skew);
