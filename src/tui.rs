@@ -48,6 +48,7 @@ enum AppMode {
     DataQuality,     // Data quality check
     CampaignSimulation, // Simulated 4-week validation campaign
     DataInfo,        // Data statistics and info (CLI parity)
+    GridSearch,      // Grid search parameter optimization (CLI parity)
 }
 
 /// Settings for the application
@@ -597,6 +598,10 @@ fn main_loop(
                         KeyCode::Char('8') => {
                             mode = AppMode::DataInfo;
                         }
+                        KeyCode::Char('9') => {
+                            mode = AppMode::GridSearch;
+                            scroll_offset = 0;
+                        }
                         KeyCode::Char('p') => {
                             settings.persist_features = !settings.persist_features;
                         }
@@ -731,7 +736,7 @@ fn main_loop(
                         }
                         _ => {}
                     },
-                    AppMode::Backtest | AppMode::WalkForward | AppMode::DataQuality | AppMode::CampaignSimulation | AppMode::DataInfo => match key.code {
+                    AppMode::Backtest | AppMode::WalkForward | AppMode::DataQuality | AppMode::CampaignSimulation | AppMode::DataInfo | AppMode::GridSearch => match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => mode = AppMode::Menu,
                         KeyCode::Up | KeyCode::Char('k') => {
                             scroll_offset = scroll_offset.saturating_sub(1);
@@ -921,6 +926,9 @@ fn main_loop(
             AppMode::DataInfo => {
                 terminal.draw(|f| draw_data_info_screen(f))?;
             }
+            AppMode::GridSearch => {
+                terminal.draw(|f| draw_grid_search_screen(f, &mut scroll_offset))?;
+            }
         }
     }
 }
@@ -1015,6 +1023,11 @@ fn draw_menu(f: &mut ratatui::Frame, symbol: &str, settings: &TuiSettings, prese
             Span::styled("  [7] ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
             Span::raw("Campaign Simulation"),
             Span::styled(" - simulate 4-week validation campaign on historical data", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled("  [9] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Grid Search"),
+            Span::styled(" - hyperparameter optimization (spreads, skews, entropy)", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(""),
         Line::from(Span::styled("  INFO", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
@@ -1234,6 +1247,171 @@ fn draw_data_info_screen(f: &mut ratatui::Frame) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan)),
     );
+    f.render_widget(para, size);
+}
+
+/// Draw grid search screen - runs hyperparameter optimization
+/// Mirrors CLI `backtest grid-search` command
+fn draw_grid_search_screen(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
+    use ingestor::backtest::grid_search::{GridSearchEngine, GridSearchConfig};
+    use ingestor::backtest::replay::ReplayConfig;
+
+    let size = f.size();
+    let data_dir = std::path::PathBuf::from("./data/features");
+
+    // Static storage for results (persists across redraws)
+    use std::sync::OnceLock;
+    static GRID_SEARCH_RESULTS: OnceLock<Result<ingestor::backtest::grid_search::GridSearchResults, String>> = OnceLock::new();
+
+    let results = GRID_SEARCH_RESULTS.get_or_init(|| {
+        let config = GridSearchConfig::default();
+        let replay_config = ReplayConfig {
+            data_dir: data_dir.clone(),
+            ..Default::default()
+        };
+
+        let engine = GridSearchEngine::new(config, replay_config);
+        engine.run().map_err(|e| e.to_string())
+    });
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  GRID SEARCH - HYPERPARAMETER OPTIMIZATION",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "  Equivalent to: cargo run --bin backtest -- grid-search",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+    ];
+
+    match results {
+        Ok(grid_results) => {
+            let config = &grid_results.config;
+
+            // Configuration section
+            lines.push(Line::from(Span::styled("  PARAMETER SPACE", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+            lines.push(Line::from(vec![
+                Span::raw("  Spreads:          "),
+                Span::styled(format!("{:?}", config.spreads), Style::default().fg(Color::Cyan)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::raw("  Skews:            "),
+                Span::styled(format!("{:?}", config.skews), Style::default().fg(Color::Cyan)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::raw("  High Entropies:   "),
+                Span::styled(format!("{:?}", config.high_entropies), Style::default().fg(Color::Cyan)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::raw("  Fill Probs:       "),
+                Span::styled(format!("{:?}", config.fill_probs), Style::default().fg(Color::Cyan)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::raw("  Total Combinations: "),
+                Span::styled(format!("{}", config.total_combinations()), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            ]));
+            lines.push(Line::from(""));
+
+            // Top results
+            lines.push(Line::from(Span::styled("  TOP 10 PARAMETER SETS (by Sharpe)", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+            lines.push(Line::from(""));
+
+            for (i, result) in grid_results.top_n(10).iter().enumerate() {
+                let sharpe_color = if result.sharpe > 0.0 { Color::Green } else { Color::Red };
+                let return_color = if result.total_return > 0.0 { Color::Green } else { Color::Red };
+
+                lines.push(Line::from(vec![
+                    Span::styled(format!("  {:>2}. ", i + 1), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                    Span::raw(format!("Spread={:.1} ", result.spread)),
+                    Span::raw(format!("Skew={:.1} ", result.skew)),
+                    Span::raw(format!("Entropy={:.1} ", result.high_entropy_threshold)),
+                    Span::raw(format!("FillP={:.2}", result.fill_prob)),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::raw("      "),
+                    Span::styled(format!("Sharpe={:+.2} ", result.sharpe), Style::default().fg(sharpe_color)),
+                    Span::styled(format!("Return={:+.2}% ", result.total_return * 100.0), Style::default().fg(return_color)),
+                    Span::raw(format!("DD={:.2}% ", result.max_drawdown * 100.0)),
+                    Span::raw(format!("WR={:.1}% ", result.win_rate * 100.0)),
+                    Span::raw(format!("Tr={}", result.num_trades)),
+                ]));
+            }
+
+            lines.push(Line::from(""));
+
+            // Best recommendation
+            if let Some(best) = grid_results.best() {
+                lines.push(Line::from(Span::styled("  RECOMMENDED PARAMETERS", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))));
+                lines.push(Line::from(vec![
+                    Span::raw("  base_spread_bps:            "),
+                    Span::styled(format!("{}", best.spread), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::raw("  inventory_skew_factor:      "),
+                    Span::styled(format!("{}", best.skew), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::raw("  high_entropy_threshold:     "),
+                    Span::styled(format!("{}", best.high_entropy_threshold), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::raw("  base_fill_probability:      "),
+                    Span::styled(format!("{}", best.fill_prob), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                ]));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled("  Expected Performance:", Style::default().fg(Color::Yellow))));
+                lines.push(Line::from(vec![
+                    Span::raw("  Sharpe Ratio: "),
+                    Span::styled(format!("{:+.2}", best.sharpe), Style::default().fg(if best.sharpe > 0.0 { Color::Green } else { Color::Red })),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::raw("  Total Return: "),
+                    Span::styled(format!("{:+.2}%", best.total_return * 100.0), Style::default().fg(if best.total_return > 0.0 { Color::Green } else { Color::Red })),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::raw("  Max Drawdown: "),
+                    Span::styled(format!("{:.2}%", best.max_drawdown * 100.0), Style::default().fg(Color::Yellow)),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::raw("  Win Rate:     "),
+                    Span::styled(format!("{:.1}%", best.win_rate * 100.0), Style::default().fg(Color::Cyan)),
+                ]));
+            }
+        }
+        Err(e) => {
+            lines.push(Line::from(Span::styled(
+                format!("  Error: {}", e),
+                Style::default().fg(Color::Red),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from("  Ensure data exists in ./data/features/"));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  [q] ", Style::default().fg(Color::Red)),
+        Span::raw("Back to menu"),
+        Span::styled("  [j/k] ", Style::default().fg(Color::Blue)),
+        Span::raw("Scroll"),
+    ]));
+    lines.push(Line::from(""));
+
+    // Handle scrolling
+    let max_scroll = lines.len().saturating_sub(size.height as usize) as u16;
+    *scroll_offset = (*scroll_offset).min(max_scroll);
+
+    let para = Paragraph::new(lines)
+        .scroll((*scroll_offset, 0))
+        .block(
+            Block::default()
+                .title(" GRID SEARCH ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
     f.render_widget(para, size);
 }
 
