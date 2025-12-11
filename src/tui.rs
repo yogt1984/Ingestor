@@ -47,6 +47,7 @@ enum AppMode {
     WalkForward,     // Walk-forward validation
     DataQuality,     // Data quality check
     CampaignSimulation, // Simulated 4-week validation campaign
+    DataInfo,        // Data statistics and info (CLI parity)
 }
 
 /// Settings for the application
@@ -593,6 +594,9 @@ fn main_loop(
                             mode = AppMode::CampaignSimulation;
                             scroll_offset = 0;
                         }
+                        KeyCode::Char('8') => {
+                            mode = AppMode::DataInfo;
+                        }
                         KeyCode::Char('p') => {
                             settings.persist_features = !settings.persist_features;
                         }
@@ -727,7 +731,7 @@ fn main_loop(
                         }
                         _ => {}
                     },
-                    AppMode::Backtest | AppMode::WalkForward | AppMode::DataQuality | AppMode::CampaignSimulation => match key.code {
+                    AppMode::Backtest | AppMode::WalkForward | AppMode::DataQuality | AppMode::CampaignSimulation | AppMode::DataInfo => match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => mode = AppMode::Menu,
                         KeyCode::Up | KeyCode::Char('k') => {
                             scroll_offset = scroll_offset.saturating_sub(1);
@@ -914,6 +918,9 @@ fn main_loop(
             AppMode::CampaignSimulation => {
                 terminal.draw(|f| draw_campaign_screen(f, &mut scroll_offset))?;
             }
+            AppMode::DataInfo => {
+                terminal.draw(|f| draw_data_info_screen(f))?;
+            }
         }
     }
 }
@@ -1016,6 +1023,11 @@ fn draw_menu(f: &mut ratatui::Frame, symbol: &str, settings: &TuiSettings, prese
             Span::raw("Feature Descriptions"),
             Span::styled(" - 60+ microstructure features explained", Style::default().fg(Color::DarkGray)),
         ]),
+        Line::from(vec![
+            Span::styled("  [8] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw("Data Info/Statistics"),
+            Span::styled(" - file count, time range, event rate", Style::default().fg(Color::DarkGray)),
+        ]),
         Line::from(""),
         Line::from(Span::styled("  SETTINGS", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
         Line::from(vec![
@@ -1080,6 +1092,149 @@ fn draw_waiting(f: &mut ratatui::Frame) {
         ))
         .borders(Borders::ALL);
     f.render_widget(block, size);
+}
+
+/// Draw data info screen - mirrors CLI `backtest info` command
+fn draw_data_info_screen(f: &mut ratatui::Frame) {
+    let size = f.size();
+
+    // Load data info using the replay module
+    let data_dir = std::path::PathBuf::from("./data/features");
+
+    // Collect parquet file info
+    let mut file_count = 0;
+    let mut total_size_bytes: u64 = 0;
+    let mut oldest_file: Option<std::time::SystemTime> = None;
+    let mut newest_file: Option<std::time::SystemTime> = None;
+
+    if data_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&data_dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if path.extension().map(|x| x == "parquet").unwrap_or(false) {
+                    file_count += 1;
+                    if let Ok(metadata) = entry.metadata() {
+                        total_size_bytes += metadata.len();
+                        if let Ok(modified) = metadata.modified() {
+                            match &oldest_file {
+                                None => oldest_file = Some(modified),
+                                Some(old) if modified < *old => oldest_file = Some(modified),
+                                _ => {}
+                            }
+                            match &newest_file {
+                                None => newest_file = Some(modified),
+                                Some(new) if modified > *new => newest_file = Some(modified),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let total_size_mb = total_size_bytes as f64 / 1_000_000.0;
+
+    // Try to load event count using replay
+    let (event_count, time_range_str, duration_str, event_rate_str) = {
+        use ingestor::backtest::replay::{ParquetReplay, ReplayConfig};
+
+        let config = ReplayConfig {
+            data_dir: data_dir.clone(),
+            ..Default::default()
+        };
+
+        let mut replay = ParquetReplay::new(config);
+        match replay.load() {
+            Ok(num_events) => {
+                if let Some((start, end)) = replay.time_range() {
+                    let duration_ms = end - start;
+                    let duration_hours = duration_ms as f64 / (1000.0 * 60.0 * 60.0);
+                    let duration_days = duration_hours / 24.0;
+
+                    let start_dt = chrono::DateTime::from_timestamp_millis(start)
+                        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                        .unwrap_or_else(|| "Unknown".to_string());
+                    let end_dt = chrono::DateTime::from_timestamp_millis(end)
+                        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                        .unwrap_or_else(|| "Unknown".to_string());
+
+                    let event_rate = num_events as f64 / (duration_ms as f64 / 1000.0);
+
+                    (
+                        format!("{}", num_events),
+                        format!("{} to {}", start_dt, end_dt),
+                        format!("{:.1} hours ({:.2} days)", duration_hours, duration_days),
+                        format!("{:.1} events/second", event_rate),
+                    )
+                } else {
+                    (format!("{}", num_events), "Unknown".to_string(), "Unknown".to_string(), "Unknown".to_string())
+                }
+            }
+            Err(_) => ("Error loading".to_string(), "Unknown".to_string(), "Unknown".to_string(), "Unknown".to_string()),
+        }
+    };
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  DATA INFO / STATISTICS",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "  Equivalent to: cargo run --bin backtest -- info",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled("  FILE STATISTICS", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from(vec![
+            Span::raw("  Directory:     "),
+            Span::styled(format!("{:?}", data_dir), Style::default().fg(Color::Green)),
+        ]),
+        Line::from(vec![
+            Span::raw("  Parquet Files: "),
+            Span::styled(format!("{}", file_count), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(vec![
+            Span::raw("  Total Size:    "),
+            Span::styled(format!("{:.1} MB ({:.2} GB)", total_size_mb, total_size_mb / 1000.0), Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  EVENT STATISTICS", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from(vec![
+            Span::raw("  Total Events:  "),
+            Span::styled(event_count, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(vec![
+            Span::raw("  Event Rate:    "),
+            Span::styled(event_rate_str, Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  TIME RANGE", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from(vec![
+            Span::raw("  Range:         "),
+            Span::styled(time_range_str, Style::default().fg(Color::Green)),
+        ]),
+        Line::from(vec![
+            Span::raw("  Duration:      "),
+            Span::styled(duration_str, Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from(""),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  [q] ", Style::default().fg(Color::Red)),
+            Span::raw("Back to menu"),
+        ]),
+        Line::from(""),
+    ];
+
+    let para = Paragraph::new(lines).block(
+        Block::default()
+            .title(" DATA INFO ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
+    f.render_widget(para, size);
 }
 
 fn draw_live(
