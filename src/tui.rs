@@ -49,6 +49,7 @@ enum AppMode {
     CampaignSimulation, // Simulated 4-week validation campaign
     DataInfo,        // Data statistics and info (CLI parity)
     GridSearch,      // Grid search parameter optimization (CLI parity)
+    Sweep,           // Parameter sensitivity sweep (CLI parity)
 }
 
 /// Settings for the application
@@ -602,6 +603,10 @@ fn main_loop(
                             mode = AppMode::GridSearch;
                             scroll_offset = 0;
                         }
+                        KeyCode::Char('w') => {
+                            mode = AppMode::Sweep;
+                            scroll_offset = 0;
+                        }
                         KeyCode::Char('p') => {
                             settings.persist_features = !settings.persist_features;
                         }
@@ -736,7 +741,7 @@ fn main_loop(
                         }
                         _ => {}
                     },
-                    AppMode::Backtest | AppMode::WalkForward | AppMode::DataQuality | AppMode::CampaignSimulation | AppMode::DataInfo | AppMode::GridSearch => match key.code {
+                    AppMode::Backtest | AppMode::WalkForward | AppMode::DataQuality | AppMode::CampaignSimulation | AppMode::DataInfo | AppMode::GridSearch | AppMode::Sweep => match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => mode = AppMode::Menu,
                         KeyCode::Up | KeyCode::Char('k') => {
                             scroll_offset = scroll_offset.saturating_sub(1);
@@ -929,6 +934,9 @@ fn main_loop(
             AppMode::GridSearch => {
                 terminal.draw(|f| draw_grid_search_screen(f, &mut scroll_offset))?;
             }
+            AppMode::Sweep => {
+                terminal.draw(|f| draw_sweep_screen(f, &mut scroll_offset))?;
+            }
         }
     }
 }
@@ -1028,6 +1036,11 @@ fn draw_menu(f: &mut ratatui::Frame, symbol: &str, settings: &TuiSettings, prese
             Span::styled("  [9] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             Span::raw("Grid Search"),
             Span::styled(" - hyperparameter optimization (spreads, skews, entropy)", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled("  [w] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Sweep"),
+            Span::styled(" - parameter sensitivity analysis (spread x skew)", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(""),
         Line::from(Span::styled("  INFO", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
@@ -1409,6 +1422,199 @@ fn draw_grid_search_screen(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
         .block(
             Block::default()
                 .title(" GRID SEARCH ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
+    f.render_widget(para, size);
+}
+
+/// Draw sweep screen - runs parameter sensitivity analysis
+/// Mirrors CLI `backtest sweep` command
+fn draw_sweep_screen(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
+    use ingestor::backtest::sweep::{SweepEngine, SweepConfig};
+    use ingestor::backtest::replay::ReplayConfig;
+
+    let size = f.size();
+    let data_dir = std::path::PathBuf::from("./data/features");
+
+    // Static storage for results (persists across redraws)
+    use std::sync::OnceLock;
+    static SWEEP_RESULTS: OnceLock<Result<ingestor::backtest::sweep::SweepResults, String>> = OnceLock::new();
+
+    let results = SWEEP_RESULTS.get_or_init(|| {
+        let config = SweepConfig::default();
+        let replay_config = ReplayConfig {
+            data_dir: data_dir.clone(),
+            ..Default::default()
+        };
+
+        let engine = SweepEngine::new(config, replay_config);
+        engine.run().map_err(|e| e.to_string())
+    });
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  SWEEP - PARAMETER SENSITIVITY ANALYSIS",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "  Equivalent to: cargo run --bin backtest -- sweep",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+    ];
+
+    match results {
+        Ok(sweep_results) => {
+            let config = &sweep_results.config;
+
+            // Configuration section
+            lines.push(Line::from(Span::styled("  PARAMETER SPACE", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+            lines.push(Line::from(vec![
+                Span::raw("  Spreads:          "),
+                Span::styled(format!("{:?}", config.spreads), Style::default().fg(Color::Cyan)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::raw("  Skews:            "),
+                Span::styled(format!("{:?}", config.skews), Style::default().fg(Color::Cyan)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::raw("  Total Combinations: "),
+                Span::styled(format!("{}", config.total_combinations()), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            ]));
+            lines.push(Line::from(""));
+
+            // Top results
+            lines.push(Line::from(Span::styled("  ALL RESULTS (sorted by Sharpe)", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+            lines.push(Line::from(""));
+
+            // Display results as a 2D heatmap-style table
+            lines.push(Line::from(Span::styled("  Spread x Skew Matrix (Sharpe ratios):", Style::default().fg(Color::White))));
+            lines.push(Line::from(""));
+
+            // Create header row with skew values
+            let mut header = vec![Span::raw("          ")]; // padding for spread column
+            for skew in &config.skews {
+                header.push(Span::styled(format!("  Sk={:.1}  ", skew), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+            }
+            lines.push(Line::from(header));
+
+            // Build map for quick lookup
+            let mut result_map: std::collections::HashMap<(u32, u32), &ingestor::backtest::sweep::SweepResult> = std::collections::HashMap::new();
+            for r in &sweep_results.results {
+                let spread_key = (r.spread * 100.0) as u32;
+                let skew_key = (r.skew * 100.0) as u32;
+                result_map.insert((spread_key, skew_key), r);
+            }
+
+            // Create rows for each spread value
+            for spread in &config.spreads {
+                let mut row = vec![
+                    Span::styled(format!("  Sp={:.1} ", spread), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                ];
+
+                for skew in &config.skews {
+                    let spread_key = (*spread * 100.0) as u32;
+                    let skew_key = (*skew * 100.0) as u32;
+
+                    if let Some(result) = result_map.get(&(spread_key, skew_key)) {
+                        let sharpe_color = if result.sharpe > 0.0 { Color::Green } else if result.sharpe > -0.5 { Color::Yellow } else { Color::Red };
+                        row.push(Span::styled(format!("  {:+.2}   ", result.sharpe), Style::default().fg(sharpe_color)));
+                    } else {
+                        row.push(Span::styled("    -    ", Style::default().fg(Color::DarkGray)));
+                    }
+                }
+
+                lines.push(Line::from(row));
+            }
+
+            lines.push(Line::from(""));
+
+            // Top 5 results detail
+            lines.push(Line::from(Span::styled("  TOP 5 PARAMETER SETS (by Sharpe)", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+            lines.push(Line::from(""));
+
+            for (i, result) in sweep_results.top_n(5).iter().enumerate() {
+                let sharpe_color = if result.sharpe > 0.0 { Color::Green } else { Color::Red };
+                let return_color = if result.total_return > 0.0 { Color::Green } else { Color::Red };
+
+                lines.push(Line::from(vec![
+                    Span::styled(format!("  {:>2}. ", i + 1), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                    Span::raw(format!("Spread={:.1} ", result.spread)),
+                    Span::raw(format!("Skew={:.1}", result.skew)),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::raw("      "),
+                    Span::styled(format!("Sharpe={:+.2} ", result.sharpe), Style::default().fg(sharpe_color)),
+                    Span::styled(format!("Return={:+.2}% ", result.total_return * 100.0), Style::default().fg(return_color)),
+                    Span::raw(format!("DD={:.2}% ", result.max_drawdown * 100.0)),
+                    Span::raw(format!("WR={:.1}% ", result.win_rate * 100.0)),
+                    Span::raw(format!("Tr={}", result.num_trades)),
+                ]));
+            }
+
+            lines.push(Line::from(""));
+
+            // Best recommendation
+            if let Some(best) = sweep_results.best() {
+                lines.push(Line::from(Span::styled("  RECOMMENDED PARAMETERS", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))));
+                lines.push(Line::from(vec![
+                    Span::raw("  base_spread_bps:       "),
+                    Span::styled(format!("{}", best.spread), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::raw("  inventory_skew_factor: "),
+                    Span::styled(format!("{}", best.skew), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                ]));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled("  Expected Performance:", Style::default().fg(Color::Yellow))));
+                lines.push(Line::from(vec![
+                    Span::raw("  Sharpe Ratio: "),
+                    Span::styled(format!("{:+.2}", best.sharpe), Style::default().fg(if best.sharpe > 0.0 { Color::Green } else { Color::Red })),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::raw("  Total Return: "),
+                    Span::styled(format!("{:+.2}%", best.total_return * 100.0), Style::default().fg(if best.total_return > 0.0 { Color::Green } else { Color::Red })),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::raw("  Max Drawdown: "),
+                    Span::styled(format!("{:.2}%", best.max_drawdown * 100.0), Style::default().fg(Color::Yellow)),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::raw("  Win Rate:     "),
+                    Span::styled(format!("{:.1}%", best.win_rate * 100.0), Style::default().fg(Color::Cyan)),
+                ]));
+            }
+        }
+        Err(e) => {
+            lines.push(Line::from(Span::styled(
+                format!("  Error: {}", e),
+                Style::default().fg(Color::Red),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from("  Ensure data exists in ./data/features/"));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  [q] ", Style::default().fg(Color::Red)),
+        Span::raw("Back to menu"),
+        Span::styled("  [j/k] ", Style::default().fg(Color::Blue)),
+        Span::raw("Scroll"),
+    ]));
+    lines.push(Line::from(""));
+
+    // Handle scrolling
+    let max_scroll = lines.len().saturating_sub(size.height as usize) as u16;
+    *scroll_offset = (*scroll_offset).min(max_scroll);
+
+    let para = Paragraph::new(lines)
+        .scroll((*scroll_offset, 0))
+        .block(
+            Block::default()
+                .title(" SWEEP ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan)),
         );
