@@ -15,6 +15,7 @@
 //! - `regime_optimizer`: Regime-specific parameter optimization
 //! - `ml_trainer`: ML weight training with grid search optimization
 //! - `validation_campaign`: 4-week validation campaign infrastructure
+//! - `grid_search`: Hyperparameter optimization via exhaustive grid search
 //!
 //! # Usage
 //!
@@ -50,6 +51,7 @@ pub mod walk_forward_ml;
 pub mod paper_validation;
 pub mod session_runner;
 pub mod validation_campaign;
+pub mod grid_search;
 
 pub use replay::{ParquetReplay, ReplayEvent, ReplayConfig};
 pub use harness::{BacktestEngine, BacktestConfig, BacktestResults};
@@ -75,4 +77,8 @@ pub use validation_campaign::{
     ValidationCampaign, CampaignConfig, CampaignStatus, CampaignProgress,
     CampaignReport, CampaignMetrics, WeeklyMetrics, DailyMetrics,
     ValidationGates, GateResult, ValidationVerdict,
+};
+pub use grid_search::{
+    GridSearchEngine, GridSearchConfig, GridSearchResult, GridSearchResults,
+    GridSearchProgress,
 };
