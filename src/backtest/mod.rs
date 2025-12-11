@@ -16,6 +16,7 @@
 //! - `ml_trainer`: ML weight training with grid search optimization
 //! - `validation_campaign`: 4-week validation campaign infrastructure
 //! - `grid_search`: Hyperparameter optimization via exhaustive grid search
+//! - `sweep`: Parameter sensitivity analysis via spread/skew sweeps
 //!
 //! # Usage
 //!
@@ -52,6 +53,7 @@ pub mod paper_validation;
 pub mod session_runner;
 pub mod validation_campaign;
 pub mod grid_search;
+pub mod sweep;
 
 pub use replay::{ParquetReplay, ReplayEvent, ReplayConfig};
 pub use harness::{BacktestEngine, BacktestConfig, BacktestResults};
@@ -81,4 +83,8 @@ pub use validation_campaign::{
 pub use grid_search::{
     GridSearchEngine, GridSearchConfig, GridSearchResult, GridSearchResults,
     GridSearchProgress,
+};
+pub use sweep::{
+    SweepEngine, SweepConfig, SweepResult, SweepResults,
+    SweepProgress,
 };
