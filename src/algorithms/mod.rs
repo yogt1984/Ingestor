@@ -37,6 +37,15 @@ pub use traits::{
     AlgorithmConfig,
     MarketInput,
     AlgorithmError,
+    // Parameter system
+    ParameterType,
+    ParameterDefinition,
+    // Configurable trait
+    Configurable,
+    // Trainable trait and supporting types
+    Trainable,
+    TrainingData,
+    TrainingResult,
 };
 pub use avellaneda_stoikov::AvellanedaStoikovAlgorithm;
 pub use ml_spread_skew::{
