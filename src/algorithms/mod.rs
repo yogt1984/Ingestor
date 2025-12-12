@@ -30,6 +30,7 @@
 pub mod traits;
 pub mod avellaneda_stoikov;
 pub mod ml_spread_skew;
+pub mod registry;
 
 pub use traits::{
     MarketMakingAlgorithm,
@@ -58,6 +59,7 @@ pub use ml_spread_skew::{
     param_names as ml_param_names,
     weight_names as ml_weight_names,
 };
+pub use registry::{AlgorithmRegistry, AlgorithmInfo};
 
 // Re-export common types from market_maker for convenience
 pub use crate::market_maker::{
