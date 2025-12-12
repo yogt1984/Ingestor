@@ -55,6 +55,8 @@ pub use ml_spread_skew::{
     SpreadWeights,
     SkewWeights,
     TrainingInfo,
+    param_names as ml_param_names,
+    weight_names as ml_weight_names,
 };
 
 // Re-export common types from market_maker for convenience
