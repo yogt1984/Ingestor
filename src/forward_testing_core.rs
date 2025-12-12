@@ -1095,6 +1095,7 @@ impl PresetComparison {
         let algo_label = match self.algorithm_type {
             AlgorithmType::AvellanedaStoikov => "A-S",
             AlgorithmType::MLSpreadSkew => "ML",
+            AlgorithmType::FixedSpread => "FS",
         };
 
         println!();

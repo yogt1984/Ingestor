@@ -164,6 +164,7 @@ impl ParameterPreset {
     pub fn create_algorithm(&self) -> Box<dyn crate::algorithms::MarketMakingAlgorithm> {
         use crate::algorithms::{
             AvellanedaStoikovAlgorithm, MLSpreadSkewAlgorithm, MLSpreadSkewConfig,
+            FixedSpreadAlgorithm, FixedSpreadConfig,
         };
         use rust_decimal_macros::dec;
 
@@ -180,6 +181,15 @@ impl ParameterPreset {
                     ..Default::default()
                 };
                 Box::new(MLSpreadSkewAlgorithm::new(config, weights))
+            }
+            AlgorithmType::FixedSpread => {
+                let config = FixedSpreadConfig {
+                    max_inventory: dec!(0.1),
+                    quote_size: dec!(0.001),
+                    spread_bps: self.spread_bps,
+                    skew_factor: self.skew,
+                };
+                Box::new(FixedSpreadAlgorithm::new(config))
             }
         }
     }
@@ -209,10 +219,11 @@ impl ParameterPreset {
         let algo_label = match self.algorithm_type {
             AlgorithmType::AvellanedaStoikov => "A-S",
             AlgorithmType::MLSpreadSkew => "ML",
+            AlgorithmType::FixedSpread => "FS",
         };
 
         match self.algorithm_type {
-            AlgorithmType::AvellanedaStoikov => format!(
+            AlgorithmType::AvellanedaStoikov | AlgorithmType::FixedSpread => format!(
                 "[{}] {} ({}): spread={:.1}bps, skew={:.1}, exp={:+.1}%",
                 algo_label,
                 self.name,
