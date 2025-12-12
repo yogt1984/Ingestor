@@ -28,8 +28,8 @@ use std::collections::HashMap;
 
 use super::{
     AlgorithmError, AlgorithmType, AvellanedaStoikovAlgorithm, Configurable,
-    MLModelWeights, MLSpreadSkewAlgorithm, MLSpreadSkewConfig, MarketMakingAlgorithm,
-    ParameterDefinition, RegimeParams,
+    FixedSpreadAlgorithm, FixedSpreadConfig, MLModelWeights, MLSpreadSkewAlgorithm,
+    MLSpreadSkewConfig, MarketMakingAlgorithm, ParameterDefinition, RegimeParams,
 };
 use crate::market_maker::AvellanedaStoikovConfig;
 
@@ -86,6 +86,20 @@ impl AlgorithmInfo {
             aliases: vec!["ml", "mlss", "ml-spread-skew"],
         }
     }
+
+    /// Create info for Fixed Spread algorithm.
+    fn fixed_spread() -> Self {
+        Self {
+            algorithm_type: AlgorithmType::FixedSpread,
+            type_string: "fixed_spread",
+            name: "Fixed Spread Market Maker",
+            description: "Simple baseline with fixed spread/skew (ignores market conditions)",
+            version: "1.0.0",
+            is_configurable: true,
+            is_trainable: false,
+            aliases: vec!["fixed", "fs", "fixed-spread", "baseline"],
+        }
+    }
 }
 
 // ============================================================================
@@ -103,6 +117,7 @@ impl AlgorithmRegistry {
         vec![
             AlgorithmInfo::avellaneda_stoikov(),
             AlgorithmInfo::ml_spread_skew(),
+            AlgorithmInfo::fixed_spread(),
         ]
     }
 
@@ -111,6 +126,7 @@ impl AlgorithmRegistry {
         match algo_type {
             AlgorithmType::AvellanedaStoikov => AlgorithmInfo::avellaneda_stoikov(),
             AlgorithmType::MLSpreadSkew => AlgorithmInfo::ml_spread_skew(),
+            AlgorithmType::FixedSpread => AlgorithmInfo::fixed_spread(),
         }
     }
 
@@ -140,6 +156,7 @@ impl AlgorithmRegistry {
         match algo_type {
             AlgorithmType::AvellanedaStoikov => AvellanedaStoikovAlgorithm::parameters(),
             AlgorithmType::MLSpreadSkew => MLSpreadSkewAlgorithm::parameters(),
+            AlgorithmType::FixedSpread => FixedSpreadAlgorithm::parameters(),
         }
     }
 
@@ -156,6 +173,7 @@ impl AlgorithmRegistry {
         match algo_type {
             AlgorithmType::AvellanedaStoikov => AvellanedaStoikovAlgorithm::tunable_parameters(),
             AlgorithmType::MLSpreadSkew => MLSpreadSkewAlgorithm::tunable_parameters(),
+            AlgorithmType::FixedSpread => FixedSpreadAlgorithm::tunable_parameters(),
         }
     }
 
@@ -190,6 +208,14 @@ impl AlgorithmRegistry {
                     MLModelWeights::default(),
                 )))
             }
+            AlgorithmType::FixedSpread => {
+                let config = FixedSpreadConfig {
+                    max_inventory,
+                    quote_size,
+                    ..Default::default()
+                };
+                Ok(Box::new(FixedSpreadAlgorithm::new(config)))
+            }
         }
     }
 
@@ -218,6 +244,10 @@ impl AlgorithmRegistry {
             }
             AlgorithmType::MLSpreadSkew => {
                 let algo = MLSpreadSkewAlgorithm::from_parameters(params)?;
+                Ok(Box::new(algo))
+            }
+            AlgorithmType::FixedSpread => {
+                let algo = FixedSpreadAlgorithm::from_parameters(params)?;
                 Ok(Box::new(algo))
             }
         }
@@ -267,6 +297,22 @@ impl AlgorithmRegistry {
             ..Default::default()
         };
         MLSpreadSkewAlgorithm::new(config, weights.unwrap_or_default())
+    }
+
+    /// Create Fixed Spread algorithm with optional custom spread/skew.
+    pub fn create_fixed_spread(
+        max_inventory: Decimal,
+        quote_size: Decimal,
+        spread_bps: Option<f64>,
+        skew_factor: Option<f64>,
+    ) -> FixedSpreadAlgorithm {
+        let config = FixedSpreadConfig {
+            max_inventory,
+            quote_size,
+            spread_bps: spread_bps.unwrap_or(1.0),
+            skew_factor: skew_factor.unwrap_or(0.3),
+        };
+        FixedSpreadAlgorithm::new(config)
     }
 
     /// Format algorithm listing for display (CLI/TUI).
@@ -359,11 +405,12 @@ mod tests {
     #[test]
     fn test_registry_list() {
         let algorithms = AlgorithmRegistry::list();
-        assert_eq!(algorithms.len(), 2);
+        assert_eq!(algorithms.len(), 3);
 
         let types: Vec<_> = algorithms.iter().map(|a| a.algorithm_type).collect();
         assert!(types.contains(&AlgorithmType::AvellanedaStoikov));
         assert!(types.contains(&AlgorithmType::MLSpreadSkew));
+        assert!(types.contains(&AlgorithmType::FixedSpread));
     }
 
     #[test]
@@ -527,10 +574,10 @@ mod tests {
     #[test]
     fn test_registry_to_json() {
         let json = AlgorithmRegistry::to_json();
-        assert_eq!(json["count"], 2);
+        assert_eq!(json["count"], 3);
 
         let algorithms = json["algorithms"].as_array().unwrap();
-        assert_eq!(algorithms.len(), 2);
+        assert_eq!(algorithms.len(), 3);
 
         // Check structure
         let first = &algorithms[0];
@@ -548,6 +595,11 @@ mod tests {
         let info = AlgorithmInfo::ml_spread_skew();
         assert!(info.aliases.contains(&"ml"));
         assert!(info.aliases.contains(&"mlss"));
+
+        let info = AlgorithmInfo::fixed_spread();
+        assert!(info.aliases.contains(&"fs"));
+        assert!(info.aliases.contains(&"fixed"));
+        assert!(info.aliases.contains(&"baseline"));
     }
 
     #[test]
@@ -561,5 +613,137 @@ mod tests {
         assert!(json.contains("Avellaneda-Stoikov"));
         assert!(json.contains("is_configurable"));
         assert!(json.contains("is_trainable"));
+    }
+
+    // ==========================================================================
+    // Fixed Spread Registry Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_registry_info_fixed_spread() {
+        let info = AlgorithmRegistry::info(AlgorithmType::FixedSpread);
+        assert_eq!(info.type_string, "fixed_spread");
+        assert_eq!(info.name, "Fixed Spread Market Maker");
+        assert!(info.is_configurable);
+        assert!(!info.is_trainable);
+    }
+
+    #[test]
+    fn test_registry_info_by_string_fixed_spread() {
+        // Primary name
+        let info = AlgorithmRegistry::info_by_string("fixed_spread").unwrap();
+        assert_eq!(info.algorithm_type, AlgorithmType::FixedSpread);
+
+        // Aliases
+        let info = AlgorithmRegistry::info_by_string("fs").unwrap();
+        assert_eq!(info.algorithm_type, AlgorithmType::FixedSpread);
+
+        let info = AlgorithmRegistry::info_by_string("fixed").unwrap();
+        assert_eq!(info.algorithm_type, AlgorithmType::FixedSpread);
+
+        let info = AlgorithmRegistry::info_by_string("baseline").unwrap();
+        assert_eq!(info.algorithm_type, AlgorithmType::FixedSpread);
+
+        let info = AlgorithmRegistry::info_by_string("fixed-spread").unwrap();
+        assert_eq!(info.algorithm_type, AlgorithmType::FixedSpread);
+    }
+
+    #[test]
+    fn test_registry_is_valid_type_fixed_spread() {
+        assert!(AlgorithmRegistry::is_valid_type("fixed_spread"));
+        assert!(AlgorithmRegistry::is_valid_type("fs"));
+        assert!(AlgorithmRegistry::is_valid_type("fixed"));
+        assert!(AlgorithmRegistry::is_valid_type("baseline"));
+    }
+
+    #[test]
+    fn test_registry_parameters_fixed_spread() {
+        let params = AlgorithmRegistry::parameters(AlgorithmType::FixedSpread);
+        assert!(!params.is_empty());
+
+        // Verify key parameters
+        let names: Vec<_> = params.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"max_inventory"));
+        assert!(names.contains(&"quote_size"));
+        assert!(names.contains(&"spread_bps"));
+        assert!(names.contains(&"skew_factor"));
+    }
+
+    #[test]
+    fn test_registry_tunable_parameters_fixed_spread() {
+        let params = AlgorithmRegistry::tunable_parameters(AlgorithmType::FixedSpread);
+        for param in &params {
+            assert!(param.tunable);
+        }
+        // Should have spread_bps and skew_factor as tunable
+        let names: Vec<_> = params.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"spread_bps"));
+        assert!(names.contains(&"skew_factor"));
+    }
+
+    #[test]
+    fn test_registry_create_default_fixed_spread() {
+        let algo =
+            AlgorithmRegistry::create_default(AlgorithmType::FixedSpread, dec!(0.1), dec!(0.001))
+                .unwrap();
+        assert_eq!(algo.algorithm_type(), AlgorithmType::FixedSpread);
+        assert_eq!(algo.max_inventory(), dec!(0.1));
+        assert_eq!(algo.quote_size(), dec!(0.001));
+    }
+
+    #[test]
+    fn test_registry_create_default_by_string_fixed_spread() {
+        let algo =
+            AlgorithmRegistry::create_default_by_string("fs", dec!(0.1), dec!(0.001)).unwrap();
+        assert_eq!(algo.algorithm_type(), AlgorithmType::FixedSpread);
+
+        let algo =
+            AlgorithmRegistry::create_default_by_string("baseline", dec!(0.1), dec!(0.001)).unwrap();
+        assert_eq!(algo.algorithm_type(), AlgorithmType::FixedSpread);
+    }
+
+    #[test]
+    fn test_registry_create_from_params_fixed_spread() {
+        let mut params = HashMap::new();
+        params.insert("max_inventory".to_string(), 0.1);
+        params.insert("quote_size".to_string(), 0.001);
+        params.insert("spread_bps".to_string(), 2.0);
+        params.insert("skew_factor".to_string(), 0.5);
+
+        let algo =
+            AlgorithmRegistry::create_from_params(AlgorithmType::FixedSpread, &params).unwrap();
+        assert_eq!(algo.algorithm_type(), AlgorithmType::FixedSpread);
+        assert_eq!(algo.max_inventory(), dec!(0.1));
+    }
+
+    #[test]
+    fn test_registry_create_fixed_spread() {
+        let algo = AlgorithmRegistry::create_fixed_spread(dec!(0.1), dec!(0.001), None, None);
+        assert_eq!(algo.algorithm_type(), AlgorithmType::FixedSpread);
+        assert_eq!(algo.max_inventory(), dec!(0.1));
+        assert_eq!(algo.quote_size(), dec!(0.001));
+
+        // With custom values
+        let algo =
+            AlgorithmRegistry::create_fixed_spread(dec!(0.2), dec!(0.002), Some(2.5), Some(0.4));
+        assert_eq!(algo.max_inventory(), dec!(0.2));
+        assert_eq!(algo.quote_size(), dec!(0.002));
+    }
+
+    #[test]
+    fn test_registry_format_listing_includes_fixed_spread() {
+        let listing = AlgorithmRegistry::format_listing();
+        assert!(listing.contains("Fixed Spread"));
+        assert!(listing.contains("fixed_spread"));
+        assert!(listing.contains("baseline"));
+    }
+
+    #[test]
+    fn test_registry_all_type_strings_includes_fixed_spread() {
+        let strings = AlgorithmRegistry::all_type_strings();
+        assert!(strings.contains(&"fixed_spread"));
+        assert!(strings.contains(&"fs"));
+        assert!(strings.contains(&"fixed"));
+        assert!(strings.contains(&"baseline"));
     }
 }

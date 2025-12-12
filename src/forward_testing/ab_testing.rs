@@ -717,6 +717,7 @@ impl ABTestResult {
                 match result.algorithm_type {
                     AlgorithmType::AvellanedaStoikov => "A-S",
                     AlgorithmType::MLSpreadSkew => "ML",
+                    AlgorithmType::FixedSpread => "FS",
                 }
             );
             println!(

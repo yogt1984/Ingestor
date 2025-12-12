@@ -2154,6 +2154,17 @@ fn run_compare(
             };
             Box::new(MLSpreadSkewAlgorithm::new(config, weights))
         }
+        AlgorithmType::FixedSpread => {
+            println!("Using Fixed Spread algorithm: spread={:.1}bps, skew={:.2}", cli.spread, cli.skew);
+            println!();
+            let config = ingestor::algorithms::FixedSpreadConfig {
+                max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
+                quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
+                spread_bps: cli.spread,
+                skew_factor: cli.skew,
+            };
+            Box::new(ingestor::algorithms::FixedSpreadAlgorithm::new(config))
+        }
     };
 
     // Build backtest config

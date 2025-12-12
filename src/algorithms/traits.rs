@@ -42,6 +42,8 @@ pub enum AlgorithmType {
     AvellanedaStoikov,
     /// ML-based spread and skew prediction using learned weights
     MLSpreadSkew,
+    /// Fixed spread baseline algorithm (ignores market conditions)
+    FixedSpread,
 }
 
 impl AlgorithmType {
@@ -56,6 +58,7 @@ impl AlgorithmType {
         match self {
             AlgorithmType::AvellanedaStoikov => "avellaneda_stoikov",
             AlgorithmType::MLSpreadSkew => "ml_spread_skew",
+            AlgorithmType::FixedSpread => "fixed_spread",
         }
     }
 
@@ -68,13 +71,20 @@ impl AlgorithmType {
             "ml_spread_skew" | "ml-spread-skew" | "ml" | "mlss" => {
                 Ok(AlgorithmType::MLSpreadSkew)
             }
+            "fixed_spread" | "fixed-spread" | "fixed" | "fs" | "baseline" => {
+                Ok(AlgorithmType::FixedSpread)
+            }
             _ => Err(AlgorithmError::UnknownAlgorithm(s.to_string())),
         }
     }
 
     /// Returns all available algorithm types.
     pub fn all() -> &'static [AlgorithmType] {
-        &[AlgorithmType::AvellanedaStoikov, AlgorithmType::MLSpreadSkew]
+        &[
+            AlgorithmType::AvellanedaStoikov,
+            AlgorithmType::MLSpreadSkew,
+            AlgorithmType::FixedSpread,
+        ]
     }
 
     /// Returns a human-readable name for this algorithm.
@@ -82,6 +92,7 @@ impl AlgorithmType {
         match self {
             AlgorithmType::AvellanedaStoikov => "Avellaneda-Stoikov",
             AlgorithmType::MLSpreadSkew => "ML Spread-Skew",
+            AlgorithmType::FixedSpread => "Fixed Spread",
         }
     }
 
@@ -93,6 +104,9 @@ impl AlgorithmType {
             }
             AlgorithmType::MLSpreadSkew => {
                 "ML-based spread/skew prediction using learned linear weights"
+            }
+            AlgorithmType::FixedSpread => {
+                "Simple baseline with fixed spread/skew (ignores market conditions)"
             }
         }
     }
@@ -799,9 +813,10 @@ mod tests {
     #[test]
     fn test_algorithm_type_all() {
         let all = AlgorithmType::all();
-        assert_eq!(all.len(), 2);
+        assert_eq!(all.len(), 3);
         assert!(all.contains(&AlgorithmType::AvellanedaStoikov));
         assert!(all.contains(&AlgorithmType::MLSpreadSkew));
+        assert!(all.contains(&AlgorithmType::FixedSpread));
     }
 
     #[test]

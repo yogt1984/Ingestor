@@ -2152,6 +2152,7 @@ fn draw_live_mm(
     let algo_badge = match state.algorithm_type {
         AlgorithmType::AvellanedaStoikov => "[A-S]",
         AlgorithmType::MLSpreadSkew => "[ML]",
+        AlgorithmType::FixedSpread => "[FS]",
     };
 
     let preset_info = if let Some(preset) = active_preset {
@@ -2412,6 +2413,7 @@ fn draw_live_mm_with_risk(
     let algo_badge = match trading_state.algorithm_type {
         AlgorithmType::AvellanedaStoikov => "[A-S]",
         AlgorithmType::MLSpreadSkew => "[ML]",
+        AlgorithmType::FixedSpread => "[FS]",
     };
 
     let preset_info = if let Some(preset) = active_preset {
@@ -3080,6 +3082,7 @@ fn draw_preset_select(f: &mut ratatui::Frame, preset_store: &PresetStore, select
             let (algo_badge, algo_color) = match preset.algorithm_type {
                 AlgorithmType::AvellanedaStoikov => ("[A-S]", Color::Blue),
                 AlgorithmType::MLSpreadSkew => ("[ML]", Color::Magenta),
+                AlgorithmType::FixedSpread => ("[FS]", Color::Green),
             };
 
             // Main preset line with algorithm badge
@@ -3101,7 +3104,7 @@ fn draw_preset_select(f: &mut ratatui::Frame, preset_store: &PresetStore, select
                 if is_selected { Style::default().fg(Color::Cyan) } else { Style::default().fg(Color::DarkGray) },
             )));
 
-            // Parameters line - different for ML vs A-S
+            // Parameters line - different for ML vs A-S vs FS
             let params = match preset.algorithm_type {
                 AlgorithmType::AvellanedaStoikov => format!(
                     "       Spread: {:.1}bps | Skew: {:.2} | Entropy: {:.2} | Fill Prob: {:.0}%",
@@ -3120,6 +3123,12 @@ fn draw_preset_select(f: &mut ratatui::Frame, preset_store: &PresetStore, select
                         preset.fill_prob_assumption * 100.0
                     )
                 }
+                AlgorithmType::FixedSpread => format!(
+                    "       Spread: {:.1}bps | Skew: {:.2} | Fill Prob: {:.0}% | Baseline",
+                    preset.spread_bps,
+                    preset.skew,
+                    preset.fill_prob_assumption * 100.0
+                ),
             };
             lines.push(Line::from(Span::styled(
                 params,

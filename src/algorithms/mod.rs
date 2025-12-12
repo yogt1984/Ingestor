@@ -30,6 +30,7 @@
 pub mod traits;
 pub mod avellaneda_stoikov;
 pub mod ml_spread_skew;
+pub mod fixed_spread;
 pub mod registry;
 
 pub use traits::{
@@ -58,6 +59,11 @@ pub use ml_spread_skew::{
     TrainingInfo,
     param_names as ml_param_names,
     weight_names as ml_weight_names,
+};
+pub use fixed_spread::{
+    FixedSpreadAlgorithm,
+    FixedSpreadConfig,
+    param_names as fixed_spread_param_names,
 };
 pub use registry::{AlgorithmRegistry, AlgorithmInfo};
 
@@ -183,6 +189,14 @@ pub fn create_algorithm(
                 ..Default::default()
             };
             Ok(Box::new(MLSpreadSkewAlgorithm::new(config, MLModelWeights::default())))
+        }
+        AlgorithmType::FixedSpread => {
+            let config = FixedSpreadConfig {
+                max_inventory,
+                quote_size,
+                ..Default::default()
+            };
+            Ok(Box::new(FixedSpreadAlgorithm::new(config)))
         }
     }
 }
