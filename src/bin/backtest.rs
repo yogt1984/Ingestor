@@ -6,21 +6,39 @@
 //!
 //! ```bash
 //! # Basic backtest with defaults
-//! cargo run --release --bin backtest -- --data ./data/features
+//! cargo run --release --bin backtest -- evaluate
 //!
 //! # With custom parameters
-//! cargo run --release --bin backtest -- \
+//! cargo run --release --bin backtest -- evaluate \
 //!     --data ./data/features \
 //!     --spread 3.0 \
 //!     --skew 0.7 \
 //!     --output results.json
 //!
+//! # Hyperparameter tuning (grid search)
+//! cargo run --release --bin backtest -- tune
+//!
 //! # Parameter sweep
-//! cargo run --release --bin backtest -- \
-//!     --data ./data/features \
-//!     --sweep-spread 1,2,3,4,5 \
-//!     --sweep-skew 0.3,0.5,0.7
+//! cargo run --release --bin backtest -- sweep --spreads 1,2,3,4,5 --skews 0.3,0.5,0.7
+//!
+//! # Walk-forward validation
+//! cargo run --release --bin backtest -- walk-forward --folds 5
+//!
+//! # ML training
+//! cargo run --release --bin backtest -- train
+//!
+//! # 4-week validation campaign simulation
+//! cargo run --release --bin backtest -- simulate
 //! ```
+//!
+//! # Command Naming Convention
+//!
+//! - `evaluate` (alias: `single`) - Run a single backtest evaluation
+//! - `tune` (alias: `grid-search`) - Hyperparameter optimization
+//! - `walk-forward` (alias: `wf`) - Time-series cross-validation
+//! - `train` (alias: `train-ml`) - ML weight training
+//! - `simulate` (alias: `simulate-campaign`) - Validation campaign simulation
+//! - `validate-data` (alias: `vd`) - Data quality validation
 
 use std::path::PathBuf;
 use clap::{Parser, Subcommand};
@@ -165,8 +183,9 @@ enum Commands {
         json: bool,
     },
 
-    /// Run a single backtest
-    Single,
+    /// Run a single backtest (evaluate performance)
+    #[command(name = "evaluate", visible_alias = "single")]
+    Evaluate,
 
     /// Run parameter sweep
     Sweep {
@@ -180,6 +199,7 @@ enum Commands {
     },
 
     /// Walk-forward validation (time-series cross-validation)
+    #[command(name = "walk-forward", visible_alias = "wf")]
     WalkForward {
         /// Number of folds
         #[arg(long, default_value = "5")]
@@ -199,7 +219,8 @@ enum Commands {
     },
 
     /// Validate data quality
-    Validate {
+    #[command(name = "validate-data", visible_alias = "vd")]
+    ValidateData {
         /// Output file for report
         #[arg(short, long)]
         output: Option<std::path::PathBuf>,
@@ -208,8 +229,9 @@ enum Commands {
     /// Show info about data
     Info,
 
-    /// Extended grid search over all key parameters
-    GridSearch {
+    /// Extended grid search over all key parameters (hyperparameter tuning)
+    #[command(name = "tune", visible_alias = "grid-search")]
+    Tune {
         /// Spread values to test (comma-separated)
         #[arg(long, default_value = "1,2,3,4,5")]
         spreads: String,
@@ -364,7 +386,8 @@ enum Commands {
     },
 
     /// Train ML weights using grid search optimization
-    TrainMl {
+    #[command(name = "train", visible_alias = "train-ml")]
+    Train {
         /// Training ratio (fraction of data for training, rest for test)
         #[arg(long, default_value = "0.7")]
         train_ratio: f64,
@@ -530,7 +553,8 @@ enum Commands {
     },
 
     /// Simulate a 4-week validation campaign using historical data
-    SimulateCampaign {
+    #[command(name = "simulate", visible_alias = "simulate-campaign")]
+    Simulate {
         /// Number of weeks to simulate (default 4)
         #[arg(long, default_value = "4")]
         weeks: u8,
@@ -603,13 +627,13 @@ fn main() -> Result<()> {
         Some(Commands::WalkForward { folds, test_hours, rolling, output }) => {
             run_walk_forward(&cli, *folds, *test_hours, *rolling, output.clone())?;
         }
-        Some(Commands::Validate { output }) => {
+        Some(Commands::ValidateData { output }) => {
             run_validate(&cli, output.clone())?;
         }
         Some(Commands::Info) => {
             show_info(&cli)?;
         }
-        Some(Commands::GridSearch { spreads, skews, high_entropies, fill_probs, output }) => {
+        Some(Commands::Tune { spreads, skews, high_entropies, fill_probs, output }) => {
             run_grid_search(&cli, spreads, skews, high_entropies, fill_probs, output.clone())?;
         }
         Some(Commands::RegimeSearch { high_spreads, med_spreads, low_spreads, high_skews, med_skews, low_skews, fill_probs, output }) => {
@@ -624,7 +648,7 @@ fn main() -> Result<()> {
         Some(Commands::RegimeOptimize { spreads, skews, fill_prob, min_trades, allow_no_quote, output }) => {
             run_regime_optimize(&cli, spreads, skews, *fill_prob, *min_trades, *allow_no_quote, output.clone())?;
         }
-        Some(Commands::TrainMl { train_ratio, spread_intercepts, spread_entropy_weights, spread_vol_weights, skew_intercepts, skew_inv_weights, output }) => {
+        Some(Commands::Train { train_ratio, spread_intercepts, spread_entropy_weights, spread_vol_weights, skew_intercepts, skew_inv_weights, output }) => {
             run_train_ml(&cli, *train_ratio, spread_intercepts, spread_entropy_weights, spread_vol_weights, skew_intercepts, skew_inv_weights, output.clone())?;
         }
         Some(Commands::Compare { algorithm, weights, output }) => {
@@ -642,10 +666,10 @@ fn main() -> Result<()> {
         Some(Commands::SimulateSession { duration, preset, spread, skew, sessions_dir, output }) => {
             run_simulate_session(&cli, *duration, preset.clone(), *spread, *skew, sessions_dir.clone(), output.clone())?;
         }
-        Some(Commands::SimulateCampaign { weeks, session_hours, min_sessions_per_week, preset, spread, skew, expected_fill_rate, expected_sharpe, expected_return, min_weekly_trades, max_drawdown_pct, min_win_rate, campaigns_dir, output }) => {
+        Some(Commands::Simulate { weeks, session_hours, min_sessions_per_week, preset, spread, skew, expected_fill_rate, expected_sharpe, expected_return, min_weekly_trades, max_drawdown_pct, min_win_rate, campaigns_dir, output }) => {
             run_simulate_campaign(&cli, *weeks, *session_hours, *min_sessions_per_week, preset.clone(), *spread, *skew, *expected_fill_rate, *expected_sharpe, *expected_return, *min_weekly_trades, *max_drawdown_pct, *min_win_rate, campaigns_dir.clone(), output.clone())?;
         }
-        Some(Commands::Single) | None => {
+        Some(Commands::Evaluate) | None => {
             run_single(&cli)?;
         }
     }
