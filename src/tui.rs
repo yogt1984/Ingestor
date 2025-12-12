@@ -50,6 +50,7 @@ enum AppMode {
     DataInfo,        // Data statistics and info (CLI parity)
     GridSearch,      // Grid search parameter optimization (CLI parity)
     Sweep,           // Parameter sensitivity sweep (CLI parity)
+    OOSValidation,   // Out-of-sample validation (CLI parity)
 }
 
 /// Settings for the application
@@ -607,6 +608,10 @@ fn main_loop(
                             mode = AppMode::Sweep;
                             scroll_offset = 0;
                         }
+                        KeyCode::Char('o') => {
+                            mode = AppMode::OOSValidation;
+                            scroll_offset = 0;
+                        }
                         KeyCode::Char('p') => {
                             settings.persist_features = !settings.persist_features;
                         }
@@ -741,7 +746,7 @@ fn main_loop(
                         }
                         _ => {}
                     },
-                    AppMode::Backtest | AppMode::WalkForward | AppMode::DataQuality | AppMode::CampaignSimulation | AppMode::DataInfo | AppMode::GridSearch | AppMode::Sweep => match key.code {
+                    AppMode::Backtest | AppMode::WalkForward | AppMode::DataQuality | AppMode::CampaignSimulation | AppMode::DataInfo | AppMode::GridSearch | AppMode::Sweep | AppMode::OOSValidation => match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => mode = AppMode::Menu,
                         KeyCode::Up | KeyCode::Char('k') => {
                             scroll_offset = scroll_offset.saturating_sub(1);
@@ -937,6 +942,9 @@ fn main_loop(
             AppMode::Sweep => {
                 terminal.draw(|f| draw_sweep_screen(f, &mut scroll_offset))?;
             }
+            AppMode::OOSValidation => {
+                terminal.draw(|f| draw_oos_validation_screen(f, &mut scroll_offset))?;
+            }
         }
     }
 }
@@ -1041,6 +1049,11 @@ fn draw_menu(f: &mut ratatui::Frame, symbol: &str, settings: &TuiSettings, prese
             Span::styled("  [w] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             Span::raw("Sweep"),
             Span::styled(" - parameter sensitivity analysis (spread x skew)", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled("  [o] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("OOS Validation"),
+            Span::styled(" - out-of-sample overfitting detection (20% holdout)", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(""),
         Line::from(Span::styled("  INFO", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
@@ -1615,6 +1628,212 @@ fn draw_sweep_screen(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
         .block(
             Block::default()
                 .title(" SWEEP ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
+    f.render_widget(para, size);
+}
+
+fn draw_oos_validation_screen(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
+    use ingestor::backtest::oos_validation::{OOSValidator, OOSConfig, OverfitVerdict, ValidationRecommendation};
+
+    let size = f.size();
+    let data_dir = std::path::PathBuf::from("./data/features");
+
+    // Static storage for results (persists across redraws)
+    use std::sync::OnceLock;
+    static OOS_RESULTS: OnceLock<Result<Vec<ingestor::backtest::oos_validation::ValidationReport>, String>> = OnceLock::new();
+
+    // Default parameters (best from grid search)
+    let spreads = vec![1.0, 2.0, 3.0];
+    let skews = vec![0.3, 0.5, 0.7];
+    let fill_probs = vec![0.10];
+
+    let results = OOS_RESULTS.get_or_init(|| {
+        let config = OOSConfig {
+            holdout_fraction: 0.20,
+            embargo_hours: 1.0,
+            data_dir: data_dir.clone(),
+            verbose: false,
+            ..Default::default()
+        };
+
+        let mut validator = OOSValidator::new(config);
+        validator.load_data().map_err(|e| e.to_string())?;
+        validator.validate_grid(&spreads, &skews, &fill_probs).map_err(|e| e.to_string())
+    });
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  OUT-OF-SAMPLE VALIDATION",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "  Equivalent to: cargo run --bin backtest -- oos-validate",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+    ];
+
+    match results {
+        Ok(reports) => {
+            // Configuration section
+            lines.push(Line::from(Span::styled("  CONFIGURATION", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+            lines.push(Line::from(vec![
+                Span::raw("  Holdout Fraction: "),
+                Span::styled("20%", Style::default().fg(Color::Cyan)),
+                Span::raw("   Embargo: "),
+                Span::styled("1 hour", Style::default().fg(Color::Cyan)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::raw("  Spreads:          "),
+                Span::styled(format!("{:?}", spreads), Style::default().fg(Color::Cyan)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::raw("  Skews:            "),
+                Span::styled(format!("{:?}", skews), Style::default().fg(Color::Cyan)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::raw("  Fill Probs:       "),
+                Span::styled(format!("{:?}", fill_probs), Style::default().fg(Color::Cyan)),
+            ]));
+            lines.push(Line::from(""));
+
+            // Summary statistics
+            let robust_count = reports.iter().filter(|r| matches!(r.overfit_verdict, OverfitVerdict::Robust)).count();
+            let mild_count = reports.iter().filter(|r| matches!(r.overfit_verdict, OverfitVerdict::MildOverfit)).count();
+            let moderate_count = reports.iter().filter(|r| matches!(r.overfit_verdict, OverfitVerdict::ModerateOverfit)).count();
+            let severe_count = reports.iter().filter(|r| matches!(r.overfit_verdict, OverfitVerdict::SevereOverfit)).count();
+
+            lines.push(Line::from(Span::styled("  OVERFITTING SUMMARY", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+            lines.push(Line::from(vec![
+                Span::styled(format!("  Robust: {}", robust_count), Style::default().fg(Color::Green)),
+                Span::raw("  "),
+                Span::styled(format!("Mild: {}", mild_count), Style::default().fg(Color::Yellow)),
+                Span::raw("  "),
+                Span::styled(format!("Moderate: {}", moderate_count), Style::default().fg(Color::Red)),
+                Span::raw("  "),
+                Span::styled(format!("Severe: {}", severe_count), Style::default().fg(Color::Magenta)),
+            ]));
+            lines.push(Line::from(""));
+
+            // Results table header
+            lines.push(Line::from(Span::styled("  VALIDATION RESULTS (sorted by OOS Sharpe)", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  Spread  Skew   IS Sharpe  OOS Sharpe  Degrad%   Verdict",
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(Span::styled(
+                "  ------  ----   ---------  ----------  -------   -------",
+                Style::default().fg(Color::DarkGray),
+            )));
+
+            // Sort by OOS Sharpe descending
+            let mut sorted_reports: Vec<_> = reports.iter().collect();
+            sorted_reports.sort_by(|a, b| {
+                b.comparison.out_of_sample.sharpe_ratio
+                    .partial_cmp(&a.comparison.out_of_sample.sharpe_ratio)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            for report in sorted_reports.iter() {
+                let is_sharpe = report.comparison.in_sample.sharpe_ratio;
+                let oos_sharpe = report.comparison.out_of_sample.sharpe_ratio;
+                let degradation = (1.0 - report.comparison.sharpe_degradation) * 100.0;
+
+                let oos_color = if oos_sharpe > 0.0 { Color::Green } else { Color::Red };
+                let verdict_color = match report.overfit_verdict {
+                    OverfitVerdict::Robust => Color::Green,
+                    OverfitVerdict::MildOverfit => Color::Yellow,
+                    OverfitVerdict::ModerateOverfit => Color::Red,
+                    OverfitVerdict::SevereOverfit => Color::Magenta,
+                    OverfitVerdict::Inconclusive => Color::DarkGray,
+                };
+                let verdict_str = match report.overfit_verdict {
+                    OverfitVerdict::Robust => "ROBUST",
+                    OverfitVerdict::MildOverfit => "MILD",
+                    OverfitVerdict::ModerateOverfit => "MODERATE",
+                    OverfitVerdict::SevereOverfit => "SEVERE",
+                    OverfitVerdict::Inconclusive => "INCONC",
+                };
+
+                lines.push(Line::from(vec![
+                    Span::raw(format!("  {:>5.1}  ", report.params_tested.spread_bps)),
+                    Span::raw(format!("{:>4.1}   ", report.params_tested.skew_factor)),
+                    Span::styled(format!("{:>+8.3}   ", is_sharpe), Style::default().fg(if is_sharpe > 0.0 { Color::Green } else { Color::Red })),
+                    Span::styled(format!("{:>+9.3}   ", oos_sharpe), Style::default().fg(oos_color)),
+                    Span::raw(format!("{:>6.0}%   ", degradation)),
+                    Span::styled(verdict_str, Style::default().fg(verdict_color)),
+                ]));
+            }
+
+            lines.push(Line::from(""));
+
+            // Best recommendation
+            if let Some(best) = sorted_reports.first() {
+                lines.push(Line::from(Span::styled("  BEST OOS PERFORMER", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))));
+                lines.push(Line::from(vec![
+                    Span::raw("  Parameters: Spread="),
+                    Span::styled(format!("{:.1}", best.params_tested.spread_bps), Style::default().fg(Color::Cyan)),
+                    Span::raw(" Skew="),
+                    Span::styled(format!("{:.1}", best.params_tested.skew_factor), Style::default().fg(Color::Cyan)),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::raw("  OOS Sharpe: "),
+                    Span::styled(
+                        format!("{:+.3}", best.comparison.out_of_sample.sharpe_ratio),
+                        Style::default().fg(if best.comparison.out_of_sample.sharpe_ratio > 0.0 { Color::Green } else { Color::Red }),
+                    ),
+                    Span::raw("   OOS Return: "),
+                    Span::styled(
+                        format!("{:+.2}%", best.comparison.out_of_sample.total_return * 100.0),
+                        Style::default().fg(if best.comparison.out_of_sample.total_return > 0.0 { Color::Green } else { Color::Red }),
+                    ),
+                ]));
+
+                let rec_color = match best.recommendation {
+                    ValidationRecommendation::ReadyForPaperTrading => Color::Green,
+                    ValidationRecommendation::NeedsMoreData => Color::Yellow,
+                    ValidationRecommendation::SimplifyStrategy => Color::Red,
+                    ValidationRecommendation::ReconsiderApproach => Color::Magenta,
+                    ValidationRecommendation::StatisticallyInsignificant => Color::DarkGray,
+                };
+                lines.push(Line::from(vec![
+                    Span::raw("  Recommendation: "),
+                    Span::styled(format!("{}", best.recommendation), Style::default().fg(rec_color)),
+                ]));
+            }
+        }
+        Err(e) => {
+            lines.push(Line::from(Span::styled(
+                format!("  Error: {}", e),
+                Style::default().fg(Color::Red),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from("  Ensure data exists in ./data/features/"));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  [q] ", Style::default().fg(Color::Red)),
+        Span::raw("Back to menu"),
+        Span::styled("  [j/k] ", Style::default().fg(Color::Blue)),
+        Span::raw("Scroll"),
+    ]));
+    lines.push(Line::from(""));
+
+    // Handle scrolling
+    let max_scroll = lines.len().saturating_sub(size.height as usize) as u16;
+    *scroll_offset = (*scroll_offset).min(max_scroll);
+
+    let para = Paragraph::new(lines)
+        .scroll((*scroll_offset, 0))
+        .block(
+            Block::default()
+                .title(" OOS VALIDATION ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan)),
         );
