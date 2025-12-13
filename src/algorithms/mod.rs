@@ -65,7 +65,7 @@ pub use fixed_spread::{
     FixedSpreadConfig,
     param_names as fixed_spread_param_names,
 };
-pub use registry::{AlgorithmRegistry, AlgorithmInfo};
+pub use registry::{AlgorithmRegistry, AlgorithmInfo, BacktestAlgorithmParams};
 
 // Re-export common types from market_maker for convenience
 pub use crate::market_maker::{

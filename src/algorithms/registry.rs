@@ -103,6 +103,64 @@ impl AlgorithmInfo {
 }
 
 // ============================================================================
+// Backtest Algorithm Parameters
+// ============================================================================
+
+/// Unified parameters for algorithm creation in backtest context.
+///
+/// This struct encapsulates all the parameters needed to create any algorithm
+/// from CLI arguments, simplifying the interface between CLI and registry.
+#[derive(Debug, Clone)]
+pub struct BacktestAlgorithmParams {
+    /// Maximum inventory limit
+    pub max_inventory: Decimal,
+    /// Size per quote order
+    pub quote_size: Decimal,
+    /// Spread in basis points (used by A-S and FixedSpread)
+    pub spread_bps: f64,
+    /// Skew factor (used by A-S and FixedSpread)
+    pub skew_factor: f64,
+    /// Optional ML model weights (only used by MLSpreadSkew)
+    pub ml_weights: Option<MLModelWeights>,
+}
+
+impl Default for BacktestAlgorithmParams {
+    fn default() -> Self {
+        Self {
+            max_inventory: Decimal::new(1, 1), // 0.1
+            quote_size: Decimal::new(1, 3),    // 0.001
+            spread_bps: 1.0,
+            skew_factor: 0.3,
+            ml_weights: None,
+        }
+    }
+}
+
+impl BacktestAlgorithmParams {
+    /// Create new parameters with basic settings.
+    pub fn new(
+        max_inventory: Decimal,
+        quote_size: Decimal,
+        spread_bps: f64,
+        skew_factor: f64,
+    ) -> Self {
+        Self {
+            max_inventory,
+            quote_size,
+            spread_bps,
+            skew_factor,
+            ml_weights: None,
+        }
+    }
+
+    /// Add ML weights to the parameters.
+    pub fn with_ml_weights(mut self, weights: MLModelWeights) -> Self {
+        self.ml_weights = Some(weights);
+        self
+    }
+}
+
+// ============================================================================
 // Algorithm Registry
 // ============================================================================
 
@@ -315,6 +373,51 @@ impl AlgorithmRegistry {
         FixedSpreadAlgorithm::new(config)
     }
 
+    /// Create an algorithm for CLI usage with unified parameters.
+    ///
+    /// This is a convenience method for the backtest CLI that handles the
+    /// different parameter requirements of each algorithm type.
+    ///
+    /// # Arguments
+    /// * `algo_type` - Algorithm type to create
+    /// * `params` - Unified CLI parameters
+    ///
+    /// # Returns
+    /// A boxed algorithm instance
+    pub fn create_for_backtest(
+        algo_type: AlgorithmType,
+        params: &BacktestAlgorithmParams,
+    ) -> Result<Box<dyn MarketMakingAlgorithm>, AlgorithmError> {
+        match algo_type {
+            AlgorithmType::AvellanedaStoikov => {
+                let regime_params = RegimeParams::uniform(params.spread_bps, params.skew_factor);
+                let algo = Self::create_avellaneda_stoikov(
+                    params.max_inventory,
+                    params.quote_size,
+                    Some(regime_params),
+                );
+                Ok(Box::new(algo))
+            }
+            AlgorithmType::MLSpreadSkew => {
+                let algo = Self::create_ml_spread_skew(
+                    params.max_inventory,
+                    params.quote_size,
+                    params.ml_weights.clone(),
+                );
+                Ok(Box::new(algo))
+            }
+            AlgorithmType::FixedSpread => {
+                let algo = Self::create_fixed_spread(
+                    params.max_inventory,
+                    params.quote_size,
+                    Some(params.spread_bps),
+                    Some(params.skew_factor),
+                );
+                Ok(Box::new(algo))
+            }
+        }
+    }
+
     /// Format algorithm listing for display (CLI/TUI).
     pub fn format_listing() -> String {
         let mut output = String::new();
@@ -400,6 +503,7 @@ impl AlgorithmRegistry {
 mod tests {
     use super::*;
     use super::super::Trainable; // For is_trained() test
+    use super::super::{SpreadWeights, SkewWeights}; // For custom ML weights tests
     use rust_decimal_macros::dec;
 
     #[test]
@@ -1152,5 +1256,331 @@ mod tests {
             assert_eq!(algo.algorithm_type(), info.algorithm_type,
                 "Created algorithm type should match info for {}", info.type_string);
         }
+    }
+
+    // ========================================================================
+    // BacktestAlgorithmParams Tests (Harness Integration)
+    // ========================================================================
+
+    /// Test BacktestAlgorithmParams default values
+    #[test]
+    fn test_backtest_params_default() {
+        let params = BacktestAlgorithmParams::default();
+        assert_eq!(params.max_inventory, Decimal::new(1, 1)); // 0.1
+        assert_eq!(params.quote_size, Decimal::new(1, 3)); // 0.001
+        assert_eq!(params.spread_bps, 1.0);
+        assert_eq!(params.skew_factor, 0.3);
+        assert!(params.ml_weights.is_none());
+    }
+
+    /// Test BacktestAlgorithmParams new constructor
+    #[test]
+    fn test_backtest_params_new() {
+        let params = BacktestAlgorithmParams::new(
+            dec!(0.2),
+            dec!(0.005),
+            2.5,
+            0.5,
+        );
+        assert_eq!(params.max_inventory, dec!(0.2));
+        assert_eq!(params.quote_size, dec!(0.005));
+        assert_eq!(params.spread_bps, 2.5);
+        assert_eq!(params.skew_factor, 0.5);
+        assert!(params.ml_weights.is_none());
+    }
+
+    /// Test BacktestAlgorithmParams with_ml_weights builder
+    #[test]
+    fn test_backtest_params_with_ml_weights() {
+        let weights = MLModelWeights::default();
+        let params = BacktestAlgorithmParams::default()
+            .with_ml_weights(weights.clone());
+        assert!(params.ml_weights.is_some());
+        let ml_weights = params.ml_weights.unwrap();
+        assert_eq!(ml_weights.spread.intercept, weights.spread.intercept);
+    }
+
+    /// Test create_for_backtest with Avellaneda-Stoikov
+    #[test]
+    fn test_create_for_backtest_avellaneda_stoikov() {
+        let params = BacktestAlgorithmParams::new(dec!(0.15), dec!(0.002), 1.5, 0.4);
+        let algo = AlgorithmRegistry::create_for_backtest(AlgorithmType::AvellanedaStoikov, &params)
+            .unwrap();
+        assert_eq!(algo.algorithm_type(), AlgorithmType::AvellanedaStoikov);
+        assert_eq!(algo.name(), "Avellaneda-Stoikov Market Maker");
+    }
+
+    /// Test create_for_backtest with ML algorithm (no weights)
+    #[test]
+    fn test_create_for_backtest_ml_no_weights() {
+        let params = BacktestAlgorithmParams::default();
+        let algo = AlgorithmRegistry::create_for_backtest(AlgorithmType::MLSpreadSkew, &params)
+            .unwrap();
+        assert_eq!(algo.algorithm_type(), AlgorithmType::MLSpreadSkew);
+        assert_eq!(algo.name(), "ML Spread/Skew Predictor");
+    }
+
+    /// Test create_for_backtest with ML algorithm (with weights)
+    #[test]
+    fn test_create_for_backtest_ml_with_weights() {
+        let weights = MLModelWeights {
+            spread: SpreadWeights {
+                intercept: 2.0,
+                w_entropy: -0.5,
+                w_volatility: 0.3,
+                w_imbalance: 0.1,
+                w_interaction: 0.05,
+            },
+            skew: SkewWeights {
+                intercept: 0.0,
+                w_entropy: 0.1,
+                w_volatility: 0.2,
+                w_inventory: -0.8,
+                w_imbalance: 0.2,
+            },
+            ..Default::default()
+        };
+        let params = BacktestAlgorithmParams::default()
+            .with_ml_weights(weights);
+        let algo = AlgorithmRegistry::create_for_backtest(AlgorithmType::MLSpreadSkew, &params)
+            .unwrap();
+        assert_eq!(algo.algorithm_type(), AlgorithmType::MLSpreadSkew);
+    }
+
+    /// Test create_for_backtest with FixedSpread
+    #[test]
+    fn test_create_for_backtest_fixed_spread() {
+        let params = BacktestAlgorithmParams::new(dec!(0.1), dec!(0.001), 2.0, 0.5);
+        let algo = AlgorithmRegistry::create_for_backtest(AlgorithmType::FixedSpread, &params)
+            .unwrap();
+        assert_eq!(algo.algorithm_type(), AlgorithmType::FixedSpread);
+        assert_eq!(algo.name(), "Fixed Spread Market Maker");
+    }
+
+    /// Test create_for_backtest all algorithm types succeed
+    #[test]
+    fn test_create_for_backtest_all_types() {
+        let params = BacktestAlgorithmParams::default();
+        for algo_type in AlgorithmType::all() {
+            let result = AlgorithmRegistry::create_for_backtest(*algo_type, &params);
+            assert!(result.is_ok(), "Should create {} via backtest params", algo_type.as_str());
+        }
+    }
+
+    /// Test create_for_backtest preserves max_inventory
+    #[test]
+    fn test_create_for_backtest_preserves_inventory_params() {
+        for algo_type in AlgorithmType::all() {
+            let params = BacktestAlgorithmParams::new(dec!(0.25), dec!(0.003), 1.0, 0.3);
+            let algo = AlgorithmRegistry::create_for_backtest(*algo_type, &params).unwrap();
+            // Algorithm was created successfully - type is correct
+            assert_eq!(algo.algorithm_type(), *algo_type);
+        }
+    }
+
+    /// Test create_for_backtest with different spread/skew values
+    #[test]
+    fn test_create_for_backtest_spread_skew_values() {
+        // Test various spread/skew combinations
+        let test_cases = vec![
+            (0.5, 0.1),
+            (1.0, 0.3),
+            (2.0, 0.5),
+            (5.0, 1.0),
+        ];
+
+        for (spread, skew) in test_cases {
+            let params = BacktestAlgorithmParams::new(dec!(0.1), dec!(0.001), spread, skew);
+
+            // A-S should use spread/skew
+            let as_algo = AlgorithmRegistry::create_for_backtest(AlgorithmType::AvellanedaStoikov, &params)
+                .unwrap();
+            assert_eq!(as_algo.algorithm_type(), AlgorithmType::AvellanedaStoikov);
+
+            // FixedSpread should use spread/skew
+            let fs_algo = AlgorithmRegistry::create_for_backtest(AlgorithmType::FixedSpread, &params)
+                .unwrap();
+            assert_eq!(fs_algo.algorithm_type(), AlgorithmType::FixedSpread);
+        }
+    }
+
+    /// Test BacktestAlgorithmParams Clone implementation
+    #[test]
+    fn test_backtest_params_clone() {
+        let weights = MLModelWeights::default();
+        let params = BacktestAlgorithmParams::new(dec!(0.2), dec!(0.002), 1.5, 0.4)
+            .with_ml_weights(weights);
+        let cloned = params.clone();
+        assert_eq!(cloned.max_inventory, params.max_inventory);
+        assert_eq!(cloned.quote_size, params.quote_size);
+        assert_eq!(cloned.spread_bps, params.spread_bps);
+        assert_eq!(cloned.skew_factor, params.skew_factor);
+        assert!(cloned.ml_weights.is_some());
+    }
+
+    /// Test BacktestAlgorithmParams Debug implementation
+    #[test]
+    fn test_backtest_params_debug() {
+        let params = BacktestAlgorithmParams::default();
+        let debug_str = format!("{:?}", params);
+        assert!(debug_str.contains("BacktestAlgorithmParams"));
+        assert!(debug_str.contains("max_inventory"));
+        assert!(debug_str.contains("spread_bps"));
+    }
+
+    /// Test create_for_backtest with extreme parameter values
+    #[test]
+    fn test_create_for_backtest_extreme_values() {
+        // Very small values
+        let small_params = BacktestAlgorithmParams::new(dec!(0.001), dec!(0.0001), 0.1, 0.01);
+        for algo_type in AlgorithmType::all() {
+            let result = AlgorithmRegistry::create_for_backtest(*algo_type, &small_params);
+            assert!(result.is_ok(), "Should handle small values for {}", algo_type.as_str());
+        }
+
+        // Larger values
+        let large_params = BacktestAlgorithmParams::new(dec!(10.0), dec!(1.0), 100.0, 10.0);
+        for algo_type in AlgorithmType::all() {
+            let result = AlgorithmRegistry::create_for_backtest(*algo_type, &large_params);
+            assert!(result.is_ok(), "Should handle large values for {}", algo_type.as_str());
+        }
+    }
+
+    /// Test create_for_backtest idempotency
+    #[test]
+    fn test_create_for_backtest_idempotent() {
+        let params = BacktestAlgorithmParams::default();
+        for algo_type in AlgorithmType::all() {
+            let algo1 = AlgorithmRegistry::create_for_backtest(*algo_type, &params).unwrap();
+            let algo2 = AlgorithmRegistry::create_for_backtest(*algo_type, &params).unwrap();
+            assert_eq!(algo1.algorithm_type(), algo2.algorithm_type());
+            assert_eq!(algo1.name(), algo2.name());
+        }
+    }
+
+    /// Test create_for_backtest with ML weights serialization
+    #[test]
+    fn test_create_for_backtest_ml_weights_serialization() {
+        let weights = MLModelWeights::default();
+        let params = BacktestAlgorithmParams::default().with_ml_weights(weights);
+
+        // Verify ML weights can be serialized/deserialized
+        if let Some(ref w) = params.ml_weights {
+            let json = serde_json::to_string(w).unwrap();
+            let deserialized: MLModelWeights = serde_json::from_str(&json).unwrap();
+            assert_eq!(w.spread.intercept, deserialized.spread.intercept);
+        }
+    }
+
+    /// Test BacktestAlgorithmParams builder pattern
+    #[test]
+    fn test_backtest_params_builder_chain() {
+        let weights = MLModelWeights::default();
+        let params = BacktestAlgorithmParams::new(dec!(0.1), dec!(0.001), 1.0, 0.3)
+            .with_ml_weights(weights);
+
+        // Verify chain returns correct type and values
+        assert_eq!(params.max_inventory, dec!(0.1));
+        assert!(params.ml_weights.is_some());
+    }
+
+    /// Test create_for_backtest returns correct algorithm instances
+    #[test]
+    fn test_create_for_backtest_algorithm_identity() {
+        let params = BacktestAlgorithmParams::default();
+
+        let as_algo = AlgorithmRegistry::create_for_backtest(AlgorithmType::AvellanedaStoikov, &params).unwrap();
+        assert_eq!(as_algo.type_string(), "avellaneda_stoikov");
+
+        let ml_algo = AlgorithmRegistry::create_for_backtest(AlgorithmType::MLSpreadSkew, &params).unwrap();
+        assert_eq!(ml_algo.type_string(), "ml_spread_skew");
+
+        let fs_algo = AlgorithmRegistry::create_for_backtest(AlgorithmType::FixedSpread, &params).unwrap();
+        assert_eq!(fs_algo.type_string(), "fixed_spread");
+    }
+
+    /// Test that ML weights are actually used when creating algorithm
+    #[test]
+    fn test_create_for_backtest_ml_weights_are_used() {
+        // Create with custom weights
+        let custom_weights = MLModelWeights {
+            spread: SpreadWeights {
+                intercept: 3.0,
+                w_entropy: -1.0,
+                w_volatility: 0.5,
+                w_imbalance: 0.2,
+                w_interaction: 0.1,
+            },
+            skew: SkewWeights {
+                intercept: 0.1,
+                w_entropy: 0.15,
+                w_volatility: 0.25,
+                w_inventory: -0.5,
+                w_imbalance: 0.3,
+            },
+            ..Default::default()
+        };
+
+        let params = BacktestAlgorithmParams::default().with_ml_weights(custom_weights);
+        let algo = AlgorithmRegistry::create_for_backtest(AlgorithmType::MLSpreadSkew, &params).unwrap();
+
+        // Verify algorithm was created with correct type
+        assert_eq!(algo.algorithm_type(), AlgorithmType::MLSpreadSkew);
+    }
+
+    /// Test BacktestAlgorithmParams zero values handling
+    #[test]
+    fn test_backtest_params_zero_values() {
+        let params = BacktestAlgorithmParams::new(dec!(0), dec!(0), 0.0, 0.0);
+        // Zero values should be accepted (though not recommended)
+        for algo_type in AlgorithmType::all() {
+            let result = AlgorithmRegistry::create_for_backtest(*algo_type, &params);
+            assert!(result.is_ok(), "Should handle zero values for {}", algo_type.as_str());
+        }
+    }
+
+    /// Test create_for_backtest negative skew handling
+    #[test]
+    fn test_create_for_backtest_negative_skew() {
+        let params = BacktestAlgorithmParams::new(dec!(0.1), dec!(0.001), 1.0, -0.5);
+        for algo_type in AlgorithmType::all() {
+            let result = AlgorithmRegistry::create_for_backtest(*algo_type, &params);
+            assert!(result.is_ok(), "Should handle negative skew for {}", algo_type.as_str());
+        }
+    }
+
+    /// Test create_for_backtest concurrent access safety
+    #[test]
+    fn test_create_for_backtest_concurrent() {
+        use std::thread;
+        let handles: Vec<_> = (0..4).map(|i| {
+            thread::spawn(move || {
+                let params = BacktestAlgorithmParams::default();
+                let algo_type = match i % 3 {
+                    0 => AlgorithmType::AvellanedaStoikov,
+                    1 => AlgorithmType::MLSpreadSkew,
+                    _ => AlgorithmType::FixedSpread,
+                };
+                let result = AlgorithmRegistry::create_for_backtest(algo_type, &params);
+                assert!(result.is_ok());
+            })
+        }).collect();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    }
+
+    /// Test create_for_backtest vs create_default consistency
+    #[test]
+    fn test_create_for_backtest_vs_create_default() {
+        let params = BacktestAlgorithmParams::new(dec!(0.1), dec!(0.001), 1.0, 0.3);
+
+        // Both methods should create algorithms of correct type
+        let backtest_algo = AlgorithmRegistry::create_for_backtest(AlgorithmType::FixedSpread, &params).unwrap();
+        let default_algo = AlgorithmRegistry::create_default(AlgorithmType::FixedSpread, dec!(0.1), dec!(0.001)).unwrap();
+
+        assert_eq!(backtest_algo.algorithm_type(), default_algo.algorithm_type());
+        assert_eq!(backtest_algo.name(), default_algo.name());
     }
 }
