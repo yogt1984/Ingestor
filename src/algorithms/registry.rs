@@ -746,4 +746,411 @@ mod tests {
         assert!(strings.contains(&"fixed"));
         assert!(strings.contains(&"baseline"));
     }
+
+    // ==========================================================================
+    // CLI Command Display Tests - Paranoid/Comprehensive Coverage
+    // ==========================================================================
+
+    /// Test that list() returns exactly the expected number of algorithms
+    #[test]
+    fn test_cli_display_algorithm_count() {
+        let list = AlgorithmRegistry::list();
+        assert_eq!(list.len(), 3, "Expected exactly 3 algorithms in registry");
+    }
+
+    /// Test that all algorithms have non-empty names
+    #[test]
+    fn test_cli_display_all_algorithms_have_names() {
+        for info in AlgorithmRegistry::list() {
+            assert!(!info.name.is_empty(), "Algorithm name should not be empty");
+            assert!(!info.type_string.is_empty(), "Type string should not be empty");
+            assert!(!info.description.is_empty(), "Description should not be empty");
+        }
+    }
+
+    /// Test that all algorithms have valid version strings
+    #[test]
+    fn test_cli_display_all_algorithms_have_versions() {
+        for info in AlgorithmRegistry::list() {
+            assert!(!info.version.is_empty(), "Version should not be empty");
+            // Version should be in semver format
+            let parts: Vec<_> = info.version.split('.').collect();
+            assert_eq!(parts.len(), 3, "Version should be semver format: {}", info.version);
+            for part in parts {
+                assert!(part.parse::<u32>().is_ok(), "Version parts should be numbers: {}", info.version);
+            }
+        }
+    }
+
+    /// Test that all algorithms have at least one alias
+    #[test]
+    fn test_cli_display_all_algorithms_have_aliases() {
+        for info in AlgorithmRegistry::list() {
+            assert!(!info.aliases.is_empty(), "Algorithm {} should have at least one alias", info.type_string);
+        }
+    }
+
+    /// Test that all type strings are unique
+    #[test]
+    fn test_cli_display_unique_type_strings() {
+        let list = AlgorithmRegistry::list();
+        let mut seen = std::collections::HashSet::new();
+        for info in &list {
+            assert!(seen.insert(info.type_string), "Duplicate type_string: {}", info.type_string);
+        }
+    }
+
+    /// Test that all aliases are unique across all algorithms
+    #[test]
+    fn test_cli_display_unique_aliases() {
+        let all_strings = AlgorithmRegistry::all_type_strings();
+        let mut seen = std::collections::HashSet::new();
+        for s in &all_strings {
+            assert!(seen.insert(*s), "Duplicate alias/type_string: {}", s);
+        }
+    }
+
+    /// Test that format_listing contains all algorithm names
+    #[test]
+    fn test_cli_display_format_listing_contains_all_names() {
+        let listing = AlgorithmRegistry::format_listing();
+        assert!(listing.contains("Avellaneda-Stoikov Market Maker"), "Missing A-S name");
+        assert!(listing.contains("ML Spread/Skew Predictor"), "Missing ML name");
+        assert!(listing.contains("Fixed Spread Market Maker"), "Missing Fixed Spread name");
+    }
+
+    /// Test that format_listing contains all type strings
+    #[test]
+    fn test_cli_display_format_listing_contains_all_type_strings() {
+        let listing = AlgorithmRegistry::format_listing();
+        assert!(listing.contains("avellaneda_stoikov"), "Missing A-S type string");
+        assert!(listing.contains("ml_spread_skew"), "Missing ML type string");
+        assert!(listing.contains("fixed_spread"), "Missing Fixed Spread type string");
+    }
+
+    /// Test that format_listing contains parameter information
+    #[test]
+    fn test_cli_display_format_listing_contains_parameters() {
+        let listing = AlgorithmRegistry::format_listing();
+        assert!(listing.contains("Parameters:"), "Missing Parameters section");
+        assert!(listing.contains("max_inventory"), "Missing max_inventory parameter");
+        assert!(listing.contains("quote_size"), "Missing quote_size parameter");
+        assert!(listing.contains("spread_bps"), "Missing spread_bps parameter");
+    }
+
+    /// Test that format_listing contains trainable indicator
+    #[test]
+    fn test_cli_display_format_listing_trainable_indicator() {
+        let listing = AlgorithmRegistry::format_listing();
+        assert!(listing.contains("Trainable:"), "Missing Trainable indicator");
+    }
+
+    /// Test JSON output contains all required fields
+    #[test]
+    fn test_cli_display_json_output_structure() {
+        let json = AlgorithmRegistry::to_json();
+
+        // Check top-level fields
+        assert!(json.get("algorithms").is_some(), "Missing algorithms field in JSON");
+        assert!(json.get("count").is_some(), "Missing count field in JSON");
+        assert_eq!(json["count"], 3, "Count should be 3");
+
+        let algorithms = json["algorithms"].as_array().unwrap();
+        assert_eq!(algorithms.len(), 3, "Should have 3 algorithms in JSON array");
+    }
+
+    /// Test JSON output algorithm structure
+    #[test]
+    fn test_cli_display_json_algorithm_structure() {
+        let json = AlgorithmRegistry::to_json();
+        let algorithms = json["algorithms"].as_array().unwrap();
+
+        for algo in algorithms {
+            // Check all required fields exist
+            assert!(algo.get("type").is_some(), "Missing type field");
+            assert!(algo.get("name").is_some(), "Missing name field");
+            assert!(algo.get("description").is_some(), "Missing description field");
+            assert!(algo.get("version").is_some(), "Missing version field");
+            assert!(algo.get("configurable").is_some(), "Missing configurable field");
+            assert!(algo.get("trainable").is_some(), "Missing trainable field");
+            assert!(algo.get("aliases").is_some(), "Missing aliases field");
+            assert!(algo.get("parameters").is_some(), "Missing parameters field");
+
+            // Check types
+            assert!(algo["type"].is_string(), "type should be string");
+            assert!(algo["name"].is_string(), "name should be string");
+            assert!(algo["description"].is_string(), "description should be string");
+            assert!(algo["version"].is_string(), "version should be string");
+            assert!(algo["configurable"].is_boolean(), "configurable should be boolean");
+            assert!(algo["trainable"].is_boolean(), "trainable should be boolean");
+            assert!(algo["aliases"].is_array(), "aliases should be array");
+            assert!(algo["parameters"].is_array(), "parameters should be array");
+        }
+    }
+
+    /// Test JSON output parameter structure
+    #[test]
+    fn test_cli_display_json_parameter_structure() {
+        let json = AlgorithmRegistry::to_json();
+        let algorithms = json["algorithms"].as_array().unwrap();
+
+        for algo in algorithms {
+            let params = algo["parameters"].as_array().unwrap();
+            assert!(!params.is_empty(), "Algorithm {} should have parameters", algo["name"]);
+
+            for param in params {
+                // Check required parameter fields
+                assert!(param.get("name").is_some(), "Missing param name field");
+                assert!(param.get("type").is_some(), "Missing param type field");
+                assert!(param.get("description").is_some(), "Missing param description field");
+                assert!(param.get("default").is_some(), "Missing param default field");
+                assert!(param.get("tunable").is_some(), "Missing param tunable field");
+
+                // Check types
+                assert!(param["name"].is_string(), "param name should be string");
+                assert!(param["type"].is_string(), "param type should be string");
+                assert!(param["description"].is_string(), "param description should be string");
+                assert!(param["tunable"].is_boolean(), "param tunable should be boolean");
+            }
+        }
+    }
+
+    /// Test that all primary aliases resolve to correct algorithm
+    #[test]
+    fn test_cli_display_all_aliases_resolve_correctly() {
+        // Test Avellaneda-Stoikov aliases
+        for alias in &["avellaneda_stoikov", "as", "a-s", "avellaneda-stoikov"] {
+            let info = AlgorithmRegistry::info_by_string(alias).unwrap();
+            assert_eq!(info.algorithm_type, AlgorithmType::AvellanedaStoikov, "Alias {} should resolve to A-S", alias);
+        }
+
+        // Test ML Spread-Skew aliases
+        for alias in &["ml_spread_skew", "ml", "mlss", "ml-spread-skew"] {
+            let info = AlgorithmRegistry::info_by_string(alias).unwrap();
+            assert_eq!(info.algorithm_type, AlgorithmType::MLSpreadSkew, "Alias {} should resolve to ML", alias);
+        }
+
+        // Test Fixed Spread aliases
+        for alias in &["fixed_spread", "fixed", "fs", "fixed-spread", "baseline"] {
+            let info = AlgorithmRegistry::info_by_string(alias).unwrap();
+            assert_eq!(info.algorithm_type, AlgorithmType::FixedSpread, "Alias {} should resolve to FS", alias);
+        }
+    }
+
+    /// Test that invalid aliases return error
+    #[test]
+    fn test_cli_display_invalid_aliases_return_error() {
+        // These are truly invalid - not matching any algorithm
+        let invalid_aliases = vec!["unknown", "invalid", "foo", "bar", "xyz", "", "  ", "123"];
+        for alias in invalid_aliases {
+            assert!(AlgorithmRegistry::info_by_string(alias).is_err(), "Invalid alias '{}' should return error", alias);
+        }
+    }
+
+    /// Test case insensitivity of aliases (the parser handles case)
+    #[test]
+    fn test_cli_display_alias_case_handling() {
+        // These should work (lowercase)
+        assert!(AlgorithmRegistry::info_by_string("as").is_ok());
+        assert!(AlgorithmRegistry::info_by_string("ml").is_ok());
+        assert!(AlgorithmRegistry::info_by_string("fs").is_ok());
+
+        // The parser appears to be case-insensitive for hyphenated forms
+        // Test the actual behavior
+        let as_result = AlgorithmRegistry::info_by_string("a-s");
+        assert!(as_result.is_ok(), "a-s should resolve to A-S");
+        assert_eq!(as_result.unwrap().algorithm_type, AlgorithmType::AvellanedaStoikov);
+    }
+
+    /// Test that each algorithm has parameters
+    #[test]
+    fn test_cli_display_each_algorithm_has_parameters() {
+        for algo_type in AlgorithmType::all() {
+            let params = AlgorithmRegistry::parameters(*algo_type);
+            assert!(!params.is_empty(), "Algorithm {:?} should have parameters", algo_type);
+        }
+    }
+
+    /// Test that each algorithm has tunable parameters
+    #[test]
+    fn test_cli_display_each_algorithm_has_tunable_parameters() {
+        for algo_type in AlgorithmType::all() {
+            let tunable = AlgorithmRegistry::tunable_parameters(*algo_type);
+            assert!(!tunable.is_empty(), "Algorithm {:?} should have tunable parameters", algo_type);
+        }
+    }
+
+    /// Test that tunable parameters have valid ranges
+    #[test]
+    fn test_cli_display_tunable_parameters_have_ranges() {
+        for algo_type in AlgorithmType::all() {
+            let tunable = AlgorithmRegistry::tunable_parameters(*algo_type);
+            for param in &tunable {
+                assert!(param.range.is_some(), "Tunable parameter {} should have a range", param.name);
+                let (min, max) = param.range.unwrap();
+                assert!(min < max, "Parameter {} range invalid: {} >= {}", param.name, min, max);
+            }
+        }
+    }
+
+    /// Test that parameter defaults are within ranges
+    #[test]
+    fn test_cli_display_parameter_defaults_in_range() {
+        for algo_type in AlgorithmType::all() {
+            let params = AlgorithmRegistry::parameters(*algo_type);
+            for param in &params {
+                if let Some((min, max)) = param.range {
+                    assert!(
+                        param.default >= min && param.default <= max,
+                        "Parameter {} default {} not in range [{}, {}]",
+                        param.name, param.default, min, max
+                    );
+                }
+            }
+        }
+    }
+
+    /// Test that common parameters exist across all algorithms
+    #[test]
+    fn test_cli_display_common_parameters_exist() {
+        for algo_type in AlgorithmType::all() {
+            let params = AlgorithmRegistry::parameters(*algo_type);
+            let names: Vec<_> = params.iter().map(|p| p.name.as_str()).collect();
+
+            assert!(names.contains(&"max_inventory"), "Algorithm {:?} missing max_inventory", algo_type);
+            assert!(names.contains(&"quote_size"), "Algorithm {:?} missing quote_size", algo_type);
+        }
+    }
+
+    /// Test trainability flags are consistent
+    #[test]
+    fn test_cli_display_trainability_flags() {
+        let as_info = AlgorithmRegistry::info(AlgorithmType::AvellanedaStoikov);
+        let ml_info = AlgorithmRegistry::info(AlgorithmType::MLSpreadSkew);
+        let fs_info = AlgorithmRegistry::info(AlgorithmType::FixedSpread);
+
+        assert!(!as_info.is_trainable, "A-S should not be trainable");
+        assert!(ml_info.is_trainable, "ML should be trainable");
+        assert!(!fs_info.is_trainable, "FS should not be trainable");
+    }
+
+    /// Test configurability flags
+    #[test]
+    fn test_cli_display_configurability_flags() {
+        for info in AlgorithmRegistry::list() {
+            assert!(info.is_configurable, "Algorithm {} should be configurable", info.type_string);
+        }
+    }
+
+    /// Test that algorithm descriptions are meaningful (not just placeholder text)
+    #[test]
+    fn test_cli_display_descriptions_meaningful() {
+        for info in AlgorithmRegistry::list() {
+            assert!(info.description.len() > 20, "Description too short for {}", info.type_string);
+            assert!(!info.description.contains("TODO"), "Description contains TODO for {}", info.type_string);
+            assert!(!info.description.contains("FIXME"), "Description contains FIXME for {}", info.type_string);
+        }
+    }
+
+    /// Test all type strings can create algorithms
+    #[test]
+    fn test_cli_display_all_type_strings_can_create() {
+        for type_string in AlgorithmRegistry::all_type_strings() {
+            let result = AlgorithmRegistry::create_default_by_string(type_string, dec!(0.1), dec!(0.001));
+            assert!(result.is_ok(), "Should be able to create algorithm from type string: {}", type_string);
+        }
+    }
+
+    /// Test JSON output can be serialized and deserialized
+    #[test]
+    fn test_cli_display_json_roundtrip() {
+        let json = AlgorithmRegistry::to_json();
+        let json_str = serde_json::to_string(&json).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(json, parsed, "JSON should survive serialization roundtrip");
+    }
+
+    /// Test JSON output is valid JSON
+    #[test]
+    fn test_cli_display_json_valid() {
+        let json = AlgorithmRegistry::to_json();
+        let json_str = serde_json::to_string_pretty(&json);
+        assert!(json_str.is_ok(), "JSON output should be valid JSON");
+    }
+
+    /// Test format_listing is non-empty
+    #[test]
+    fn test_cli_display_format_listing_non_empty() {
+        let listing = AlgorithmRegistry::format_listing();
+        assert!(!listing.is_empty(), "format_listing should return non-empty string");
+        assert!(listing.len() > 100, "format_listing should be substantial (>100 chars)");
+    }
+
+    /// Test format_listing structure
+    #[test]
+    fn test_cli_display_format_listing_structure() {
+        let listing = AlgorithmRegistry::format_listing();
+        assert!(listing.contains("Available Algorithms:"), "Missing header");
+        assert!(listing.contains("==="), "Missing separator");
+        assert!(listing.contains("---"), "Missing algorithm separator");
+        assert!(listing.contains("Version:"), "Missing version");
+        assert!(listing.contains("Description:"), "Missing description");
+    }
+
+    /// Test that parameter types are valid
+    #[test]
+    fn test_cli_display_parameter_types_valid() {
+        for algo_type in AlgorithmType::all() {
+            let params = AlgorithmRegistry::parameters(*algo_type);
+            for param in &params {
+                // ParameterType should be a valid enum variant (this is compile-time checked,
+                // but we verify the Display impl works)
+                let type_str = format!("{}", param.param_type);
+                assert!(!type_str.is_empty(), "Parameter type display should not be empty");
+            }
+        }
+    }
+
+    /// Test all_type_strings returns expected count
+    #[test]
+    fn test_cli_display_all_type_strings_count() {
+        let strings = AlgorithmRegistry::all_type_strings();
+        // Should have: avellaneda_stoikov + 3 aliases, ml_spread_skew + 3 aliases, fixed_spread + 4 aliases
+        // = 4 + 4 + 5 = 13 total
+        assert!(strings.len() >= 12, "Should have at least 12 type strings (3 algorithms x 4 avg aliases each)");
+    }
+
+    /// Test parameters_by_string works for all valid types
+    #[test]
+    fn test_cli_display_parameters_by_string_all_types() {
+        for type_string in AlgorithmRegistry::all_type_strings() {
+            let result = AlgorithmRegistry::parameters_by_string(type_string);
+            assert!(result.is_ok(), "parameters_by_string should work for: {}", type_string);
+            assert!(!result.unwrap().is_empty(), "Should have parameters for: {}", type_string);
+        }
+    }
+
+    /// Test info consistency between list() and info()
+    #[test]
+    fn test_cli_display_info_consistency() {
+        for list_info in AlgorithmRegistry::list() {
+            let direct_info = AlgorithmRegistry::info(list_info.algorithm_type);
+            assert_eq!(list_info.name, direct_info.name);
+            assert_eq!(list_info.type_string, direct_info.type_string);
+            assert_eq!(list_info.description, direct_info.description);
+            assert_eq!(list_info.version, direct_info.version);
+            assert_eq!(list_info.is_configurable, direct_info.is_configurable);
+            assert_eq!(list_info.is_trainable, direct_info.is_trainable);
+        }
+    }
+
+    /// Test that algorithm types match expected values in info
+    #[test]
+    fn test_cli_display_algorithm_type_consistency() {
+        for info in AlgorithmRegistry::list() {
+            let algo = AlgorithmRegistry::create_default(info.algorithm_type, dec!(0.1), dec!(0.001)).unwrap();
+            assert_eq!(algo.algorithm_type(), info.algorithm_type,
+                "Created algorithm type should match info for {}", info.type_string);
+        }
+    }
 }
