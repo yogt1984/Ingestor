@@ -677,127 +677,115 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Show available algorithms and their parameters
+/// Show available algorithms and their parameters using AlgorithmRegistry
 fn show_algorithms(algo: Option<String>, json_output: bool) -> Result<()> {
-    // Define algorithm metadata
-    let algorithms = vec![
-        AlgorithmInfo {
-            id: "as",
-            full_name: "Avellaneda-Stoikov",
-            description: "Classic inventory-based market making (2008)",
-            category: "Rule-Based",
-            trainable: false,
-            parameters: vec![
-                ParamInfo { name: "spread", description: "Base half-spread in bps", default: "2.0", tunable: true },
-                ParamInfo { name: "skew", description: "Inventory skew factor", default: "0.5", tunable: true },
-                ParamInfo { name: "max_inventory", description: "Maximum position size", default: "0.1", tunable: false },
-                ParamInfo { name: "quote_size", description: "Quote size per order", default: "0.001", tunable: false },
-                ParamInfo { name: "high_entropy", description: "High entropy threshold", default: "0.7", tunable: true },
-                ParamInfo { name: "low_entropy", description: "Low entropy threshold", default: "0.4", tunable: true },
-            ],
-        },
-        AlgorithmInfo {
-            id: "ml",
-            full_name: "ML Spread/Skew Predictor",
-            description: "Linear model for dynamic spread/skew based on market features",
-            category: "Statistical/ML",
-            trainable: true,
-            parameters: vec![
-                ParamInfo { name: "spread_intercept", description: "Base spread intercept", default: "2.0", tunable: true },
-                ParamInfo { name: "spread_entropy_weight", description: "Entropy weight for spread", default: "-1.0", tunable: true },
-                ParamInfo { name: "spread_vol_weight", description: "Volatility weight for spread", default: "400.0", tunable: true },
-                ParamInfo { name: "skew_intercept", description: "Base skew intercept", default: "0.5", tunable: true },
-                ParamInfo { name: "skew_inventory_weight", description: "Inventory weight for skew", default: "-0.6", tunable: true },
-                ParamInfo { name: "max_inventory", description: "Maximum position size", default: "0.1", tunable: false },
-                ParamInfo { name: "quote_size", description: "Quote size per order", default: "0.001", tunable: false },
-            ],
-        },
-    ];
+    use ingestor::algorithms::registry::AlgorithmRegistry;
 
     if json_output {
-        let json = serde_json::json!({
-            "algorithms": algorithms.iter().map(|a| {
-                serde_json::json!({
-                    "id": a.id,
-                    "name": a.full_name,
-                    "description": a.description,
-                    "category": a.category,
-                    "trainable": a.trainable,
-                    "parameters": a.parameters.iter().map(|p| {
-                        serde_json::json!({
-                            "name": p.name,
-                            "description": p.description,
-                            "default": p.default,
-                            "tunable": p.tunable,
-                        })
-                    }).collect::<Vec<_>>()
-                })
-            }).collect::<Vec<_>>()
-        });
+        // Use registry's JSON output
+        let json = AlgorithmRegistry::to_json();
         println!("{}", serde_json::to_string_pretty(&json)?);
         return Ok(());
     }
 
     if let Some(algo_id) = algo {
         // Show details for specific algorithm
-        let algo_info = algorithms.iter().find(|a| a.id == algo_id || a.full_name.to_lowercase().contains(&algo_id.to_lowercase()));
-        match algo_info {
-            Some(info) => {
-                println!("Algorithm: {} ({})", info.full_name, info.id);
-                println!("Category:  {}", info.category);
-                println!("Trainable: {}", if info.trainable { "Yes" } else { "No" });
+        match AlgorithmRegistry::info_by_string(&algo_id) {
+            Ok(info) => {
+                let category = if info.is_trainable { "ML/Trainable" } else { "Rule-Based" };
+                println!("Algorithm: {} ({})", info.name, info.type_string);
+                println!("Version:   {}", info.version);
+                println!("Category:  {}", category);
+                println!("Trainable: {}", if info.is_trainable { "Yes" } else { "No" });
+                println!("Configurable: {}", if info.is_configurable { "Yes" } else { "No" });
                 println!();
                 println!("Description:");
                 println!("  {}", info.description);
                 println!();
-                println!("Parameters:");
-                println!("  {:<25} {:<10} {:<8} {}", "Name", "Default", "Tunable", "Description");
-                println!("  {}", "-".repeat(75));
-                for p in &info.parameters {
-                    println!("  {:<25} {:<10} {:<8} {}", p.name, p.default, if p.tunable { "Yes" } else { "No" }, p.description);
+                if !info.aliases.is_empty() {
+                    println!("Aliases: {}", info.aliases.join(", "));
+                    println!();
+                }
+
+                // Get parameters from registry
+                let params = AlgorithmRegistry::parameters(info.algorithm_type);
+                if !params.is_empty() {
+                    println!("Parameters:");
+                    println!("  {:<25} {:<12} {:<8} {}", "Name", "Default", "Tunable", "Description");
+                    println!("  {}", "-".repeat(80));
+                    for p in &params {
+                        let default_str = format!("{:.4}", p.default);
+                        let range_str = if let Some((min, max)) = p.range {
+                            format!(" [{:.2}, {:.2}]", min, max)
+                        } else {
+                            String::new()
+                        };
+                        println!(
+                            "  {:<25} {:<12} {:<8} {}{}",
+                            p.name,
+                            default_str,
+                            if p.tunable { "Yes" } else { "No" },
+                            p.description,
+                            range_str
+                        );
+                    }
+                }
+
+                // Show tunable parameters summary
+                let tunable_params = AlgorithmRegistry::tunable_parameters(info.algorithm_type);
+                if !tunable_params.is_empty() {
+                    println!();
+                    println!("Tunable Parameters (for grid search):");
+                    for p in &tunable_params {
+                        if let Some((min, max)) = p.range {
+                            println!("  {} [{:.2} - {:.2}]", p.name, min, max);
+                        } else {
+                            println!("  {}", p.name);
+                        }
+                    }
                 }
             }
-            None => {
+            Err(_) => {
                 println!("Unknown algorithm: {}", algo_id);
-                println!("Available algorithms: as, ml");
+                println!();
+                println!("Available algorithms:");
+                for info in AlgorithmRegistry::list() {
+                    println!("  {} (aliases: {})", info.type_string, info.aliases.join(", "));
+                }
             }
         }
     } else {
-        // Show list of all algorithms
+        // Show list of all algorithms using registry
         println!("Available Algorithms");
         println!("====================");
         println!();
-        for info in &algorithms {
-            let trainable_marker = if info.trainable { " [trainable]" } else { "" };
-            println!("{} ({}){}:", info.full_name, info.id, trainable_marker);
-            println!("  Category: {}", info.category);
-            println!("  {}", info.description);
-            println!("  Parameters: {}", info.parameters.iter().filter(|p| p.tunable).map(|p| p.name).collect::<Vec<_>>().join(", "));
+
+        for info in AlgorithmRegistry::list() {
+            let trainable_marker = if info.is_trainable { " [trainable]" } else { "" };
+            let category = if info.is_trainable { "ML/Trainable" } else { "Rule-Based" };
+
+            println!("{} ({}){}:", info.name, info.type_string, trainable_marker);
+            println!("  Category:    {}", category);
+            println!("  Version:     {}", info.version);
+            println!("  Description: {}", info.description);
+            println!("  Aliases:     {}", info.aliases.join(", "));
+
+            // List tunable parameters
+            let tunable = AlgorithmRegistry::tunable_parameters(info.algorithm_type);
+            if !tunable.is_empty() {
+                let param_names: Vec<_> = tunable.iter().map(|p| p.name.as_str()).collect();
+                println!("  Tunable:     {}", param_names.join(", "));
+            }
             println!();
         }
-        println!("Use --algo <id> for detailed parameter info");
-        println!("Use -a <id> to select algorithm for backtest (default: as)");
+
+        println!("Use --algo <type> for detailed parameter info (e.g., --algo as)");
+        println!("Use -a <type> to select algorithm for backtest (default: as)");
+        println!();
+        println!("All valid type strings: {}", AlgorithmRegistry::all_type_strings().join(", "));
     }
 
     Ok(())
-}
-
-/// Algorithm information structure
-struct AlgorithmInfo {
-    id: &'static str,
-    full_name: &'static str,
-    description: &'static str,
-    category: &'static str,
-    trainable: bool,
-    parameters: Vec<ParamInfo>,
-}
-
-/// Parameter information structure
-struct ParamInfo {
-    name: &'static str,
-    description: &'static str,
-    default: &'static str,
-    tunable: bool,
 }
 
 fn run_single(cli: &Cli) -> Result<()> {
