@@ -1,0 +1,704 @@
+
+This text is written to define the requriements for the ingestor project
+
+0. all CLI functionality should be reachable from the tui wich all degree of freedom and with the same default parameters
+the following state of development should be factchekced and assumed as the state of development to achive this condition, it should serve 
+as the starting point of the development reaching v0.1 In ideal case this matric should be completed and tested very thightly for the verion 
+v0.1.
+
+state of development in context of CLI TUI conssitency:
+  
+
+  Gap Analysis: CLI vs TUI
+
+  Available in CLI but NOT in TUI:
+
+  1. grid-search - Most important optimization tool
+  2. sweep - Parameter sensitivity analysis
+  3. out-of-sample - Overfitting detection
+  4. regime-search - Per-regime optimization
+  5. multi-objective - Pareto optimization
+  6. walk-forward-ml - ML model training
+  7. info - Data statistics
+
+  Available in TUI but NOT in CLI:
+
+  1. Live paper trading - Only via TUI
+  2. Real-time visualization - Only via TUI
+
+  Missing from BOTH:
+
+  1. Session history viewer
+  2. Preset comparison tool
+  3. Algorithm A/B testing
+  4. Live 4-week campaign orchestration
+  5. Performance dashboard
+  6. Alert/notification system
+
+
+
+
+  Capabilities Classification
+
+  Category 1: DATA (Collection & Management)
+
+  | Capability          | TUI | CLI               | Status      |
+  |---------------------|-----|-------------------|-------------|
+  | Live data streaming | [0] | cargo run         | ✅ Complete  |
+  | Data quality check  | [5] | backtest validate | ✅ Complete  |
+  | Data info/stats     | -   | backtest info     | ⚠️ CLI only |
+  | Parquet export      | -   | -                 | ❌ Missing   |
+
+  Category 2: DEV (Model Development)
+
+  | Capability              | TUI | CLI                      | Status      |
+  |-------------------------|-----|--------------------------|-------------|
+  | Grid search             | -   | backtest grid-search     | ⚠️ CLI only |
+  | Walk-forward validation | [4] | backtest walk-forward    | ✅ Both      |
+  | ML weight training      | -   | backtest walk-forward-ml | ⚠️ CLI only |
+  | Regime optimization     | -   | backtest regime-search   | ⚠️ CLI only |
+  | Multi-objective         | -   | backtest multi-objective | ⚠️ CLI only |
+  | OOS validation          | -   | backtest out-of-sample   | ⚠️ CLI only |
+
+  Category 3: BACKTEST (Strategy Testing)
+
+  | Capability           | TUI | CLI                        | Status      |
+  |----------------------|-----|----------------------------|-------------|
+  | Single backtest      | [3] | backtest                   | ✅ Both      |
+  | Parameter sweep      | -   | backtest sweep             | ⚠️ CLI only |
+  | Campaign simulation  | [7] | backtest simulate-campaign | ✅ Both      |
+  | Algorithm comparison | -   | -                          | ❌ Missing   |
+
+  Category 4: PAPER (Live Validation)
+
+  | Capability          | TUI | CLI | Status     |
+  |---------------------|-----|-----|------------|
+  | Paper trade default | [1] | -   | ✅ TUI only |
+  | Paper trade preset  | [6] | -   | ✅ TUI only |
+  | Session history     | -   | -   | ❌ Missing  |
+  | Live campaign       | -   | -   | ❌ Missing  |
+
+  Category 5: ALGORITHMS
+
+  | Algorithm          | Implemented | Trainable   | Production Ready |
+  |--------------------|-------------|-------------|------------------|
+  | Avellaneda-Stoikov | ✅           | N/A (fixed) | ✅ Yes            |
+  | ML Spread/Skew     | ✅           | ✅ Yes       | ⚠️ Beta          |
+  | Deep RL Policy     | ❌           | -           | ❌ Not started    |
+  | Ensemble/Meta      | ❌           | -           | ❌ Not started    |
+
+
+1. menu should be ergonomic e.g.
+MAIN MENU
+  │
+  ├── [1] DATA MANAGEMENT ──────────────────────────────
+  │   ├── [1] Live Data Collection (current [0])
+  │   ├── [2] Data Quality Check (current [5])
+  │   ├── [3] Data Statistics/Info
+  │   └── [4] Export/Import Data
+  │
+  ├── [2] MODEL DEVELOPMENT ────────────────────────────
+  │   ├── [1] Grid Search Optimization
+  │   ├── [2] Walk-Forward Validation (current [4])
+  │   ├── [3] ML Weight Training
+  │   ├── [4] Regime-Specific Optimization
+  │   └── [5] Multi-Objective Optimization
+  │
+  ├── [3] BACKTESTING ──────────────────────────────────
+  │   ├── [1] Single Backtest (current [3])
+  │   ├── [2] Parameter Sweep
+  │   ├── [3] Out-of-Sample Validation
+  │   ├── [4] Campaign Simulation (current [7])
+  │   └── [5] Compare Algorithms
+  │
+  ├── [4] PAPER TRADING ────────────────────────────────
+  │   ├── [1] Quick Start (default params, current [1])
+  │   ├── [2] Trade with Preset (current [6])
+  │   ├── [3] Session History & Analysis
+  │   └── [4] 4-Week Validation Campaign
+  │
+  ├── [5] PRESETS & ALGORITHMS ─────────────────────────
+  │   ├── [1] View All Presets
+  │   ├── [2] Create New Preset
+  │   ├── [3] Compare Presets
+  │   ├── [4] Algorithm Selection (A-S vs ML)
+  │   └── [5] Import/Export Presets
+  │
+  ├── [6] REFERENCE ────────────────────────────────────
+  │   ├── [1] Feature Descriptions (current [2])
+  │   ├── [2] Algorithm Documentation
+  │   ├── [3] Keyboard Shortcuts
+  │   └── [4] About / Version
+  │
+  └── [s] Settings | [q] Quit
+2. menu should cotain a persistent status bar e.g. 
+  ┌─────────────────────────────────────────────────────────────────┐
+  │ DATA: 97 files (47 days) │ PRESET: GridSearch-Best │ LIVE: OFF │
+  └─────────────────────────────────────────────────────────────────┘
+
+3. a workflow wizard shouldve added to improve self explainatary nature of the program e.g.
+  3. Workflow Wizard for New Users
+
+  Add [w] Workflow Wizard that guides through:
+  Step 1/5: Data Collection
+    → You have 47 days of data (minimum: 30 days recommended)
+    → [Skip] [Start Collection]
+
+  Step 2/5: Parameter Optimization
+    → Run grid search to find best parameters
+    → [Run Grid Search] [Use Defaults]
+
+  Step 3/5: Validation
+    → Validate with walk-forward to prevent overfitting
+    → [Run Validation] [Skip]
+
+  Step 4/5: Paper Trading
+    → Test on live data for 4 weeks
+    → [Start Paper Trading]
+
+  Step 5/5: Review Results
+    → Compare backtest vs paper trading performance
+    → [View Report]
+
+4. the following algorithm training pipleine should be implemented.
+  Algorithm Training Pipeline (What Should Exist)
+
+  Current Algorithms
+
+  1. Avellaneda-Stoikov (Classic)
+     - No training needed
+     - Parameter optimization via grid search
+     - Inputs: spread_bps, skew, entropy_threshold
+
+  2. ML Spread/Skew (Linear)
+     - Training: walk-forward-ml command
+     - Learns: entropy→spread, volatility→spread, inventory→skew
+     - Weights stored in presets
+
+  Algorithms to Add (Roadmap)
+
+  3. Gradient Boosted Trees (XGBoost/LightGBM)
+     - Train on: features → optimal_spread, optimal_skew
+     - Better non-linear relationships
+     - Requires: Python integration or Rust ML crate
+
+  4. Neural Network Policy
+     - Train on: state → action (quote placement)
+     - Can learn complex patterns
+     - Requires: PyTorch/TensorFlow bridge
+
+  5. Reinforcement Learning (PPO/SAC)
+     - Train via simulation episodes
+     - Reward: realized P&L - risk penalty
+     - State: features + inventory + recent trades
+     - Action: spread, skew, quote/no-quote
+     - Requires: RL framework integration
+
+  6. Ensemble/Meta-Learner
+     - Combines predictions from multiple algorithms
+     - Learns which algorithm works in which regime
+     - Requires: all base algorithms implemented
+
+
+5.  following information chunk should be considered by speicifying and implemeting the first version of the code i.e. algorithm classification:
+  Algorithm Classification
+
+  Category A: Rule-Based (No Training)
+
+  Avellaneda-Stoikov
+  ├── Fixed mathematical formula
+  ├── Hyperparameters: spread, skew, gamma, etc.
+  ├── Tuning: Grid search, Bayesian optimization
+  └── No "learning" - just parameter optimization
+
+  Category B: Statistical/ML (Trainable Weights)
+
+  ML Spread/Skew (Linear)
+  ├── Linear model with learnable weights
+  ├── Training: Regression on historical data
+  ├── Hyperparameters: learning rate, regularization
+  └── Weights: w_entropy, w_volatility, w_inventory
+
+  XGBoost/LightGBM (Future)
+  ├── Gradient boosted trees
+  ├── Training: Minimize prediction error
+  ├── Hyperparameters: max_depth, n_estimators, etc.
+  └── Model: Tree ensemble (thousands of splits)
+
+  Category C: Deep Learning (Trainable Networks)
+
+  Neural Network Policy (Future)
+  ├── Multi-layer perceptron or LSTM
+  ├── Training: Backpropagation
+  ├── Hyperparameters: architecture, learning rate
+  └── Weights: Millions of parameters
+
+  Transformer (Future)
+  ├── Attention-based architecture
+  ├── Training: Self-supervised or supervised
+  └── Can capture long-range dependencies
+
+  Category D: Reinforcement Learning (Policy Learning)
+
+  PPO/SAC Agent (Future)
+  ├── Learns policy through environment interaction
+  ├── Training: Policy gradient methods
+  ├── Reward: P&L - risk penalty
+  ├── State: Market features + inventory
+  ├── Action: Spread, skew, quote/no-quote
+  └── Fundamentally different - learns from consequences
+
+
+6. the following functionality should be covered at the end of the initial design:
+
+so by choosing the grid search one should also choose the algorithm and choose which variables to be searche i.e. degree of freedom constants etc I believe tui should be able to permit
+ that kind of complexitiy isnt it? 
+
+● Exactly right. The current implementation is oversimplified - it hardcodes both the algorithm (Avellaneda-Stoikov) AND the parameter ranges. A proper TUI should allow users to:
+
+  1. Select the algorithm
+  2. Choose which parameters to optimize
+  3. Define the search space for each parameter
+  4. Select the optimization method
+
+  ---
+  What a Proper Parameter Tuning Flow Should Look Like
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                    PARAMETER OPTIMIZATION                        │
+  ├─────────────────────────────────────────────────────────────────┤
+  │                                                                  │
+  │  STEP 1: Select Algorithm                                        │
+  │  ┌─────────────────────────────────────────────────────────┐    │
+  │  │ > [1] Avellaneda-Stoikov (Rule-based, 6 parameters)     │    │
+  │  │   [2] ML Spread/Skew (Trainable, 5 weights)             │    │
+  │  │   [3] Custom/Hybrid                                      │    │
+  │  └─────────────────────────────────────────────────────────┘    │
+  │                                                                  │
+  │  STEP 2: Select Parameters to Optimize                           │
+  │  ┌─────────────────────────────────────────────────────────┐    │
+  │  │ [x] spread_bps        Current: 1.0    Search: [0.5-5.0] │    │
+  │  │ [x] skew_factor       Current: 0.3    Search: [0.1-1.0] │    │
+  │  │ [ ] gamma             Current: 0.1    (fixed)           │    │
+  │  │ [x] entropy_high      Current: 0.7    Search: [0.5-0.9] │    │
+  │  │ [ ] entropy_low       Current: 0.4    (fixed)           │    │
+  │  │ [ ] max_inventory     Current: 0.1    (fixed)           │    │
+  │  └─────────────────────────────────────────────────────────┘    │
+  │                                                                  │
+  │  STEP 3: Define Search Space                                     │
+  │  ┌─────────────────────────────────────────────────────────┐    │
+  │  │ spread_bps:   [0.5] ════════●════════ [5.0]  Step: 0.5  │    │
+  │  │ skew_factor:  [0.1] ════●════════════ [1.0]  Step: 0.1  │    │
+  │  │ entropy_high: [0.5] ════════════●════ [0.9]  Step: 0.1  │    │
+  │  │                                                          │    │
+  │  │ Total combinations: 10 × 10 × 5 = 500                    │    │
+  │  │ Estimated time: ~25 minutes                              │    │
+  │  └─────────────────────────────────────────────────────────┘    │
+  │                                                                  │
+  │  STEP 4: Select Optimization Method                              │
+  │  ┌─────────────────────────────────────────────────────────┐    │
+  │  │ > [1] Grid Search (exhaustive, 500 runs)                │    │
+  │  │   [2] Random Search (100 samples from space)            │    │
+  │  │   [3] Bayesian Optimization (smart, ~50 runs)           │    │
+  │  │   [4] Genetic Algorithm (population-based)              │    │
+  │  └─────────────────────────────────────────────────────────┘    │
+  │                                                                  │
+  │  STEP 5: Select Objective Function                               │
+  │  ┌─────────────────────────────────────────────────────────┐    │
+  │  │ > [1] Maximize Sharpe Ratio                             │    │
+  │  │   [2] Maximize Total Return                             │    │
+  │  │   [3] Minimize Max Drawdown                             │    │
+  │  │   [4] Multi-objective (Pareto frontier)                 │    │
+  │  └─────────────────────────────────────────────────────────┘    │
+  │                                                                  │
+  │  [Enter] Start Optimization    [Esc] Back    [s] Save Config     │
+  └─────────────────────────────────────────────────────────────────┘
+
+  ---
+  Algorithm-Specific Parameter Definitions
+
+  Avellaneda-Stoikov Parameters
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │ AVELLANEDA-STOIKOV PARAMETERS                                    │
+  ├─────────────────────────────────────────────────────────────────┤
+  │                                                                  │
+  │ QUOTING PARAMETERS (Core)                                        │
+  │ ├── spread_bps      [0.5 - 10.0]   Base half-spread in bps      │
+  │ ├── skew_factor     [0.0 - 2.0]    Inventory adjustment          │
+  │ └── quote_size      [0.001 - 0.1]  Order size in BTC            │
+  │                                                                  │
+  │ RISK PARAMETERS                                                  │
+  │ ├── gamma           [0.01 - 1.0]   Risk aversion coefficient    │
+  │ ├── max_inventory   [0.01 - 1.0]   Position limit               │
+  │ └── time_horizon    [1 - 3600]     Planning horizon (seconds)   │
+  │                                                                  │
+  │ REGIME PARAMETERS                                                │
+  │ ├── entropy_high    [0.5 - 0.95]   High entropy threshold       │
+  │ ├── entropy_low     [0.2 - 0.5]    Low entropy threshold        │
+  │ └── regime_action   [widen/pull]   Action in low entropy        │
+  │                                                                  │
+  │ EXECUTION PARAMETERS                                             │
+  │ ├── fill_prob       [0.01 - 0.5]   Assumed fill probability     │
+  │ └── fee_rate        [0.0001-0.001] Trading fee                  │
+  │                                                                  │
+  │ Degrees of Freedom: 11 parameters                                │
+  │ Typical optimization: 3-5 key parameters, fix the rest          │
+  └─────────────────────────────────────────────────────────────────┘
+
+  ML Spread/Skew Parameters
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │ ML SPREAD/SKEW PARAMETERS                                        │
+  ├─────────────────────────────────────────────────────────────────┤
+  │                                                                  │
+  │ TRAINABLE WEIGHTS (Learned via regression)                       │
+  │ ├── spread_intercept    Initial guess for optimization          │
+  │ ├── spread_w_entropy    Weight for entropy feature              │
+  │ ├── spread_w_volatility Weight for volatility feature           │
+  │ ├── skew_intercept      Initial guess for skew                  │
+  │ └── skew_w_inventory    Weight for inventory feature            │
+  │                                                                  │
+  │ HYPERPARAMETERS (Tuned via search)                              │
+  │ ├── learning_rate    [0.001 - 0.1]   For gradient descent       │
+  │ ├── regularization   [0.0 - 1.0]     L2 penalty                 │
+  │ ├── lookback_window  [100 - 10000]   Training samples           │
+  │ └── retrain_freq     [1h - 24h]      How often to update        │
+  │                                                                  │
+  │ FIXED PARAMETERS (Same as A-S)                                   │
+  │ ├── max_inventory, quote_size, fee_rate                         │
+  │                                                                  │
+  │ Training Method: Walk-forward linear regression                  │
+  │ Degrees of Freedom: 5 weights + 4 hyperparameters               │
+  └─────────────────────────────────────────────────────────────────┘
+
+  ---
+  The Complexity Matrix
+
+  ┌────────────────────┬─────────────┬────────────────┬──────────────┐
+  │ Algorithm          │ Parameters  │ Trainable?     │ Search Space │
+  ├────────────────────┼─────────────┼────────────────┼──────────────┤
+  │ Avellaneda-Stoikov │ 11          │ No (formulas)  │ Discrete     │
+  │ ML Spread/Skew     │ 5 + 4 hyper │ Yes (weights)  │ Continuous   │
+  │ XGBoost (future)   │ 12 hyper    │ Yes (trees)    │ Mixed        │
+  │ Neural Net (future)│ Architecture│ Yes (weights)  │ Continuous   │
+  │ RL Policy (future) │ Architecture│ Yes (policy)   │ Continuous   │
+  └────────────────────┴─────────────┴────────────────┴──────────────┘
+
+  ---
+  What the TUI Should Support
+
+  Level 1: Simple Mode (Current)
+
+  "Run optimization with defaults"
+  - Hardcoded algorithm (A-S)
+  - Hardcoded parameter ranges
+  - Hardcoded objective (Sharpe)
+
+  Level 2: Intermediate Mode (Needed)
+
+  "Choose algorithm and basic params"
+  - Select algorithm from list
+  - Choose 2-4 key parameters to optimize
+  - Use sensible default ranges
+  - Single objective function
+
+  Level 3: Advanced Mode (Power Users)
+
+  "Full control"
+  - Select any algorithm
+  - Configure any parameter as fixed or variable
+  - Define custom ranges and step sizes
+  - Multiple objectives (Pareto)
+  - Save/load optimization configs
+  - Custom constraints (e.g., "spread > skew × 2")
+
+  ---
+  Proposed TUI Architecture
+
+  MAIN MENU
+  │
+  └── [O] Optimization Center
+      │
+      ├── [Q] Quick Optimize (Level 1)
+      │   └── "One-click optimization with best defaults"
+      │
+      ├── [S] Standard Optimize (Level 2)
+      │   ├── Select Algorithm
+      │   ├── Choose Key Parameters
+      │   ├── Set Objective
+      │   └── Run
+      │
+      └── [A] Advanced Optimize (Level 3)
+          ├── Algorithm Selection
+          │   ├── Avellaneda-Stoikov
+          │   ├── ML Spread/Skew
+          │   └── Custom
+          │
+          ├── Parameter Configuration
+          │   ├── [x] spread_bps: [0.5, 5.0, 0.5]
+          │   ├── [ ] gamma: 0.1 (fixed)
+          │   └── ... (all parameters)
+          │
+          ├── Search Method
+          │   ├── Grid Search
+          │   ├── Random Search
+          │   ├── Bayesian
+          │   └── Genetic
+          │
+          ├── Objective Function
+          │   ├── Single: Sharpe/Return/Drawdown
+          │   └── Multi: Define weights
+          │
+          ├── Constraints
+          │   └── "spread_bps > 0.5 when entropy < 0.4"
+          │
+          └── [Run] [Save Config] [Load Config]
+
+
+7. the following requirement should be considered:
+
+his is an excellent question. Let me design a complete roadmap for v0.1 that creates a proper foundation for algorithm development.
+
+  ---
+  V0.1 PRODUCTION ROADMAP: Algorithm Development Platform
+
+  Vision Statement
+
+  v0.1 Goal: A production-ready platform where researchers can develop, train, validate, and deploy market making algorithms - from simple rule-based to advanced RL - without touching
+  infrastructure code.
+
+  ---
+  PHASE 0: Foundation Cleanup (1 week)
+
+  0.1 Terminology Standardization
+
+  Current (Confusing)          →  v0.1 (Clear)
+  ─────────────────────────────────────────────────
+  grid-search                  →  tune (hyperparameter tuning)
+  walk-forward                 →  validate (cross-validation)
+  walk-forward-ml              →  train (model training)
+  backtest                     →  evaluate (single evaluation)
+  simulate-campaign            →  simulate (campaign simulation)
+
+  0.2 Architecture Refactor
+
+  Current:
+    algorithms/
+      ├── traits.rs           (MarketMakingAlgorithm trait)
+      ├── avellaneda_stoikov.rs
+      └── ml_spread_skew.rs
+
+  v0.1:
+    algorithms/
+      ├── core/
+      │   ├── traits.rs       (Algorithm, Trainable, Configurable traits)
+      │   ├── parameter.rs    (ParameterDefinition, SearchSpace)
+      │   ├── registry.rs     (AlgorithmRegistry - discover all algos)
+      │   └── factory.rs      (Create algorithm from config)
+      │
+      ├── rule_based/
+      │   ├── avellaneda_stoikov.rs
+      │   ├── fixed_spread.rs         (Simplest baseline)
+      │   └── inventory_skew.rs       (Pure inventory-based)
+      │
+      ├── statistical/
+      │   ├── linear_model.rs         (Current ML spread/skew)
+      │   ├── ridge_regression.rs     (With regularization)
+      │   └── kalman_filter.rs        (Adaptive estimation)
+      │
+      ├── ml/
+      │   ├── gradient_boosting.rs    (XGBoost-style)
+      │   ├── neural_network.rs       (MLP for spread/skew)
+      │   └── transformer.rs          (Attention-based) [future]
+      │
+      └── rl/
+          ├── environment.rs          (Gym-like trading env)
+          ├── ppo.rs                  (Proximal Policy Optimization)
+          ├── sac.rs                  (Soft Actor-Critic)
+          └── dqn.rs                  (Discrete action space)
+
+
+8. the following requirement should be considered:
+---
+  PHASE 4: TUI Integration (2 weeks)
+
+  4.1 Algorithm Selection Screen
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                    ALGORITHM SELECTION                           │
+  ├─────────────────────────────────────────────────────────────────┤
+  │                                                                  │
+  │  RULE-BASED (No training required)                              │
+  │  ┌─────────────────────────────────────────────────────────┐    │
+  │  │ [1] Fixed Spread          2 params    Baseline           │    │
+  │  │ [2] Inventory Skew        3 params    Simple adaptive    │    │
+  │  │ [3] Avellaneda-Stoikov   11 params    Production ready   │    │
+  │  └─────────────────────────────────────────────────────────┘    │
+  │                                                                  │
+  │  STATISTICAL/ML (Trainable weights)                             │
+  │  ┌─────────────────────────────────────────────────────────┐    │
+  │  │ [4] Linear Model          7 params    Fast, interpretable│    │
+  │  │ [5] Gradient Boosting    ~50 trees    Feature importance │    │
+  │  │ [6] Neural Network      ~1000 weights  Non-linear        │    │
+  │  └─────────────────────────────────────────────────────────┘    │
+  │                                                                  │
+  │  REINFORCEMENT LEARNING (Policy learning)                        │
+  │  ┌─────────────────────────────────────────────────────────┐    │
+  │  │ [7] PPO                   Policy net   State-of-the-art  │    │
+  │  │ [8] SAC                   Actor-Critic  Sample efficient │    │
+  │  │ [9] DQN                   Q-network     Discrete actions │    │
+  │  └─────────────────────────────────────────────────────────┘    │
+  │                                                                  │
+  │  [Enter] Select    [i] Info    [c] Compare    [Esc] Back        │
+  └─────────────────────────────────────────────────────────────────┘
+
+  4.2 Training Screen
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                    TRAIN: PPO ALGORITHM                          │
+  ├─────────────────────────────────────────────────────────────────┤
+  │                                                                  │
+  │  STATUS: Training Episode 342/1000                               │
+  │  ████████████████████░░░░░░░░░░░░░░░░░░░░░ 34.2%                │
+  │                                                                  │
+  │  CURRENT METRICS                                                 │
+  │  ├── Episode Reward:    +0.0234                                 │
+  │  ├── Avg Reward (100):  +0.0189                                 │
+  │  ├── Policy Loss:       0.0023                                  │
+  │  ├── Value Loss:        0.0156                                  │
+  │  └── Entropy:           0.892                                   │
+  │                                                                  │
+  │  EVALUATION (every 50 episodes)                                  │
+  │  ├── Sharpe Ratio:      0.82                                    │
+  │  ├── Total Return:      +2.3%                                   │
+  │  ├── Max Drawdown:      -0.8%                                   │
+  │  └── Win Rate:          54.2%                                   │
+  │                                                                  │
+  │  BEST MODEL (Episode 290)                                        │
+  │  └── Sharpe: 0.91 | Return: +2.8% | Saved to ./models/ppo_best │
+  │                                                                  │
+  │  [p] Pause    [s] Stop & Save    [v] Visualize    [Esc] Cancel  │
+  └─────────────────────────────────────────────────────────────────┘
+
+  4.3 Comparison Screen
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                    ALGORITHM COMPARISON                          │
+  ├─────────────────────────────────────────────────────────────────┤
+  │                                                                  │
+  │  BACKTEST RESULTS (47 days, 10% fill rate)                      │
+  │                                                                  │
+  │  Algorithm          Return   Sharpe   MaxDD   WinRate  Trades   │
+  │  ─────────────────────────────────────────────────────────────  │
+  │  Fixed Spread       +1.2%    -1.82    2.1%    51.2%    892     │
+  │  Inventory Skew     +2.8%    -1.45    1.8%    53.4%    756     │
+  │  Avellaneda-Stoikov +5.1%    -1.20    1.5%    59.5%    452     │
+  │  Linear Model       +4.8%    -1.15    1.4%    58.2%    423     │
+  │  Gradient Boosting  +5.4%    -0.95    1.2%    61.3%    398     │
+  │  Neural Network     +5.9%    -0.82    1.1%    62.1%    412     │
+  │  PPO                +6.2%    -0.65    0.9%    63.8%    445     │
+  │  SAC                +6.5%    -0.58    0.8%    64.2%    432     │
+  │                                                                  │
+  │  ═══════════════════════════════════════════════════════════    │
+  │  Winner: SAC (+6.5% return, lowest drawdown)                    │
+  │                                                                  │
+  │  [d] Detailed view    [e] Export    [g] Graph    [Esc] Back     │
+  └─────────────────────────────────────────────────────────────────┘
+
+  ---
+  PHASE 5: Production Features (2 weeks)
+
+  5.1 Model Management
+
+  ./models/
+  ├── avellaneda_stoikov/
+  │   └── preset_grid_best.json       # Just parameters
+  │
+  ├── linear_model/
+  │   ├── weights_v1.json             # Trained weights
+  │   └── weights_v2.json
+  │
+  ├── gradient_boosting/
+  │   ├── model_v1.bin                # Serialized trees
+  │   └── feature_importance.json
+  │
+  ├── neural_network/
+  │   ├── model_v1.pt                 # PyTorch weights
+  │   └── architecture.json
+  │
+  └── ppo/
+      ├── policy_v1.pt                # Policy network
+      ├── value_v1.pt                 # Value network
+      └── training_log.json
+
+
+9. the following bottom line should be reached at the end of the v0.1
+V0.1 DELIVERABLES SUMMARY
+
+  Algorithms Included
+
+  | Category    | Algorithm          | Trainable | Production Ready |
+  |-------------|--------------------|-----------|------------------|
+  | Rule-Based  | Fixed Spread       | No        | Yes (baseline)   |
+  | Rule-Based  | Inventory Skew     | No        | Yes (baseline)   |
+  | Rule-Based  | Avellaneda-Stoikov | No        | Yes              |
+  | Statistical | Linear Model       | Yes       | Yes              |
+  | Statistical | Gradient Boosting  | Yes       | Yes              |
+  | Neural      | MLP Predictor      | Yes       | Beta             |
+  | RL          | PPO                | Yes       | Beta             |
+  | RL          | SAC                | Yes       | Beta             |
+
+  TUI Capabilities
+
+  - Algorithm selection with descriptions
+  - Parameter configuration (per-algorithm)
+  - Training with live progress
+  - Model management (save/load/compare)
+  - Paper trading with any algorithm
+  - Performance comparison
+
+  CLI Capabilities
+
+  - Full algorithm management
+  - Flexible parameter tuning
+  - Training with config files
+  - Batch evaluation
+  - Model export/import
+
+  Infrastructure
+
+  - Unified algorithm trait system
+  - Training pipeline (supervised + RL)
+  - Walk-forward validation
+  - Model checkpointing
+  - TensorBoard logging (optional)
+
+10. the following time constraint and aim is the first draft of the time management to be crisized and optimized.
+
+  TIMELINE ESTIMATE
+
+  | Phase               | Duration    | Effort            |
+  |---------------------|-------------|-------------------|
+  | Phase 0: Cleanup    | 1 week      | Foundation        |
+  | Phase 1: Framework  | 2 weeks     | Architecture      |
+  | Phase 2: Algorithms | 3-4 weeks   | Implementation    |
+  | Phase 3: Training   | 2 weeks     | ML Infrastructure |
+  | Phase 4: TUI        | 2 weeks     | UI/UX             |
+  | Phase 5: Production | 2 weeks     | Polish            |
+  | Total               | 12-13 weeks | ~3 months         |
+
+  ---
+  WHAT V0.1 ENABLES
+
+  After v0.1, a researcher can:
+
+  1. Choose any algorithm from rule-based to RL
+  2. Configure parameters with full control
+  3. Train models with proper validation
+  4. Compare algorithms on same data
+  5. Deploy to paper trading with one click
+  6. Iterate rapidly on algorithm ideas
+
+
+

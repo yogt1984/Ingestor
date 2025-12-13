@@ -2868,7 +2868,6 @@ fn run_simulate_session(
 
     // Process events
     let mut processed = 0;
-    let mut total_fills = 0;
     let update_interval = events.len() / 20; // Update progress ~20 times
 
     for event in &events {
@@ -2883,8 +2882,7 @@ fn run_simulate_session(
             None => continue, // Skip events with missing data
         };
 
-        let fills = runner.process_event(&sim_event)?;
-        total_fills += fills.len();
+        let _fills = runner.process_event(&sim_event)?;
         processed += 1;
 
         // Progress update

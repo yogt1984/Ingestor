@@ -1,0 +1,42 @@
+
+ Development Roadmap Speculation
+
+  Phase 1: TUI Ergonomics (1-2 weeks)
+
+  1. Implement hierarchical menu system
+  2. Add status bar with data/preset/session info
+  3. Expose grid-search from TUI (run in background, show progress)
+  4. Add session history viewer
+  5. Add workflow wizard for new users
+
+  Phase 2: Algorithm Expansion (2-4 weeks)
+
+  1. Add XGBoost/LightGBM algorithm (via Python subprocess or Rust crate)
+  2. Implement feature importance analysis
+  3. Add algorithm comparison mode
+  4. Create algorithm selection in TUI
+
+  Phase 3: RL Integration (4-8 weeks)
+
+  1. Design RL state/action/reward structure
+  2. Implement gym-like environment in Rust
+  3. Bridge to Python RL library (stable-baselines3)
+  4. Train PPO agent on historical data
+  5. Add RL algorithm to TUI selection
+
+  Phase 4: Production Hardening (2-4 weeks)
+
+  1. Add real exchange connectivity (beyond paper)
+  2. Implement proper risk management for live
+  3. Add monitoring/alerting
+  4. Create deployment documentation
+  5. Security audit
+
+  Phase 5: Advanced Features (ongoing)
+
+  1. Multi-symbol support
+  2. Cross-exchange arbitrage
+  3. Portfolio optimization
+  4. Auto-retraining pipeline
+  5. Web dashboard
+
