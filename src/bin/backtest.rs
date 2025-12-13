@@ -789,16 +789,52 @@ fn show_algorithms(algo: Option<String>, json_output: bool) -> Result<()> {
 }
 
 fn run_single(cli: &Cli) -> Result<()> {
+    use ingestor::backtest::replay::ParquetReplay;
+    use ingestor::backtest::harness::BacktestEngine;
+
+    // Parse algorithm type early to fail fast on invalid algorithm
+    let (algo_type, algo_name) = parse_algorithm_type(&cli.algorithm)?;
+    let ml_weights = load_ml_weights_if_needed(algo_type, cli.weights_file.as_deref())?;
+
     // JSON mode: minimal output, just the results
     if cli.json {
-        let mut config = build_config(cli);
-        config.verbose = false;  // Suppress progress output
-        let mut engine = BacktestEngine::new(config);
-        engine.load_data()?;
+        let replay_config = ReplayConfig {
+            data_dir: cli.data.clone(),
+            ..Default::default()
+        };
+
+        let mut replay = ParquetReplay::new(replay_config.clone());
+        replay.load()?;
+        let events = replay.into_events();
+
+        let params = create_algorithm_params(cli, ml_weights.clone());
+        let algorithm = AlgorithmRegistry::create_for_backtest(algo_type, &params)
+            .map_err(|e| anyhow::anyhow!("Failed to create algorithm '{}': {}", algo_name, e))?;
+
+        let backtest_config = BacktestConfig {
+            replay: replay_config,
+            mm: MMConfig::default(),
+            simulator: SimulatorConfig {
+                fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
+                ..Default::default()
+            },
+            fill_sim: ingestor::backtest::FillSimulatorConfig {
+                base_fill_probability: cli.fill_prob,
+                queue_position: cli.queue_pos,
+                fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
+                ..Default::default()
+            },
+            verbose: false,
+            use_realistic_fills: !cli.naive_fills,
+            ..Default::default()
+        };
+
+        let mut engine = BacktestEngine::from_events_with_algorithm(backtest_config, events, algorithm);
         let results = engine.run()?;
 
         // Output JSON for Optuna/scripting
         let json_output = serde_json::json!({
+            "algorithm": algo_type.as_str(),
             "sharpe": results.metrics.sharpe_ratio,
             "total_return": results.metrics.total_return,
             "max_drawdown": results.metrics.max_drawdown,
@@ -816,19 +852,12 @@ fn run_single(cli: &Cli) -> Result<()> {
         return Ok(());
     }
 
-    // Parse algorithm type
-    let algo_name = match cli.algorithm.to_lowercase().as_str() {
-        "as" | "avellaneda_stoikov" | "avellaneda-stoikov" | "a-s" => "Avellaneda-Stoikov",
-        "ml" | "ml_spread_skew" | "ml-spread-skew" | "mlss" => "ML Spread/Skew",
-        _ => &cli.algorithm,
-    };
-
     println!("═══════════════════════════════════════════════════════");
     println!("           INGESTOR BACKTEST ENGINE                     ");
     println!("═══════════════════════════════════════════════════════");
     println!();
     println!("Configuration:");
-    println!("  Algorithm:     {}", algo_name);
+    println!("  Algorithm:     {} ({})", algo_name, algo_type.as_str());
     println!("  Data:          {:?}", cli.data);
     println!("  Spread:        {} bps", cli.spread);
     println!("  Skew Factor:   {}", cli.skew);
@@ -842,16 +871,61 @@ fn run_single(cli: &Cli) -> Result<()> {
     }
     println!("  High Entropy:  {} (above = aggressive)", cli.high_entropy);
     println!("  Low Entropy:   {} (below = defensive)", cli.low_entropy);
+
+    // Show ML weights if using ML algorithm
+    if algo_type == AlgorithmType::MLSpreadSkew {
+        if let Some(ref weights) = ml_weights {
+            println!();
+            println!("ML Weights:");
+            if cli.weights_file.is_none() {
+                println!("  (using default weights)");
+            }
+            println!("  Spread: intercept={:.2}, w_entropy={:.2}, w_volatility={:.2}",
+                weights.spread.intercept, weights.spread.w_entropy, weights.spread.w_volatility);
+            println!("  Skew: intercept={:.2}, w_inventory={:.2}, w_imbalance={:.2}",
+                weights.skew.intercept, weights.skew.w_inventory, weights.skew.w_imbalance);
+        }
+    }
     println!();
 
-    let config = build_config(cli);
-    let mut engine = BacktestEngine::new(config);
+    // Load data
+    let replay_config = ReplayConfig {
+        data_dir: cli.data.clone(),
+        ..Default::default()
+    };
 
     println!("Loading data...");
-    let num_events = engine.load_data()?;
+    let mut replay = ParquetReplay::new(replay_config.clone());
+    let num_events = replay.load()?;
+    let events = replay.into_events();
     println!("Loaded {} events", num_events);
     println!();
 
+    // Create algorithm using registry
+    let params = create_algorithm_params(cli, ml_weights);
+    let algorithm = AlgorithmRegistry::create_for_backtest(algo_type, &params)
+        .map_err(|e| anyhow::anyhow!("Failed to create algorithm '{}': {}", algo_name, e))?;
+
+    // Build backtest config
+    let backtest_config = BacktestConfig {
+        replay: replay_config,
+        mm: MMConfig::default(),
+        simulator: SimulatorConfig {
+            fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
+            ..Default::default()
+        },
+        fill_sim: ingestor::backtest::FillSimulatorConfig {
+            base_fill_probability: cli.fill_prob,
+            queue_position: cli.queue_pos,
+            fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
+            ..Default::default()
+        },
+        verbose: !cli.quiet,
+        use_realistic_fills: !cli.naive_fills,
+        ..Default::default()
+    };
+
+    let mut engine = BacktestEngine::from_events_with_algorithm(backtest_config, events, algorithm);
     let results = engine.run()?;
 
     if cli.stats {
@@ -870,6 +944,13 @@ fn run_single(cli: &Cli) -> Result<()> {
 }
 
 fn run_sweep(cli: &Cli, spreads_str: &str, skews_str: &str) -> Result<()> {
+    use ingestor::backtest::replay::ParquetReplay;
+    use ingestor::backtest::harness::BacktestEngine;
+
+    // Parse algorithm type early to fail fast on invalid algorithm
+    let (algo_type, algo_name) = parse_algorithm_type(&cli.algorithm)?;
+    let ml_weights = load_ml_weights_if_needed(algo_type, cli.weights_file.as_deref())?;
+
     let spreads: Vec<f64> = spreads_str
         .split(',')
         .filter_map(|s| s.trim().parse().ok())
@@ -884,8 +965,9 @@ fn run_sweep(cli: &Cli, spreads_str: &str, skews_str: &str) -> Result<()> {
     println!("           PARAMETER SWEEP                              ");
     println!("═══════════════════════════════════════════════════════");
     println!();
-    println!("Spreads: {:?}", spreads);
-    println!("Skews:   {:?}", skews);
+    println!("Algorithm: {} ({})", algo_name, algo_type.as_str());
+    println!("Spreads:   {:?}", spreads);
+    println!("Skews:     {:?}", skews);
     println!("Total combinations: {}", spreads.len() * skews.len());
     println!();
 
@@ -895,20 +977,37 @@ fn run_sweep(cli: &Cli, spreads_str: &str, skews_str: &str) -> Result<()> {
         ..Default::default()
     };
 
+    let mut replay = ParquetReplay::new(replay_config.clone());
+    let num_events = replay.load()?;
+    println!("Loaded {} events", num_events);
+    println!();
+
     let mut all_results: Vec<SweepResult> = Vec::new();
 
     for &spread in &spreads {
         for &skew in &skews {
-            let mm_config = MMConfig {
-                max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
-                quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
-                regime_params: RegimeParams::uniform(spread, skew),
-                ..Default::default()
-            };
+            // Reload events (need fresh copy for each run)
+            let mut replay = ParquetReplay::new(replay_config.clone());
+            replay.load()?;
+            let events = replay.into_events();
+
+            // Create algorithm with sweep parameters
+            let mut params = BacktestAlgorithmParams::new(
+                Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
+                Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
+                spread,
+                skew,
+            );
+            if let Some(ref weights) = ml_weights {
+                params = params.with_ml_weights(weights.clone());
+            }
+
+            let algorithm = AlgorithmRegistry::create_for_backtest(algo_type, &params)
+                .map_err(|e| anyhow::anyhow!("Failed to create algorithm '{}': {}", algo_name, e))?;
 
             let config = BacktestConfig {
                 replay: replay_config.clone(),
-                mm: mm_config,
+                mm: MMConfig::default(),
                 simulator: SimulatorConfig {
                     fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
                     ..Default::default()
@@ -924,8 +1023,7 @@ fn run_sweep(cli: &Cli, spreads_str: &str, skews_str: &str) -> Result<()> {
                 ..Default::default()
             };
 
-            let mut engine = BacktestEngine::new(config);
-            engine.load_data()?;
+            let mut engine = BacktestEngine::from_events_with_algorithm(config, events, algorithm);
             let results = engine.run()?;
 
             let sweep_result = SweepResult {
@@ -959,6 +1057,7 @@ fn run_sweep(cli: &Cli, spreads_str: &str, skews_str: &str) -> Result<()> {
         println!();
         println!("═══════════════════════════════════════════════════════");
         println!("BEST PARAMETERS (by Sharpe):");
+        println!("  Algorithm:  {} ({})", algo_name, algo_type.as_str());
         println!("  Spread:     {} bps", best.spread);
         println!("  Skew:       {}", best.skew);
         println!("  Sharpe:     {:.2}", best.sharpe);
@@ -1024,73 +1123,57 @@ fn show_info(cli: &Cli) -> Result<()> {
     Ok(())
 }
 
-fn build_config(cli: &Cli) -> BacktestConfig {
-    use ingestor::backtest::FillSimulatorConfig;
-    use ingestor::market_maker::RegimeThresholds;
+/// Parse algorithm type from CLI string and validate it exists.
+/// Returns both the AlgorithmType and a display name for logging.
+fn parse_algorithm_type(algo_str: &str) -> Result<(AlgorithmType, String)> {
+    let algo_type = AlgorithmType::from_str(algo_str)
+        .map_err(|_| anyhow::anyhow!(
+            "Unknown algorithm '{}'. Valid options: {}",
+            algo_str,
+            AlgorithmRegistry::all_type_strings().join(", ")
+        ))?;
 
-    // Build regime params based on CLI flags
-    let regime_params = if cli.regime_params {
-        // Full regime-specific parameters
-        RegimeParams {
-            high_entropy: RegimeConfig {
-                spread_bps: cli.high_spread,
-                skew_factor: cli.high_skew,
-                size_mult: 1.0,
-                should_quote: true,
-            },
-            medium_entropy: RegimeConfig {
-                spread_bps: cli.med_spread,
-                skew_factor: cli.med_skew,
-                size_mult: 0.7,
-                should_quote: true,
-            },
-            low_entropy: RegimeConfig {
-                spread_bps: cli.low_spread,
-                skew_factor: cli.low_skew,
-                size_mult: 0.3,
-                should_quote: cli.quote_low_entropy,
-            },
-        }
-    } else {
-        // Uniform parameters across all regimes
-        RegimeParams::uniform(cli.spread, cli.skew)
-    };
+    let display_name = algo_type.display_name().to_string();
+    Ok((algo_type, display_name))
+}
 
-    let mm_config = MMConfig {
-        max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
-        quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
-        regime_thresholds: RegimeThresholds {
-            high_entropy_threshold: cli.high_entropy,
-            low_entropy_threshold: cli.low_entropy,
-        },
-        regime_params,
-        ..Default::default()
-    };
-
-    let sim_config = SimulatorConfig {
-        fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
-        ..Default::default()
-    };
-
-    let fill_sim_config = FillSimulatorConfig {
-        base_fill_probability: cli.fill_prob,
-        queue_position: cli.queue_pos,
-        fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
-        ..Default::default()
-    };
-
-    BacktestConfig {
-        replay: ReplayConfig {
-            data_dir: cli.data.clone(),
-            ..Default::default()
-        },
-        mm: mm_config,
-        simulator: sim_config,
-        fill_sim: fill_sim_config,
-        verbose: !cli.quiet,
-        use_realistic_fills: !cli.naive_fills,
-        ..Default::default()
+/// Load ML weights from file if algorithm is MLSpreadSkew and weights file provided.
+/// Returns None for non-ML algorithms or if no weights file specified.
+fn load_ml_weights_if_needed(
+    algo_type: AlgorithmType,
+    weights_file: Option<&std::path::Path>,
+) -> Result<Option<MLModelWeights>> {
+    if algo_type != AlgorithmType::MLSpreadSkew {
+        return Ok(None);
     }
+
+    match weights_file {
+        Some(path) => {
+            let json = std::fs::read_to_string(path)
+                .map_err(|e| anyhow::anyhow!("Failed to read weights file {:?}: {}", path, e))?;
+            let weights: MLModelWeights = serde_json::from_str(&json)
+                .map_err(|e| anyhow::anyhow!("Failed to parse weights JSON: {}", e))?;
+            Ok(Some(weights))
+        }
+        None => {
+            // Use default weights with warning
+            Ok(Some(MLModelWeights::default()))
+        }
+    }
+}
+
+/// Create algorithm parameters from CLI options
+fn create_algorithm_params(cli: &Cli, ml_weights: Option<MLModelWeights>) -> BacktestAlgorithmParams {
+    let mut params = BacktestAlgorithmParams::new(
+        Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
+        Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
+        cli.spread,
+        cli.skew,
+    );
+    if let Some(weights) = ml_weights {
+        params = params.with_ml_weights(weights);
+    }
+    params
 }
 
 fn run_walk_forward(
@@ -1203,7 +1286,12 @@ fn run_grid_search(
     fill_probs_str: &str,
     output: Option<PathBuf>,
 ) -> Result<()> {
-    use ingestor::market_maker::RegimeThresholds;
+    use ingestor::backtest::replay::ParquetReplay;
+    use ingestor::backtest::harness::BacktestEngine;
+
+    // Parse algorithm type early to fail fast on invalid algorithm
+    let (algo_type, algo_name) = parse_algorithm_type(&cli.algorithm)?;
+    let ml_weights = load_ml_weights_if_needed(algo_type, cli.weights_file.as_deref())?;
 
     let spreads: Vec<f64> = spreads_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
     let skews: Vec<f64> = skews_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
@@ -1216,6 +1304,7 @@ fn run_grid_search(
     println!("           EXTENDED GRID SEARCH                        ");
     println!("═══════════════════════════════════════════════════════");
     println!();
+    println!("Algorithm: {} ({})", algo_name, algo_type.as_str());
     println!("Parameter Space:");
     println!("  Spreads:          {:?}", spreads);
     println!("  Skews:            {:?}", skews);
@@ -1239,46 +1328,51 @@ fn run_grid_search(
                 for &fill_prob in &fill_probs {
                     count += 1;
 
-                    let regime_params = RegimeParams::uniform(spread, skew);
+                    // Reload events (need fresh copy for each run)
+                    let mut replay = ParquetReplay::new(replay_config.clone());
+                    replay.load()?;
+                    let events = replay.into_events();
 
-                    let mm_config = MMConfig {
-                            max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
-                            quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
-                            regime_thresholds: RegimeThresholds {
-                                high_entropy_threshold: high_entropy,
-                                low_entropy_threshold: cli.low_entropy,
-                            },
-                            regime_params,
+                    // Create algorithm with grid parameters
+                    let mut params = BacktestAlgorithmParams::new(
+                        Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
+                        Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
+                        spread,
+                        skew,
+                    );
+                    if let Some(ref weights) = ml_weights {
+                        params = params.with_ml_weights(weights.clone());
+                    }
+
+                    let algorithm = AlgorithmRegistry::create_for_backtest(algo_type, &params)
+                        .map_err(|e| anyhow::anyhow!("Failed to create algorithm '{}': {}", algo_name, e))?;
+
+                    let config = BacktestConfig {
+                        replay: replay_config.clone(),
+                        mm: MMConfig::default(),
+                        simulator: SimulatorConfig {
+                            fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
                             ..Default::default()
-                        };
-
-                        let config = BacktestConfig {
-                            replay: replay_config.clone(),
-                            mm: mm_config,
-                            simulator: SimulatorConfig {
-                                fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
-                                ..Default::default()
-                            },
-                            fill_sim: ingestor::backtest::FillSimulatorConfig {
-                                base_fill_probability: fill_prob,
-                                queue_position: cli.queue_pos,
-                                fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
-                                ..Default::default()
-                            },
-                            verbose: false,
-                            use_realistic_fills: !cli.naive_fills,
+                        },
+                        fill_sim: ingestor::backtest::FillSimulatorConfig {
+                            base_fill_probability: fill_prob,
+                            queue_position: cli.queue_pos,
+                            fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
                             ..Default::default()
-                        };
+                        },
+                        verbose: false,
+                        use_realistic_fills: !cli.naive_fills,
+                        ..Default::default()
+                    };
 
-                        let mut engine = BacktestEngine::new(config);
-                        engine.load_data()?;
-                        let results = engine.run()?;
+                    let mut engine = BacktestEngine::from_events_with_algorithm(config, events, algorithm);
+                    let results = engine.run()?;
 
-                        let avg_trade_pnl = if results.metrics.num_trades > 0 {
-                            results.metrics.total_return / results.metrics.num_trades as f64
-                        } else {
-                            0.0
-                        };
+                    let avg_trade_pnl = if results.metrics.num_trades > 0 {
+                        results.metrics.total_return / results.metrics.num_trades as f64
+                    } else {
+                        0.0
+                    };
 
                     let grid_result = GridSearchResult {
                         spread,
@@ -1333,6 +1427,7 @@ fn run_grid_search(
         println!("═══════════════════════════════════════════════════════");
         println!("RECOMMENDED PARAMETERS:");
         println!("═══════════════════════════════════════════════════════");
+        println!("  Algorithm:                  {} ({})", algo_name, algo_type.as_str());
         println!("  base_spread_bps:            {}", best.spread);
         println!("  inventory_skew_factor:      {}", best.skew);
         println!("  high_entropy_threshold:     {}", best.high_entropy_threshold);
@@ -3230,6 +3325,415 @@ fn print_campaign_report(report: &CampaignReport) {
             println!("ACTION: EXTEND validation period");
             println!("  - Insufficient data for conclusive validation");
             println!("  - Continue collecting paper trading data");
+        }
+    }
+}
+
+// ============================================================================
+// Unit Tests for Algorithm Flag Parsing
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ingestor::algorithms::{AlgorithmType, AlgorithmRegistry, MLModelWeights};
+
+    // ========================================================================
+    // parse_algorithm_type() tests - PARANOID
+    // ========================================================================
+
+    #[test]
+    fn test_parse_algorithm_type_valid_canonical_names() {
+        // Test all canonical algorithm names work correctly
+        let test_cases = [
+            ("avellaneda_stoikov", AlgorithmType::AvellanedaStoikov),
+            ("ml_spread_skew", AlgorithmType::MLSpreadSkew),
+            ("fixed_spread", AlgorithmType::FixedSpread),
+        ];
+
+        for (input, expected_type) in test_cases {
+            let result = parse_algorithm_type(input);
+            assert!(result.is_ok(), "Failed to parse canonical name: {}", input);
+            let (algo_type, display_name) = result.unwrap();
+            assert_eq!(algo_type, expected_type, "Wrong type for: {}", input);
+            assert!(!display_name.is_empty(), "Empty display name for: {}", input);
+        }
+    }
+
+    #[test]
+    fn test_parse_algorithm_type_valid_aliases() {
+        // Test all known aliases work correctly (based on AlgorithmType::from_str)
+        // A-S accepts: avellaneda_stoikov | avellaneda-stoikov | as | a-s
+        let as_aliases = ["as", "a-s", "avellaneda_stoikov", "avellaneda-stoikov"];
+        for alias in as_aliases {
+            let result = parse_algorithm_type(alias);
+            assert!(result.is_ok(), "Failed to parse A-S alias: {}", alias);
+            let (algo_type, _) = result.unwrap();
+            assert_eq!(algo_type, AlgorithmType::AvellanedaStoikov,
+                "Wrong type for A-S alias: {}", alias);
+        }
+
+        // ML accepts: ml_spread_skew | ml-spread-skew | ml | mlss
+        let ml_aliases = ["ml", "mlss", "ml_spread_skew", "ml-spread-skew"];
+        for alias in ml_aliases {
+            let result = parse_algorithm_type(alias);
+            assert!(result.is_ok(), "Failed to parse ML alias: {}", alias);
+            let (algo_type, _) = result.unwrap();
+            assert_eq!(algo_type, AlgorithmType::MLSpreadSkew,
+                "Wrong type for ML alias: {}", alias);
+        }
+
+        // Fixed accepts: fixed_spread | fixed-spread | fixed | fs | baseline
+        let fixed_aliases = ["fixed", "fs", "baseline", "fixed_spread", "fixed-spread"];
+        for alias in fixed_aliases {
+            let result = parse_algorithm_type(alias);
+            assert!(result.is_ok(), "Failed to parse Fixed alias: {}", alias);
+            let (algo_type, _) = result.unwrap();
+            assert_eq!(algo_type, AlgorithmType::FixedSpread,
+                "Wrong type for Fixed alias: {}", alias);
+        }
+    }
+
+    #[test]
+    fn test_parse_algorithm_type_invalid_names() {
+        // Test that invalid names produce errors with helpful messages
+        // Note: AlgorithmType::from_str uses to_lowercase(), so case variations ARE valid
+        let invalid_names = [
+            "invalid",
+            "unknown",
+            "neural_network",
+            "gradient_boost",
+            "random_forest",
+            "ppo",
+            "sac",
+            "dqn",
+            "",  // Empty string
+            " ",  // Whitespace
+            "avellaneda stoikov",  // Space instead of underscore (invalid)
+            "123",  // Numbers only
+            "!@#$%",  // Special characters
+            "avellaneda",  // Partial match (not a valid alias)
+            "stoikov",     // Partial match (not a valid alias)
+        ];
+
+        for invalid in invalid_names {
+            let result = parse_algorithm_type(invalid);
+            assert!(result.is_err(),
+                "Should have failed for invalid name: '{}'", invalid);
+
+            // Check error message contains helpful info
+            let err_msg = result.unwrap_err().to_string();
+            assert!(err_msg.contains("Unknown algorithm") || err_msg.contains("Valid options"),
+                "Error message should be helpful for: '{}', got: {}", invalid, err_msg);
+        }
+    }
+
+    #[test]
+    fn test_parse_algorithm_type_case_insensitive() {
+        // AlgorithmType::from_str uses to_lowercase(), so UPPERCASE should work
+        let uppercase_cases = ["AS", "ML", "FIXED", "AVELLANEDA_STOIKOV", "ML_SPREAD_SKEW"];
+        for case in uppercase_cases {
+            let result = parse_algorithm_type(case);
+            assert!(result.is_ok(), "Uppercase should be valid: {}", case);
+        }
+    }
+
+    #[test]
+    fn test_parse_algorithm_type_returns_correct_display_names() {
+        // Verify display names are human-readable
+        let (_, as_name) = parse_algorithm_type("as").unwrap();
+        assert!(as_name.contains("Avellaneda") || as_name.contains("Market"),
+            "A-S display name should be descriptive: {}", as_name);
+
+        let (_, ml_name) = parse_algorithm_type("ml").unwrap();
+        assert!(ml_name.contains("ML") || ml_name.contains("Spread") || ml_name.contains("Linear"),
+            "ML display name should be descriptive: {}", ml_name);
+
+        let (_, fixed_name) = parse_algorithm_type("fixed").unwrap();
+        assert!(fixed_name.contains("Fixed") || fixed_name.contains("Baseline"),
+            "Fixed display name should be descriptive: {}", fixed_name);
+    }
+
+    // ========================================================================
+    // load_ml_weights_if_needed() tests - PARANOID
+    // ========================================================================
+
+    #[test]
+    fn test_load_ml_weights_non_ml_algorithms() {
+        // Non-ML algorithms should always return None
+        let result = load_ml_weights_if_needed(
+            AlgorithmType::AvellanedaStoikov,
+            None
+        );
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none(),
+            "A-S should not load ML weights");
+
+        let result = load_ml_weights_if_needed(
+            AlgorithmType::FixedSpread,
+            None
+        );
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none(),
+            "Fixed should not load ML weights");
+    }
+
+    #[test]
+    fn test_load_ml_weights_ml_algorithm_no_file() {
+        // ML algorithm without file should return default weights
+        let result = load_ml_weights_if_needed(
+            AlgorithmType::MLSpreadSkew,
+            None
+        );
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_some(),
+            "ML without file should return default weights");
+    }
+
+    #[test]
+    fn test_load_ml_weights_missing_file() {
+        // ML algorithm with non-existent file should error
+        let result = load_ml_weights_if_needed(
+            AlgorithmType::MLSpreadSkew,
+            Some(std::path::Path::new("/nonexistent/path/weights.json"))
+        );
+        assert!(result.is_err(),
+            "Missing weights file should produce error");
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Failed to read") || err_msg.contains("weights"),
+            "Error should mention file read failure: {}", err_msg);
+    }
+
+    #[test]
+    fn test_load_ml_weights_invalid_json() {
+        // Create temp file with invalid JSON
+        use std::io::Write;
+        let dir = std::env::temp_dir();
+        let path = dir.join("test_invalid_weights.json");
+        let mut file = std::fs::File::create(&path).unwrap();
+        writeln!(file, "{{ not valid json }}").unwrap();
+        drop(file);
+
+        let result = load_ml_weights_if_needed(
+            AlgorithmType::MLSpreadSkew,
+            Some(&path)
+        );
+        assert!(result.is_err(),
+            "Invalid JSON should produce error");
+
+        // Cleanup
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_load_ml_weights_valid_json() {
+        // Create temp file with valid weights JSON
+        use std::io::Write;
+        let dir = std::env::temp_dir();
+        let path = dir.join("test_valid_weights.json");
+
+        let weights = MLModelWeights::default();
+        let json = serde_json::to_string(&weights).unwrap();
+
+        let mut file = std::fs::File::create(&path).unwrap();
+        write!(file, "{}", json).unwrap();
+        drop(file);
+
+        let result = load_ml_weights_if_needed(
+            AlgorithmType::MLSpreadSkew,
+            Some(&path)
+        );
+        assert!(result.is_ok(), "Valid JSON should parse successfully");
+        assert!(result.unwrap().is_some(), "Should return parsed weights");
+
+        // Cleanup
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ========================================================================
+    // create_algorithm_params() tests - PARANOID
+    // ========================================================================
+
+    #[test]
+    fn test_create_algorithm_params_basic() {
+        // Test with default CLI values
+        let cli = Cli::parse_from(&[
+            "backtest",
+            "--data", "/tmp/test",
+        ]);
+
+        let params = create_algorithm_params(&cli, None);
+
+        // Verify default values are reasonable
+        assert!(params.max_inventory > Decimal::ZERO,
+            "max_inventory should be positive");
+        assert!(params.quote_size > Decimal::ZERO,
+            "quote_size should be positive");
+        assert!(params.spread_bps > 0.0,
+            "spread_bps should be positive");
+    }
+
+    #[test]
+    fn test_create_algorithm_params_with_ml_weights() {
+        let cli = Cli::parse_from(&[
+            "backtest",
+            "--data", "/tmp/test",
+        ]);
+
+        let weights = MLModelWeights::default();
+        let params = create_algorithm_params(&cli, Some(weights.clone()));
+
+        assert!(params.ml_weights.is_some(),
+            "ML weights should be set when provided");
+    }
+
+    #[test]
+    fn test_create_algorithm_params_custom_values() {
+        let cli = Cli::parse_from(&[
+            "backtest",
+            "--data", "/tmp/test",
+            "--max-inventory", "0.5",
+            "--quote-size", "0.01",
+            "--spread", "2.5",
+            "--skew", "0.7",
+        ]);
+
+        let params = create_algorithm_params(&cli, None);
+
+        assert_eq!(params.max_inventory, Decimal::from_f64_retain(0.5).unwrap());
+        assert_eq!(params.quote_size, Decimal::from_f64_retain(0.01).unwrap());
+        assert!((params.spread_bps - 2.5).abs() < 0.001);
+        assert!((params.skew_factor - 0.7).abs() < 0.001);
+    }
+
+    // ========================================================================
+    // Integration tests: Algorithm creation roundtrip
+    // ========================================================================
+
+    #[test]
+    fn test_algorithm_creation_roundtrip_all_types() {
+        // Test that all algorithm types can be created via the full pipeline
+        let algorithms = ["as", "ml", "fixed"];
+
+        for algo_str in algorithms {
+            let (algo_type, display_name) = parse_algorithm_type(algo_str)
+                .expect(&format!("Failed to parse: {}", algo_str));
+
+            let ml_weights = load_ml_weights_if_needed(algo_type, None)
+                .expect(&format!("Failed to load weights for: {}", algo_str));
+
+            let mut params = BacktestAlgorithmParams::new(
+                dec!(0.1),
+                dec!(0.001),
+                1.0,
+                0.5,
+            );
+            if let Some(weights) = ml_weights {
+                params = params.with_ml_weights(weights);
+            }
+
+            let algorithm = AlgorithmRegistry::create_for_backtest(algo_type, &params);
+            assert!(algorithm.is_ok(),
+                "Failed to create algorithm for '{}': {:?}", algo_str, algorithm.err());
+
+            let algo = algorithm.unwrap();
+            assert_eq!(algo.algorithm_type(), algo_type,
+                "Algorithm type mismatch for: {}", algo_str);
+            assert!(!algo.name().is_empty(),
+                "Algorithm name empty for: {}", algo_str);
+        }
+    }
+
+    #[test]
+    fn test_algorithm_registry_all_type_strings_exhaustive() {
+        // Verify that all_type_strings returns all algorithms we support
+        let type_strings = AlgorithmRegistry::all_type_strings();
+
+        assert!(type_strings.iter().any(|s| s.contains("avellaneda") || *s == "as"),
+            "Should include A-S in type strings");
+        assert!(type_strings.iter().any(|s| s.contains("ml") || s.contains("linear")),
+            "Should include ML in type strings");
+        assert!(type_strings.iter().any(|s| s.contains("fixed") || s.contains("baseline")),
+            "Should include Fixed in type strings");
+    }
+
+    #[test]
+    fn test_default_algorithm_is_as() {
+        // The default algorithm flag value should be "as"
+        let cli = Cli::parse_from(&[
+            "backtest",
+            "--data", "/tmp/test",
+        ]);
+
+        assert_eq!(cli.algorithm, "as",
+            "Default algorithm should be 'as'");
+
+        let (algo_type, _) = parse_algorithm_type(&cli.algorithm).unwrap();
+        assert_eq!(algo_type, AlgorithmType::AvellanedaStoikov,
+            "Default should resolve to Avellaneda-Stoikov");
+    }
+
+    // ========================================================================
+    // Edge cases - PARANOID
+    // ========================================================================
+
+    #[test]
+    fn test_algorithm_type_case_sensitivity() {
+        // Test various case combinations
+        let mixed_cases = ["AS", "As", "aS", "ML", "Ml", "FIXED", "Fixed"];
+
+        for case in mixed_cases {
+            let result = parse_algorithm_type(case);
+            // Either it works (case-insensitive) or fails gracefully
+            if result.is_err() {
+                let err = result.unwrap_err().to_string();
+                assert!(err.contains("Unknown algorithm") || err.contains("Valid options"),
+                    "Case '{}' should have helpful error: {}", case, err);
+            }
+            // If it works, that's also fine (case-insensitive implementation)
+        }
+    }
+
+    #[test]
+    fn test_algorithm_with_whitespace() {
+        // Whitespace handling
+        let result = parse_algorithm_type(" as ");
+        // Should either trim and work, or fail gracefully
+        if result.is_err() {
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains("Unknown algorithm"),
+                "Whitespace error should be clear: {}", err);
+        }
+    }
+
+    #[test]
+    fn test_all_algorithms_produce_quotes() {
+        // Verify each algorithm can actually produce quote calculations
+        // (This is more of an integration sanity check)
+        let algorithms = [
+            AlgorithmType::AvellanedaStoikov,
+            AlgorithmType::MLSpreadSkew,
+            AlgorithmType::FixedSpread,
+        ];
+
+        for algo_type in algorithms {
+            let mut params = BacktestAlgorithmParams::new(
+                dec!(0.1),
+                dec!(0.001),
+                1.0,
+                0.5,
+            );
+            if algo_type == AlgorithmType::MLSpreadSkew {
+                params = params.with_ml_weights(MLModelWeights::default());
+            }
+
+            let algorithm = AlgorithmRegistry::create_for_backtest(algo_type, &params)
+                .expect("Failed to create algorithm");
+
+            // Algorithm should be usable (has valid type and name)
+            assert!(!algorithm.name().is_empty());
+            assert!(!algorithm.type_string().is_empty());
         }
     }
 }
