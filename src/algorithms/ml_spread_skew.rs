@@ -892,6 +892,35 @@ impl Trainable for MLSpreadSkewAlgorithm {
             ));
         }
 
+        // Validate features and targets have the same length
+        if data.features.len() != data.targets.len() {
+            return Err(AlgorithmError::InvalidConfig(format!(
+                "Features length ({}) does not match targets length ({})",
+                data.features.len(),
+                data.targets.len()
+            )));
+        }
+
+        // Validate sample weights length if provided
+        if let Some(ref weights) = data.weights {
+            if weights.len() != data.features.len() {
+                return Err(AlgorithmError::InvalidConfig(format!(
+                    "Sample weights length ({}) does not match features length ({})",
+                    weights.len(),
+                    data.features.len()
+                )));
+            }
+            // Validate sample weights are non-negative
+            for (i, &w) in weights.iter().enumerate() {
+                if w < 0.0 {
+                    return Err(AlgorithmError::InvalidConfig(format!(
+                        "Sample weight {} is negative: {}",
+                        i, w
+                    )));
+                }
+            }
+        }
+
         // Validate feature vector length (expecting 5 features)
         let expected_features = 5;
         for (i, features) in data.features.iter().enumerate() {
@@ -1051,6 +1080,16 @@ impl Trainable for MLSpreadSkewAlgorithm {
                 "Expected 10 weights, got {}",
                 weights.len()
             )));
+        }
+
+        // Validate weights are finite (not NaN or Infinity)
+        for (i, &w) in weights.iter().enumerate() {
+            if !w.is_finite() {
+                return Err(AlgorithmError::InvalidConfig(format!(
+                    "Weight {} is not finite (NaN or Infinity): {}",
+                    i, w
+                )));
+            }
         }
 
         self.weights.spread.intercept = weights[0];
@@ -1899,5 +1938,408 @@ mod tests {
         // New spread should be at max (clamped)
         assert_eq!(new_spread, algo.config.max_spread_bps);
         assert!(new_spread != initial_spread);
+    }
+
+    // ========================================================================
+    // SKEPTICAL Trainable Trait Tests - Edge Cases & Stress Tests
+    // ========================================================================
+
+    /// Test that NaN weights are rejected
+    #[test]
+    fn test_trainable_set_weights_rejects_nan() {
+        let mut algo = MLSpreadSkewAlgorithm::with_defaults();
+        let weights_with_nan = vec![1.0, f64::NAN, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+
+        let result = algo.set_weights(weights_with_nan);
+        assert!(result.is_err(), "Should reject NaN weights");
+        let err = result.unwrap_err();
+        assert!(format!("{}", err).to_lowercase().contains("nan") ||
+                format!("{}", err).to_lowercase().contains("invalid"),
+                "Error should mention NaN or invalid: {}", err);
+    }
+
+    /// Test that Infinity weights are rejected
+    #[test]
+    fn test_trainable_set_weights_rejects_infinity() {
+        let mut algo = MLSpreadSkewAlgorithm::with_defaults();
+        let weights_with_inf = vec![1.0, f64::INFINITY, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+
+        let result = algo.set_weights(weights_with_inf);
+        assert!(result.is_err(), "Should reject Infinity weights");
+    }
+
+    /// Test that negative infinity weights are rejected
+    #[test]
+    fn test_trainable_set_weights_rejects_neg_infinity() {
+        let mut algo = MLSpreadSkewAlgorithm::with_defaults();
+        let weights_with_neg_inf = vec![f64::NEG_INFINITY, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+
+        let result = algo.set_weights(weights_with_neg_inf);
+        assert!(result.is_err(), "Should reject negative infinity weights");
+    }
+
+    /// Test weights with extreme but valid values
+    #[test]
+    fn test_trainable_set_weights_extreme_values() {
+        let mut algo = MLSpreadSkewAlgorithm::with_defaults();
+        let extreme_weights = vec![1e10, -1e10, 1e-10, -1e-10, 0.0, 1e6, -1e6, 1e-6, -1e-6, 0.0];
+
+        let result = algo.set_weights(extreme_weights.clone());
+        assert!(result.is_ok(), "Should accept extreme but finite values");
+
+        let retrieved = algo.get_weights();
+        for (i, (expected, actual)) in extreme_weights.iter().zip(retrieved.iter()).enumerate() {
+            assert_eq!(*expected, *actual, "Weight {} should match", i);
+        }
+    }
+
+    /// Test zero weights are handled correctly
+    #[test]
+    fn test_trainable_set_weights_all_zeros() {
+        let mut algo = MLSpreadSkewAlgorithm::with_defaults();
+        let zero_weights = vec![0.0; 10];
+
+        algo.set_weights(zero_weights).unwrap();
+
+        // With all zero weights, spread should be at minimum (clamped)
+        let input = create_test_input(0.7, 0.001, 0.0);
+        let spread = algo.predict_spread(&input);
+        assert_eq!(spread, algo.config.min_spread_bps);
+    }
+
+    /// Test training with mismatched features/targets lengths
+    #[test]
+    fn test_trainable_train_mismatched_lengths() {
+        let mut algo = MLSpreadSkewAlgorithm::with_defaults();
+        let features = vec![
+            vec![0.5, 0.001, 0.0, 0.0005, 0.0],
+            vec![0.6, 0.002, 0.1, 0.0012, 0.0],
+        ];
+        let targets = vec![2.0]; // Only 1 target, but 2 feature rows
+        let data = TrainingData::new(features, targets);
+
+        let result = algo.train(&data);
+        assert!(result.is_err(), "Should reject mismatched lengths");
+    }
+
+    /// Test training with NaN in features
+    #[test]
+    fn test_trainable_train_nan_features() {
+        let mut algo = MLSpreadSkewAlgorithm::with_defaults();
+        let features = vec![
+            vec![f64::NAN, 0.001, 0.0, 0.0005, 0.0],
+            vec![0.6, 0.002, 0.1, 0.0012, 0.0],
+        ];
+        let targets = vec![2.0, 2.5];
+        let data = TrainingData::new(features, targets);
+
+        let result = algo.train(&data);
+        assert!(result.is_err(), "Should reject NaN in features");
+    }
+
+    /// Test training with NaN in targets
+    #[test]
+    fn test_trainable_train_nan_targets() {
+        let mut algo = MLSpreadSkewAlgorithm::with_defaults();
+        let features = vec![
+            vec![0.5, 0.001, 0.0, 0.0005, 0.0],
+            vec![0.6, 0.002, 0.1, 0.0012, 0.0],
+        ];
+        let targets = vec![f64::NAN, 2.5];
+        let data = TrainingData::new(features, targets);
+
+        let result = algo.train(&data);
+        assert!(result.is_err(), "Should reject NaN in targets");
+    }
+
+    /// Test training with infinity in features
+    #[test]
+    fn test_trainable_train_infinity_features() {
+        let mut algo = MLSpreadSkewAlgorithm::with_defaults();
+        let features = vec![
+            vec![f64::INFINITY, 0.001, 0.0, 0.0005, 0.0],
+            vec![0.6, 0.002, 0.1, 0.0012, 0.0],
+        ];
+        let targets = vec![2.0, 2.5];
+        let data = TrainingData::new(features, targets);
+
+        let result = algo.train(&data);
+        assert!(result.is_err(), "Should reject infinity in features");
+    }
+
+    /// Test training result metrics are valid
+    #[test]
+    fn test_trainable_train_result_metrics_valid() {
+        let mut algo = MLSpreadSkewAlgorithm::with_defaults();
+
+        let features = vec![
+            vec![0.5, 0.001, 0.0, 0.0005, 0.0],
+            vec![0.6, 0.002, 0.1, 0.0012, 0.0],
+            vec![0.7, 0.001, 0.2, 0.0007, 0.0],
+            vec![0.8, 0.003, 0.0, 0.0024, 0.0],
+        ];
+        let targets = vec![2.0, 2.5, 3.0, 2.2];
+        let data = TrainingData::new(features, targets);
+
+        let result = algo.train(&data).unwrap();
+
+        // Check metrics are finite and non-negative where appropriate
+        let mse = *result.metrics.get("mse").expect("mse should exist");
+        let rmse = *result.metrics.get("rmse").expect("rmse should exist");
+
+        assert!(mse.is_finite(), "MSE should be finite");
+        assert!(mse >= 0.0, "MSE should be non-negative");
+        assert!(rmse.is_finite(), "RMSE should be finite");
+        assert!(rmse >= 0.0, "RMSE should be non-negative");
+        assert!((rmse - mse.sqrt()).abs() < 1e-10, "RMSE should equal sqrt(MSE)");
+    }
+
+    /// Test that training info is properly recorded
+    #[test]
+    fn test_trainable_train_records_training_info() {
+        let mut algo = MLSpreadSkewAlgorithm::with_defaults();
+
+        let features = vec![
+            vec![0.5, 0.001, 0.0, 0.0005, 0.0],
+            vec![0.6, 0.002, 0.1, 0.0012, 0.0],
+            vec![0.7, 0.001, 0.2, 0.0007, 0.0],
+        ];
+        let targets = vec![2.0, 2.5, 3.0];
+        let data = TrainingData::new(features, targets);
+
+        algo.train(&data).unwrap();
+
+        let info = algo.weights.training_info.as_ref().expect("Should have training info");
+        assert_eq!(info.num_samples, 3, "Should record correct sample count");
+        assert!(!info.trained_on.is_empty(), "Should record training date");
+    }
+
+    /// Test that reset_weights properly clears training state
+    #[test]
+    fn test_trainable_reset_clears_all_state() {
+        let mut algo = MLSpreadSkewAlgorithm::with_defaults();
+
+        // Train the algorithm
+        let features = vec![
+            vec![0.5, 0.001, 0.0, 0.0005, 0.0],
+            vec![0.6, 0.002, 0.1, 0.0012, 0.0],
+        ];
+        let targets = vec![2.0, 2.5];
+        let data = TrainingData::new(features, targets);
+        algo.train(&data).unwrap();
+
+        assert!(algo.is_trained(), "Should be trained after training");
+
+        // Reset
+        algo.reset_weights();
+
+        assert!(!algo.is_trained(), "Should not be trained after reset");
+        assert!(algo.weights.training_info.is_none(), "Training info should be cleared");
+        assert_eq!(algo.weights.version, "1.0.0-baseline", "Version should be reset");
+
+        // Weights should be back to defaults
+        let default = MLModelWeights::default();
+        assert_eq!(algo.weights.spread.intercept, default.spread.intercept);
+        assert_eq!(algo.weights.skew.w_inventory, default.skew.w_inventory);
+    }
+
+    /// Test concurrent weight access (basic thread safety check)
+    #[test]
+    fn test_trainable_weights_concurrent_access() {
+        use std::thread;
+        use std::sync::Arc;
+
+        let algo = Arc::new(std::sync::Mutex::new(MLSpreadSkewAlgorithm::with_defaults()));
+
+        let handles: Vec<_> = (0..10).map(|i| {
+            let algo_clone = Arc::clone(&algo);
+            thread::spawn(move || {
+                let mut algo = algo_clone.lock().unwrap();
+                let weights = vec![i as f64; 10];
+                algo.set_weights(weights).unwrap();
+                algo.get_weights()
+            })
+        }).collect();
+
+        for handle in handles {
+            let weights = handle.join().unwrap();
+            // Each thread should get its own consistent set of weights
+            assert_eq!(weights.len(), 10);
+            // All weights in a single get should be the same (from one set_weights call)
+            let first = weights[0];
+            assert!(weights.iter().all(|&w| (w - first).abs() < 0.0001),
+                    "All weights should be from same set_weights call");
+        }
+    }
+
+    /// Test that predictions are deterministic with same weights
+    #[test]
+    fn test_trainable_predictions_deterministic() {
+        let algo = MLSpreadSkewAlgorithm::with_defaults();
+        let input = create_test_input(0.7, 0.001, 0.0);
+
+        let spread1 = algo.predict_spread(&input);
+        let spread2 = algo.predict_spread(&input);
+        let spread3 = algo.predict_spread(&input);
+
+        assert_eq!(spread1, spread2);
+        assert_eq!(spread2, spread3);
+    }
+
+    /// Test save/load with corrupted file
+    #[test]
+    fn test_trainable_load_weights_corrupted_file() {
+        use std::io::Write;
+
+        let temp_dir = std::env::temp_dir();
+        let temp_path = temp_dir.join("test_ml_weights_corrupted.json");
+
+        // Write invalid JSON
+        let mut file = std::fs::File::create(&temp_path).unwrap();
+        file.write_all(b"{ this is not valid json }").unwrap();
+
+        let mut algo = MLSpreadSkewAlgorithm::with_defaults();
+        let result = algo.load_weights(&temp_path);
+
+        assert!(result.is_err(), "Should fail to load corrupted file");
+
+        // Cleanup
+        let _ = std::fs::remove_file(&temp_path);
+    }
+
+    /// Test save/load with wrong structure
+    #[test]
+    fn test_trainable_load_weights_wrong_structure() {
+        use std::io::Write;
+
+        let temp_dir = std::env::temp_dir();
+        let temp_path = temp_dir.join("test_ml_weights_wrong_struct.json");
+
+        // Write valid JSON but wrong structure
+        let mut file = std::fs::File::create(&temp_path).unwrap();
+        file.write_all(b"{\"foo\": 123, \"bar\": \"baz\"}").unwrap();
+
+        let mut algo = MLSpreadSkewAlgorithm::with_defaults();
+        let result = algo.load_weights(&temp_path);
+
+        assert!(result.is_err(), "Should fail to load wrong structure");
+
+        // Cleanup
+        let _ = std::fs::remove_file(&temp_path);
+    }
+
+    /// Test that training with identical samples works
+    #[test]
+    fn test_trainable_train_identical_samples() {
+        let mut algo = MLSpreadSkewAlgorithm::with_defaults();
+
+        // All identical samples
+        let features = vec![
+            vec![0.5, 0.001, 0.0, 0.0005, 0.0],
+            vec![0.5, 0.001, 0.0, 0.0005, 0.0],
+            vec![0.5, 0.001, 0.0, 0.0005, 0.0],
+        ];
+        let targets = vec![2.0, 2.0, 2.0];
+        let data = TrainingData::new(features, targets);
+
+        let result = algo.train(&data);
+        // Should succeed (even if degenerate case)
+        assert!(result.is_ok(), "Should handle identical samples");
+    }
+
+    /// Test training with very small dataset (minimum viable)
+    #[test]
+    fn test_trainable_train_minimal_dataset() {
+        let mut algo = MLSpreadSkewAlgorithm::with_defaults();
+
+        // Just 2 samples (minimum for meaningful training)
+        let features = vec![
+            vec![0.5, 0.001, 0.0, 0.0005, 0.0],
+            vec![0.9, 0.002, 0.1, 0.0012, 0.0],
+        ];
+        let targets = vec![1.0, 5.0];
+        let data = TrainingData::new(features, targets);
+
+        let result = algo.train(&data);
+        assert!(result.is_ok(), "Should train with minimal dataset");
+    }
+
+    /// Test that sample weights must be non-negative
+    #[test]
+    fn test_trainable_train_negative_sample_weights() {
+        let mut algo = MLSpreadSkewAlgorithm::with_defaults();
+
+        let features = vec![
+            vec![0.5, 0.001, 0.0, 0.0005, 0.0],
+            vec![0.6, 0.002, 0.1, 0.0012, 0.0],
+        ];
+        let targets = vec![2.0, 2.5];
+        let weights = vec![1.0, -1.0]; // Negative weight!
+        let data = TrainingData::with_weights(features, targets, weights);
+
+        let result = algo.train(&data);
+        assert!(result.is_err(), "Should reject negative sample weights");
+    }
+
+    /// Test that zero sample weights are handled
+    #[test]
+    fn test_trainable_train_zero_sample_weights() {
+        let mut algo = MLSpreadSkewAlgorithm::with_defaults();
+
+        let features = vec![
+            vec![0.5, 0.001, 0.0, 0.0005, 0.0],
+            vec![0.6, 0.002, 0.1, 0.0012, 0.0],
+            vec![0.7, 0.001, 0.2, 0.0007, 0.0],
+        ];
+        let targets = vec![2.0, 100.0, 3.0]; // Middle target is outlier
+        let weights = vec![1.0, 0.0, 1.0]; // Zero weight for outlier
+        let data = TrainingData::with_weights(features, targets, weights);
+
+        let result = algo.train(&data);
+        // Should succeed - zero weights effectively exclude samples
+        assert!(result.is_ok(), "Should handle zero sample weights");
+    }
+
+    /// Test weight serialization roundtrip preserves precision
+    #[test]
+    fn test_trainable_save_load_precision() {
+        let mut algo = MLSpreadSkewAlgorithm::with_defaults();
+
+        // Use weights with high precision
+        let precise_weights = vec![
+            1.234567890123456,
+            -0.987654321098765,
+            0.000000001,
+            1000000.999999,
+            -0.5,
+            0.123456789,
+            -9.87654321,
+            0.000001,
+            999.999999,
+            -0.000001,
+        ];
+        algo.set_weights(precise_weights.clone()).unwrap();
+
+        let temp_dir = std::env::temp_dir();
+        let temp_path = temp_dir.join("test_ml_weights_precision.json");
+
+        algo.save_weights(&temp_path).unwrap();
+
+        let mut algo2 = MLSpreadSkewAlgorithm::with_defaults();
+        algo2.load_weights(&temp_path).unwrap();
+
+        let loaded_weights = algo2.get_weights();
+        for (i, (expected, actual)) in precise_weights.iter().zip(loaded_weights.iter()).enumerate() {
+            assert!(
+                (expected - actual).abs() < 1e-10,
+                "Weight {} precision lost: {} vs {}",
+                i,
+                expected,
+                actual
+            );
+        }
+
+        // Cleanup
+        let _ = std::fs::remove_file(&temp_path);
     }
 }
