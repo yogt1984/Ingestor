@@ -58,8 +58,8 @@ use ingestor::backtest::validation_campaign::{
 use ingestor::market_maker::{MMConfig, RegimeParams, RegimeConfig};
 use ingestor::mm_simulator::SimulatorConfig;
 use ingestor::algorithms::{
-    AlgorithmType, MLSpreadSkewAlgorithm, MLSpreadSkewConfig, MLModelWeights,
-    AvellanedaStoikovAlgorithm, MarketMakingAlgorithm,
+    AlgorithmType, MLModelWeights,
+    AlgorithmRegistry, BacktestAlgorithmParams,
 };
 
 #[derive(Parser)]
@@ -2107,53 +2107,48 @@ fn run_compare(
     println!("Loaded {} events", num_events);
     println!();
 
-    // Create algorithm based on type
-    let algorithm: Box<dyn MarketMakingAlgorithm> = match algo_type {
-        AlgorithmType::AvellanedaStoikov => {
-            let config = ingestor::market_maker::AvellanedaStoikovConfig {
-                max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
-                quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
-                regime_params: RegimeParams::uniform(cli.spread, cli.skew),
-                ..Default::default()
-            };
-            Box::new(AvellanedaStoikovAlgorithm::new(config))
-        }
-        AlgorithmType::MLSpreadSkew => {
-            // Load weights if provided, otherwise use default
-            let weights = if let Some(ref path) = weights_path {
-                let json = std::fs::read_to_string(path)?;
-                serde_json::from_str::<MLModelWeights>(&json)?
-            } else {
-                println!("WARNING: No weights file specified, using default weights");
-                MLModelWeights::default()
-            };
+    // Create algorithm using registry
+    // First, handle ML weights loading if needed
+    let ml_weights = if algo_type == AlgorithmType::MLSpreadSkew {
+        let weights = if let Some(ref path) = weights_path {
+            let json = std::fs::read_to_string(path)?;
+            serde_json::from_str::<MLModelWeights>(&json)?
+        } else {
+            println!("WARNING: No weights file specified, using default weights");
+            MLModelWeights::default()
+        };
 
-            println!("ML Weights:");
-            println!("  Spread: intercept={:.2}, w_entropy={:.2}, w_volatility={:.2}",
-                weights.spread.intercept, weights.spread.w_entropy, weights.spread.w_volatility);
-            println!("  Skew: intercept={:.2}, w_inventory={:.2}, w_imbalance={:.2}",
-                weights.skew.intercept, weights.skew.w_inventory, weights.skew.w_imbalance);
-            println!();
-
-            let config = MLSpreadSkewConfig {
-                max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
-                quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
-                ..Default::default()
-            };
-            Box::new(MLSpreadSkewAlgorithm::new(config, weights))
-        }
-        AlgorithmType::FixedSpread => {
-            println!("Using Fixed Spread algorithm: spread={:.1}bps, skew={:.2}", cli.spread, cli.skew);
-            println!();
-            let config = ingestor::algorithms::FixedSpreadConfig {
-                max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
-                quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
-                spread_bps: cli.spread,
-                skew_factor: cli.skew,
-            };
-            Box::new(ingestor::algorithms::FixedSpreadAlgorithm::new(config))
-        }
+        println!("ML Weights:");
+        println!("  Spread: intercept={:.2}, w_entropy={:.2}, w_volatility={:.2}",
+            weights.spread.intercept, weights.spread.w_entropy, weights.spread.w_volatility);
+        println!("  Skew: intercept={:.2}, w_inventory={:.2}, w_imbalance={:.2}",
+            weights.skew.intercept, weights.skew.w_inventory, weights.skew.w_imbalance);
+        println!();
+        Some(weights)
+    } else {
+        None
     };
+
+    // Print algorithm info for non-ML algorithms
+    if algo_type == AlgorithmType::FixedSpread {
+        println!("Using Fixed Spread algorithm: spread={:.1}bps, skew={:.2}", cli.spread, cli.skew);
+        println!();
+    }
+
+    // Create algorithm params from CLI args
+    let mut params = BacktestAlgorithmParams::new(
+        Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
+        Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
+        cli.spread,
+        cli.skew,
+    );
+    if let Some(weights) = ml_weights {
+        params = params.with_ml_weights(weights);
+    }
+
+    // Use registry to create algorithm
+    let algorithm = AlgorithmRegistry::create_for_backtest(algo_type, &params)
+        .map_err(|e| anyhow::anyhow!("Failed to create algorithm: {}", e))?;
 
     // Build backtest config
     let backtest_config = BacktestConfig {
@@ -2272,12 +2267,15 @@ fn run_head_to_head(
     println!("  Skew weights: intercept={:.2}, w_inventory={:.2}, w_imbalance={:.2}",
         ml_weights.skew.intercept, ml_weights.skew.w_inventory, ml_weights.skew.w_imbalance);
 
-    let ml_config = MLSpreadSkewConfig {
-        max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
-        quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
-        ..Default::default()
-    };
-    let ml_algo: Box<dyn MarketMakingAlgorithm> = Box::new(MLSpreadSkewAlgorithm::new(ml_config, ml_weights));
+    // Create ML algorithm using registry
+    let ml_params = BacktestAlgorithmParams::new(
+        Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
+        Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
+        cli.spread, // Not used by ML but needed for params
+        cli.skew,   // Not used by ML but needed for params
+    ).with_ml_weights(ml_weights);
+    let ml_algo = AlgorithmRegistry::create_for_backtest(AlgorithmType::MLSpreadSkew, &ml_params)
+        .map_err(|e| anyhow::anyhow!("Failed to create ML algorithm: {}", e))?;
 
     let backtest_config = BacktestConfig {
         replay: replay_config.clone(),
@@ -2316,13 +2314,15 @@ fn run_head_to_head(
     println!("Running Avellaneda-Stoikov algorithm...");
     println!("  Spread: {:.1} bps, Skew: {:.2}", as_spread, as_skew);
 
-    let as_config = ingestor::market_maker::AvellanedaStoikovConfig {
-        max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
-        quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
-        regime_params: RegimeParams::uniform(as_spread, as_skew),
-        ..Default::default()
-    };
-    let as_algo: Box<dyn MarketMakingAlgorithm> = Box::new(AvellanedaStoikovAlgorithm::new(as_config));
+    // Create A-S algorithm using registry
+    let as_params = BacktestAlgorithmParams::new(
+        Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
+        Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
+        as_spread,
+        as_skew,
+    );
+    let as_algo = AlgorithmRegistry::create_for_backtest(AlgorithmType::AvellanedaStoikov, &as_params)
+        .map_err(|e| anyhow::anyhow!("Failed to create A-S algorithm: {}", e))?;
 
     let mut as_engine = BacktestEngine::from_events_with_algorithm(
         backtest_config,
