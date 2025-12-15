@@ -16,3 +16,4 @@ pub mod presets;
 pub mod lob_feed_manager;
 pub mod log_feed_manager;
 pub mod algorithms;
+pub mod features;
