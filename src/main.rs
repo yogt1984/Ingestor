@@ -16,6 +16,8 @@ mod mm_simulator;
 mod presets;
 mod tui;
 mod algorithms;
+mod regime;
+mod features;
 
 use crossbeam::channel;
 use std::sync::Arc;
@@ -31,6 +33,7 @@ use crate::{
     toxicity::{ToxicityEngine,       ToxicityMetrics,    ToxicityConfig},
     feature_fusion::{FeatureFusionEngine, FeaturesSnapshot},
     persistence::PersistenceEngine,
+    regime::{RegimeEngine, RegimeEngineConfig},
 };
 
 
@@ -209,12 +212,33 @@ async fn main() {
         let mut fused_rx = fused_rx;
         let tui_tx = tui_tx.clone();
         tokio::spawn(async move {
+            // Create regime engine for real-time regime detection
+            let mut regime_engine = RegimeEngine::new(RegimeEngineConfig::default());
+
             loop {
                 match fused_rx.recv().await {
-                    Some(snapshot) => {
+                    Some(mut snapshot) => {
+                        // Update regime engine with mid price and add regime data to snapshot
+                        if let Some(mid_price) = snapshot.mid_price {
+                            if let Ok(price_f64) = mid_price.to_string().parse::<f64>() {
+                                // Feed price to regime engine
+                                regime_engine.update(price_f64);
+
+                                // Feed entropy if available
+                                if let Some(entropy) = snapshot.tick_entropy_1s {
+                                    if let Ok(entropy_f64) = entropy.to_string().parse::<f64>() {
+                                        regime_engine.update_entropy(entropy_f64);
+                                    }
+                                }
+
+                                // Update snapshot with regime detection results
+                                regime_engine.enrich_snapshot(&mut snapshot);
+                            }
+                        }
+
                         // Send to TUI (non-blocking, drop if full)
                         let _ = tui_tx.try_send(snapshot.clone());
-                        
+
                         // Non-blocking bridge to persistence with backoff if channel is full
                         let mut snapshot_opt = Some(snapshot);
                         while let Some(s) = snapshot_opt.take() {
