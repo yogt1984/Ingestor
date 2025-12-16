@@ -4,14 +4,12 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::Serialize;
 use chrono::Utc;
-use crate::{
-    orderbook::{ConcurrentOrderBook, OrderBookFeatures},
-    tradeslog::{ConcurrentTradesLog, TradesLogFeatures},
-    illiquidity::IlliquidityMetrics,
-    entropy::EntropyMetrics,
-    volatility::VolatilityMetrics,
-    toxicity::ToxicityMetrics,
-};
+use crate::data::orderbook::{ConcurrentOrderBook, OrderBookFeatures};
+use crate::data::tradeslog::{ConcurrentTradesLog, TradesLogFeatures};
+use crate::features::illiquidity::IlliquidityMetrics;
+use crate::features::entropy::EntropyMetrics;
+use crate::features::volatility::VolatilityMetrics;
+use crate::features::toxicity::ToxicityMetrics;
 
 #[derive(Debug, Serialize, Clone, Default)]
 pub struct FeaturesSnapshot {
@@ -412,8 +410,8 @@ ENTROPY METRICS:
 mod tests {
     use super::*;
     use crate::{
-        orderbook::ConcurrentOrderBook,
-        tradeslog::{ConcurrentTradesLog, Trade},
+        data::orderbook::ConcurrentOrderBook,
+        data::tradeslog::{ConcurrentTradesLog, Trade},
     };
     use rust_decimal_macros::dec;
     use tokio::sync::{watch, mpsc};

@@ -1,38 +1,30 @@
 #![allow(warnings)]
 
-mod orderbook;
-mod tradeslog;
-mod lob_feed_manager;
-mod log_feed_manager;
-mod feature_fusion;
-mod persistence;
-mod illiquidity;
-mod entropy;
-mod volatility;
-mod toxicity;
-mod market_maker;
-mod risk_manager;
-mod mm_simulator;
-mod presets;
-mod tui;
+mod data;
+mod features;
+mod trading;
+mod ui;
 mod algorithms;
 mod regime;
-mod features;
+mod backtest;
+mod forward_testing;
 
 use crossbeam::channel;
 use std::sync::Arc;
 use tokio::{spawn, sync::{watch, mpsc}, time::Duration};
 use crate::{
-    orderbook::{ConcurrentOrderBook,  OrderBookEngine,   OrderBookFeatures,  OrderBookEngineConfig},
-    tradeslog::{ConcurrentTradesLog,  TradesLogEngine,   TradesLogFeatures,   TradesLogEngineConfig},
-    lob_feed_manager::LobFeedManager,
-    log_feed_manager::LogFeedManager,
-    illiquidity::{IlliquidityEngine, IlliquidityMetrics, IlliquidityConfig},
-    entropy::{EntropyEngine,         EntropyMetrics,     EntropyConfig},
-    volatility::{VolatilityEngine,   VolatilityMetrics,  VolatilityConfig},
-    toxicity::{ToxicityEngine,       ToxicityMetrics,    ToxicityConfig},
-    feature_fusion::{FeatureFusionEngine, FeaturesSnapshot},
-    persistence::PersistenceEngine,
+    data::{
+        ConcurrentOrderBook, OrderBookEngine, OrderBookFeatures, OrderBookEngineConfig,
+        ConcurrentTradesLog, TradesLogEngine, TradesLogFeatures, TradesLogEngineConfig,
+        LobFeedManager, LogFeedManager, PersistenceEngine, save_feature_as_parquet_path,
+    },
+    features::{
+        IlliquidityEngine, IlliquidityMetrics, IlliquidityConfig,
+        EntropyEngine, EntropyMetrics, EntropyConfig,
+        VolatilityEngine, VolatilityMetrics, VolatilityConfig,
+        ToxicityEngine, ToxicityMetrics, ToxicityConfig,
+        FeatureFusionEngine, FeaturesSnapshot,
+    },
     regime::{RegimeEngine, RegimeEngineConfig},
 };
 
@@ -69,7 +61,7 @@ async fn main() {
 
     let orderbook_engine = OrderBookEngine::new(
         order_book_arc.clone(),
-        Some(OrderBookEngineConfig::default()),  
+        Some(OrderBookEngineConfig::default()),
         orderbook_tx,
     );
 
@@ -78,7 +70,7 @@ async fn main() {
         Some(TradesLogEngineConfig::default()),
         tradeslog_tx,
     );
-    
+
     let illiquidity_engine = IlliquidityEngine::new(
         order_book_arc.clone(),
         trades_log_arc.clone(),
@@ -129,7 +121,7 @@ async fn main() {
         "data/features",
         "features",
         max_files,
-        persistence::save_feature_as_parquet_path,
+        save_feature_as_parquet_path,
     );
 
     let lob_handle = spawn({
@@ -202,7 +194,7 @@ async fn main() {
         let tui_rx = tui_rx.clone();
         let symbol = SYMBOL.to_string();
         std::thread::spawn(move || {
-            if let Err(e) = tui::run_tui(tui_rx, symbol) {
+            if let Err(e) = ui::run_tui(tui_rx, symbol) {
                 eprintln!("TUI error: {e:?}");
             }
         })

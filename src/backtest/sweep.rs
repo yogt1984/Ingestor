@@ -13,7 +13,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use ingestor::backtest::sweep::{SweepEngine, SweepConfig, SweepResult};
+//! use crate::backtest::sweep::{SweepEngine, SweepConfig, SweepResult};
 //!
 //! let config = SweepConfig {
 //!     spreads: vec![1.0, 2.0, 3.0],
@@ -38,8 +38,8 @@ use anyhow::Result;
 
 use crate::backtest::{BacktestEngine, BacktestConfig, FillSimulatorConfig};
 use crate::backtest::replay::ReplayConfig;
-use crate::market_maker::{MMConfig, RegimeParams};
-use crate::mm_simulator::SimulatorConfig;
+use crate::trading::market_maker::{MMConfig, RegimeParams};
+use crate::trading::mm_simulator::SimulatorConfig;
 
 /// Configuration for parameter sweep
 #[derive(Debug, Clone, Serialize, Deserialize)]

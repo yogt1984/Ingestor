@@ -1,4 +1,4 @@
-use ingestor::tradeslog::{ConcurrentTradesLog, Trade, TradesLogError};
+use ingestor::data::tradeslog::{ConcurrentTradesLog, Trade, TradesLogError};
 use rust_decimal_macros::dec;
 use tokio::time::{sleep, Duration};
 use std::sync::Arc;

@@ -21,7 +21,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use ingestor::algorithms::{MLSpreadSkewAlgorithm, MLModelWeights, Configurable, Trainable};
+//! use crate::algorithms::{MLSpreadSkewAlgorithm, MLModelWeights, Configurable, Trainable};
 //!
 //! // Create with default weights (baseline from A-S optimization)
 //! let algo = MLSpreadSkewAlgorithm::with_defaults();
@@ -46,7 +46,7 @@ use crate::algorithms::traits::{
     AlgorithmError, AlgorithmType, Configurable, MarketInput, MarketMakingAlgorithm,
     ParameterDefinition, Trainable, TrainingData, TrainingResult,
 };
-use crate::market_maker::{Fill, MMQuotes, MMState, PnLTracker, Quote, QuoteSide, MarketRegime, RegimeThresholds};
+use crate::trading::market_maker::{Fill, MMQuotes, MMState, PnLTracker, Quote, QuoteSide, MarketRegime, RegimeThresholds};
 
 // ============================================================================
 // Model Weights

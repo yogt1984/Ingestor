@@ -32,7 +32,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use ingestor::features::signal_processing::{KalmanFilter, KalmanConfig};
+//! use crate::features::signal_processing::{KalmanFilter, KalmanConfig};
 //!
 //! let config = KalmanConfig::default();
 //! let mut filter = KalmanFilter::new(config);

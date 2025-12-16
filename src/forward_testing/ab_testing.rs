@@ -17,7 +17,7 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
 use crate::algorithms::AlgorithmType;
-use crate::presets::ParameterPreset;
+use crate::trading::presets::ParameterPreset;
 
 use super::statistical::{
     BootstrapCI, EffectCategory, HypothesisTestResult, RollingStats, SampleStats,

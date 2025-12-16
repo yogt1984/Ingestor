@@ -1,4 +1,4 @@
-use ingestor::orderbook::ConcurrentOrderBook;
+use ingestor::data::orderbook::ConcurrentOrderBook;
 use rust_decimal_macros::dec;
 use tokio::time::{sleep, Duration};
 

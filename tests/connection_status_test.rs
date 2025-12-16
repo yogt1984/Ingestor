@@ -1,6 +1,6 @@
 //! Tests for the WebSocket connection status
 
-use ingestor::lob_feed_manager::{ConnectionStatus, SharedConnectionStatus};
+use ingestor::data::lob_feed_manager::{ConnectionStatus, SharedConnectionStatus};
 
 #[test]
 fn test_connection_status_values() {

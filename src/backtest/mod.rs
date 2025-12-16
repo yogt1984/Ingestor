@@ -21,7 +21,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use ingestor::backtest::{BacktestEngine, BacktestConfig};
+//! use crate::backtest::{BacktestEngine, BacktestConfig};
 //!
 //! let config = BacktestConfig::default();
 //! let mut engine = BacktestEngine::new(config)?;

@@ -47,13 +47,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::algorithms::{AlgorithmType, AvellanedaStoikovAlgorithm};
 use crate::backtest::replay::ReplayEvent;
-use crate::forward_testing_core::{
+use crate::forward_testing::{
     ForwardTestConfig, ForwardTestSession, SessionMetrics, SessionSummary,
 };
-use crate::market_maker::{MMConfig, Fill};
-use crate::mm_simulator::{RiskManagedPaperTradingEngine, SimulatorConfig};
-use crate::presets::{ParameterPreset, PresetStore};
-use crate::risk_manager::RiskConfig;
+use crate::trading::market_maker::{MMConfig, Fill};
+use crate::trading::mm_simulator::{RiskManagedPaperTradingEngine, SimulatorConfig};
+use crate::trading::presets::{ParameterPreset, PresetStore};
+use crate::trading::risk_manager::RiskConfig;
 
 /// Configuration for session runner
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -430,7 +430,7 @@ impl SessionRunner {
         // Process trade if present
         let mut fills = Vec::new();
         if let Some(ref trade) = event.trade {
-            let trade_struct = crate::tradeslog::Trade {
+            let trade_struct = crate::data::tradeslog::Trade {
                 id: self.events_processed,
                 price: trade.price,
                 quantity: trade.quantity,

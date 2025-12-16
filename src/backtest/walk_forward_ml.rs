@@ -23,7 +23,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use ingestor::backtest::walk_forward_ml::{WalkForwardMLTrainer, WalkForwardMLConfig};
+//! use crate::backtest::walk_forward_ml::{WalkForwardMLTrainer, WalkForwardMLConfig};
 //!
 //! let config = WalkForwardMLConfig::default();
 //! let mut trainer = WalkForwardMLTrainer::new(config)?;
@@ -45,8 +45,8 @@ use crate::backtest::{
     BacktestEngine, BacktestConfig, BacktestResults,
     ReplayEvent, ReplayConfig, FillSimulatorConfig, ParquetReplay,
 };
-use crate::market_maker::MMConfig;
-use crate::mm_simulator::SimulatorConfig;
+use crate::trading::market_maker::MMConfig;
+use crate::trading::mm_simulator::SimulatorConfig;
 
 // ============================================================================
 // Configuration
@@ -884,7 +884,7 @@ fn erf(x: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::feature_fusion::FeaturesSnapshot;
+    use crate::features::feature_fusion::FeaturesSnapshot;
 
     fn create_test_events(count: usize, start_ms: i64) -> Vec<ReplayEvent> {
         (0..count)

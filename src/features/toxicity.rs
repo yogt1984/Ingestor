@@ -5,8 +5,8 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::Serialize;
 
-use crate::orderbook::ConcurrentOrderBook;
-use crate::tradeslog::ConcurrentTradesLog;
+use crate::data::orderbook::ConcurrentOrderBook;
+use crate::data::tradeslog::ConcurrentTradesLog;
 
 /// Order flow toxicity metrics
 /// Measures the probability and cost of trading against informed traders
@@ -164,7 +164,7 @@ impl ToxicityEngine {
     /// Buy at price > fair value or Sell at price < fair value
     fn compute_toxic_flow_ratio(
         &self,
-        trades: &[crate::tradeslog::Trade],
+        trades: &[crate::data::tradeslog::Trade],
         microprice: Decimal,
         mid_price: Decimal,
     ) -> (Option<Decimal>, Option<Decimal>) {
@@ -213,7 +213,7 @@ impl ToxicityEngine {
     /// Average loss per trade to informed traders
     fn compute_adverse_selection(
         &self,
-        trades: &[crate::tradeslog::Trade],
+        trades: &[crate::data::tradeslog::Trade],
         microprice: Decimal,
         mid_price: Decimal,
     ) -> (Option<Decimal>, Option<Decimal>) {
@@ -265,7 +265,7 @@ impl ToxicityEngine {
 
     /// Compute trade arrival asymmetry
     /// Normalized difference between buy and sell rates
-    fn compute_arrival_asymmetry(&self, trades: &[crate::tradeslog::Trade]) -> Option<Decimal> {
+    fn compute_arrival_asymmetry(&self, trades: &[crate::data::tradeslog::Trade]) -> Option<Decimal> {
         if trades.is_empty() {
             return None;
         }
@@ -294,7 +294,7 @@ impl ToxicityEngine {
     /// Compares toxicity of large trades vs small trades
     fn compute_size_toxicity(
         &self,
-        trades: &[crate::tradeslog::Trade],
+        trades: &[crate::data::tradeslog::Trade],
         microprice: Decimal,
     ) -> Option<Decimal> {
         if trades.len() < 10 {

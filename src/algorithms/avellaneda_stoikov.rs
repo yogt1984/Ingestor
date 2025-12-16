@@ -23,7 +23,7 @@ use crate::algorithms::traits::{
     AlgorithmConfig, AlgorithmError, AlgorithmType, Configurable, MarketInput,
     MarketMakingAlgorithm, ParameterDefinition,
 };
-use crate::market_maker::{
+use crate::trading::market_maker::{
     AvellanedaStoikovConfig, AvellanedaStoikovMM, Fill, MMQuotes, MMState, PnLTracker,
     RegimeParams, RegimeThresholds, MarketRegime,
 };
@@ -108,8 +108,8 @@ impl AlgorithmConfig for AvellanedaStoikovAlgorithmConfig {
 /// # Usage
 ///
 /// ```ignore
-/// use ingestor::algorithms::{AvellanedaStoikovAlgorithm, MarketMakingAlgorithm, MarketInput};
-/// use ingestor::market_maker::AvellanedaStoikovConfig;
+/// use crate::algorithms::{AvellanedaStoikovAlgorithm, MarketMakingAlgorithm, MarketInput};
+/// use crate::trading::market_maker::AvellanedaStoikovConfig;
 ///
 /// let config = AvellanedaStoikovConfig::with_uniform_params(2.0, 0.5);
 /// let mut algo = AvellanedaStoikovAlgorithm::new(config);
@@ -589,7 +589,7 @@ mod tests {
         let mut algo = AvellanedaStoikovAlgorithm::with_uniform_params(2.0, 0.5);
 
         let fill = Fill {
-            side: crate::market_maker::QuoteSide::Bid,
+            side: crate::trading::market_maker::QuoteSide::Bid,
             price: dec!(50000),
             size: dec!(0.01),
             timestamp_ms: 1000,
@@ -607,7 +607,7 @@ mod tests {
 
         // Process a fill
         let fill = Fill {
-            side: crate::market_maker::QuoteSide::Bid,
+            side: crate::trading::market_maker::QuoteSide::Bid,
             price: dec!(50000),
             size: dec!(0.01),
             timestamp_ms: 1000,

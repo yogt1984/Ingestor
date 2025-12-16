@@ -2,12 +2,10 @@ use anyhow::{Context, Result};
 use polars::prelude::*;
 use serde_json;
 use serde::Serialize;
-use crate::{
-    feature_fusion::FeaturesSnapshot,
-};
-use crate::illiquidity::IlliquidityMetrics;
+use crate::features::feature_fusion::FeaturesSnapshot;
+use crate::features::illiquidity::IlliquidityMetrics;
 use rust_decimal::prelude::ToPrimitive;
-use crate::entropy::EntropyMetrics;
+use crate::features::entropy::EntropyMetrics;
 use std::path::{Path, PathBuf};
 use std::fs::{self, File};
 use std::io::Write;

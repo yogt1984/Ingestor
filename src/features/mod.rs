@@ -1,57 +1,46 @@
-//! Feature Engineering Module for MARS (Momentum Adaptive Regime Strategy)
+//! Feature Engineering Module
 //!
-//! This module provides enhanced feature extraction for trend-following and
-//! regime detection. It extends the base feature set with:
+//! This module provides feature extraction engines for market microstructure analysis:
 //!
+//! - **Feature Fusion**: Central snapshot combining all feature types
+//! - **Illiquidity**: Roll spread, Amihud's lambda, Kyle's lambda, VPIN
+//! - **Entropy**: Tick entropy at multiple timescales
+//! - **Volatility**: Realized volatility, bipower variation, jump detection
+//! - **Toxicity**: Adverse selection metrics, toxic flow ratios
 //! - **Trend Features**: Momentum, monotonicity, Hurst exponent, MA crossover
 //! - **Signal Processing**: Kalman filter for velocity/acceleration estimation
-//! - **Cross-Asset Features**: Correlation, joint momentum (planned)
-//!
-//! # Architecture
-//!
-//! ```text
-//! Price Series → TrendFeatureEngine → TrendFeatures
-//!                      │
-//!                      ├─→ Momentum (linear regression slope)
-//!                      ├─→ Monotonicity (directional consistency)
-//!                      ├─→ Hurst Exponent (trend vs mean-reversion)
-//!                      └─→ MA Crossover (EMA difference)
-//!
-//! Price Series → KalmanFilter → KalmanState
-//!                      │
-//!                      ├─→ Position (smoothed price)
-//!                      ├─→ Velocity (rate of change / momentum)
-//!                      └─→ Acceleration (momentum change / reversal indicator)
-//! ```
-//!
-//! # Usage
-//!
-//! ```ignore
-//! use ingestor::features::{TrendFeatureEngine, TrendFeatures};
-//! use ingestor::features::{KalmanFilter, KalmanConfig};
-//!
-//! // Trend features
-//! let mut engine = TrendFeatureEngine::new(60); // 60-tick window
-//! engine.update(100.0);
-//! engine.update(101.0);
-//! let features = engine.compute();
-//! println!("Momentum: {:?}", features.momentum);
-//!
-//! // Kalman filter
-//! let mut kalman = KalmanFilter::new(KalmanConfig::default());
-//! let state = kalman.update(100.0);
-//! println!("Velocity: {}", state.velocity);
-//! ```
 
+pub mod feature_fusion;
+pub mod illiquidity;
+pub mod entropy;
+pub mod volatility;
+pub mod toxicity;
 pub mod trend_features;
 pub mod signal_processing;
 
+// Feature fusion (central snapshot)
+pub use feature_fusion::{FeatureFusionEngine, FeaturesSnapshot};
+
+// Illiquidity metrics
+pub use illiquidity::{IlliquidityEngine, IlliquidityMetrics, IlliquidityConfig};
+
+// Entropy metrics
+pub use entropy::{EntropyEngine, EntropyMetrics, EntropyConfig};
+
+// Volatility metrics
+pub use volatility::{VolatilityEngine, VolatilityMetrics, VolatilityConfig};
+
+// Toxicity metrics
+pub use toxicity::{ToxicityEngine, ToxicityMetrics, ToxicityConfig};
+
+// Trend features
 pub use trend_features::{
     TrendFeatureEngine,
     TrendFeatures,
     TrendFeatureConfig,
 };
 
+// Signal processing
 pub use signal_processing::{
     KalmanFilter,
     KalmanConfig,

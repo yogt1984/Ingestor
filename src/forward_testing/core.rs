@@ -79,8 +79,8 @@ use serde::{Deserialize, Serialize};
 use anyhow::Result;
 
 use crate::algorithms::AlgorithmType;
-use crate::market_maker::{Fill, QuoteSide, MMState};
-use crate::presets::ParameterPreset;
+use crate::trading::market_maker::{Fill, QuoteSide, MMState};
+use crate::trading::presets::ParameterPreset;
 
 /// Configuration for forward testing session
 #[derive(Debug, Clone, Serialize, Deserialize)]

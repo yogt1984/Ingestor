@@ -4,14 +4,14 @@
 // persisted to parquet files through the entire pipeline
 
 use ingestor::{
-    orderbook::{ConcurrentOrderBook, OrderBookFeatures},
-    tradeslog::{ConcurrentTradesLog, Trade, TradesLogFeatures},
-    entropy::{EntropyEngine, EntropyConfig, EntropyMetrics},
-    illiquidity::{IlliquidityEngine, IlliquidityConfig, IlliquidityMetrics},
-    volatility::VolatilityMetrics,
-    toxicity::ToxicityMetrics,
-    feature_fusion::{FeatureFusionEngine, FeaturesSnapshot},
-    persistence::{PersistenceEngine, save_feature_as_parquet_path},
+    data::orderbook::{ConcurrentOrderBook, OrderBookFeatures},
+    data::tradeslog::{ConcurrentTradesLog, Trade, TradesLogFeatures},
+    features::entropy::{EntropyEngine, EntropyConfig, EntropyMetrics},
+    features::illiquidity::{IlliquidityEngine, IlliquidityConfig, IlliquidityMetrics},
+    features::volatility::VolatilityMetrics,
+    features::toxicity::ToxicityMetrics,
+    features::feature_fusion::{FeatureFusionEngine, FeaturesSnapshot},
+    data::persistence::{PersistenceEngine, save_feature_as_parquet_path},
 };
 use rust_decimal_macros::dec;
 use num::FromPrimitive;

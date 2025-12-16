@@ -5,7 +5,7 @@ use tokio::time::{interval, Duration};
 use rust_decimal::prelude::ToPrimitive;
 use serde::Serialize;
 
-use crate::tradeslog::{TradesLog, TradesLogError, ConcurrentTradesLog};
+use crate::data::tradeslog::{TradesLog, TradesLogError, ConcurrentTradesLog};
 
 /// Volatility metrics for market microstructure analysis
 /// Includes:
@@ -52,7 +52,7 @@ impl VolatilityMetrics {
     }
 
     /// Compute all volatility metrics from a slice of trades
-    pub fn compute_from_trades(trades: &[crate::tradeslog::Trade]) -> Self {
+    pub fn compute_from_trades(trades: &[crate::data::tradeslog::Trade]) -> Self {
         // Extract price returns
         let returns = match Self::compute_returns_from_trades(trades) {
             Ok(r) if !r.is_empty() => r,
@@ -77,7 +77,7 @@ impl VolatilityMetrics {
 
     /// Compute log returns from consecutive trades
     /// Returns: r_t = ln(P_t / P_{t-1})
-    fn compute_returns_from_trades(trades: &[crate::tradeslog::Trade]) -> Result<Vec<f64>, TradesLogError> {
+    fn compute_returns_from_trades(trades: &[crate::data::tradeslog::Trade]) -> Result<Vec<f64>, TradesLogError> {
         if trades.len() < 2 {
             return Err(TradesLogError::InsufficientTrades);
         }
@@ -319,7 +319,7 @@ impl VolatilityEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tradeslog::Trade;
+    use crate::data::tradeslog::Trade;
     use rust_decimal::Decimal;
     use rust_decimal_macros::dec;
 
