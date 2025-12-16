@@ -1,7 +1,8 @@
 # INGESTOR v0.2 Requirements & Roadmap
 
-**Document Version:** 1.0
+**Document Version:** 1.1
 **Created:** December 13, 2025
+**Last Updated:** December 16, 2025
 **Philosophy:** Pivot from latency-dependent MM to prediction-dependent trend-following.
 
 ---
@@ -174,75 +175,80 @@ pub enum StrategyDecision {
 
 ## Roadmap: 4-6 Weeks
 
-### Phase 0: Foundation (Week 1)
+### Phase 0: Foundation (Week 1) - COMPLETE
 
 **Goal:** Feature augmentation and regime detection primitives
 
-| Task | Description | Effort | Priority |
-|------|-------------|--------|----------|
-| 0.1 | Implement `trend_features.rs` (momentum, monotonicity, Hurst) | 4h | HIGH |
-| 0.2 | Implement `signal_processing.rs` (Kalman filter) | 4h | HIGH |
-| 0.3 | Add multi-symbol data ingestion (ETH, SOL minimum) | 4h | HIGH |
-| 0.4 | Implement `cross_asset.rs` (correlation, joint momentum) | 3h | MEDIUM |
-| 0.5 | Create `RegimeDetector` trait and basic implementation | 3h | HIGH |
-| 0.6 | Add regime labels to `FeaturesSnapshot` | 2h | HIGH |
+| Task | Description | Effort | Priority | Status |
+|------|-------------|--------|----------|--------|
+| 0.1 | Implement `trend_features.rs` (momentum, monotonicity, Hurst) | 4h | HIGH | DONE |
+| 0.2 | Implement `signal_processing.rs` (Kalman filter) | 4h | HIGH | DONE |
+| 0.3 | Add multi-symbol data ingestion (ETH, SOL minimum) | 4h | HIGH | TODO |
+| 0.4 | Implement `cross_asset.rs` (correlation, joint momentum) | 3h | MEDIUM | TODO |
+| 0.5 | Create `RegimeDetector` trait and basic implementation | 3h | HIGH | DONE |
+| 0.6 | Add regime labels to `FeaturesSnapshot` | 2h | HIGH | DONE |
 
 **Deliverable:** Enhanced feature set with regime classification
 
-### Phase 1: Hybrid Strategy (Week 2)
+**Implementation Notes (Dec 16, 2025):**
+- `src/features/trend_features.rs`: TrendFeatureEngine with momentum, monotonicity, Hurst exponent, MA crossover
+- `src/features/signal_processing.rs`: KalmanFilter with position/velocity/acceleration state estimation
+- `src/regime/mod.rs`: MarketRegime enum, RegimeState, RegimeFeatures, ThresholdRegimeDetector, CompositeRegimeDetector
+
+### Phase 1: Hybrid Strategy (Week 2) - NOT STARTED
 
 **Goal:** Implement trend-following A-S hybrid
 
-| Task | Description | Effort | Priority |
-|------|-------------|--------|----------|
-| 1.1 | Create `TradingStrategy` trait | 2h | HIGH |
-| 1.2 | Implement `TrendRegimeDetector` (monotonic + entropy) | 4h | HIGH |
-| 1.3 | Implement `HybridMMStrategy` (A-S with regime skew) | 6h | HIGH |
-| 1.4 | Add regime-based spread/skew adjustment logic | 4h | HIGH |
-| 1.5 | Implement position tracking for directional trades | 3h | HIGH |
+| Task | Description | Effort | Priority | Status |
+|------|-------------|--------|----------|--------|
+| 1.1 | Create `TradingStrategy` trait | 2h | HIGH | TODO |
+| 1.2 | Implement `TrendRegimeDetector` (monotonic + entropy) | 4h | HIGH | TODO |
+| 1.3 | Implement `HybridMMStrategy` (A-S with regime skew) | 6h | HIGH | TODO |
+| 1.4 | Add regime-based spread/skew adjustment logic | 4h | HIGH | TODO |
+| 1.5 | Implement position tracking for directional trades | 3h | HIGH | TODO |
 
 **Deliverable:** Working hybrid strategy that adapts to detected regimes
 
-### Phase 2: Risk Management (Week 3)
+### Phase 2: Risk Management (Week 3) - NOT STARTED
 
 **Goal:** OCO and position management
 
-| Task | Description | Effort | Priority |
-|------|-------------|--------|----------|
-| 2.1 | Implement `OCOManager` for take-profit/stop-loss | 4h | HIGH |
-| 2.2 | Implement `PositionManager` (size limits, exposure) | 3h | HIGH |
-| 2.3 | Add drawdown tracking and circuit breaker | 3h | MEDIUM |
-| 2.4 | Integrate OCO with backtest harness | 4h | HIGH |
-| 2.5 | Add position P&L tracking in real-time | 2h | MEDIUM |
+| Task | Description | Effort | Priority | Status |
+|------|-------------|--------|----------|--------|
+| 2.1 | Implement `OCOManager` for take-profit/stop-loss | 4h | HIGH | TODO |
+| 2.2 | Implement `PositionManager` (size limits, exposure) | 3h | HIGH | TODO |
+| 2.3 | Add drawdown tracking and circuit breaker | 3h | MEDIUM | TODO |
+| 2.4 | Integrate OCO with backtest harness | 4h | HIGH | TODO |
+| 2.5 | Add position P&L tracking in real-time | 2h | MEDIUM | TODO |
 
 **Deliverable:** Complete risk management layer
 
-### Phase 3: Backtesting & Validation (Week 4)
+### Phase 3: Backtesting & Validation (Week 4) - NOT STARTED
 
 **Goal:** Validate hybrid strategy on historical data
 
-| Task | Description | Effort | Priority |
-|------|-------------|--------|----------|
-| 3.1 | Update backtest harness for `TradingStrategy` trait | 4h | HIGH |
-| 3.2 | Add trend-specific metrics (win rate, avg win/loss) | 3h | HIGH |
-| 3.3 | Run walk-forward validation on 47 days | 2h | HIGH |
-| 3.4 | Parameter sweep: regime thresholds, TP/SL ratios | 4h | HIGH |
-| 3.5 | Out-of-sample test on held-out data | 2h | HIGH |
-| 3.6 | Document findings and regime persistence analysis | 3h | MEDIUM |
+| Task | Description | Effort | Priority | Status |
+|------|-------------|--------|----------|--------|
+| 3.1 | Update backtest harness for `TradingStrategy` trait | 4h | HIGH | TODO |
+| 3.2 | Add trend-specific metrics (win rate, avg win/loss) | 3h | HIGH | TODO |
+| 3.3 | Run walk-forward validation on 47 days | 2h | HIGH | TODO |
+| 3.4 | Parameter sweep: regime thresholds, TP/SL ratios | 4h | HIGH | TODO |
+| 3.5 | Out-of-sample test on held-out data | 2h | HIGH | TODO |
+| 3.6 | Document findings and regime persistence analysis | 3h | MEDIUM | TODO |
 
 **Deliverable:** Validated understanding of hybrid strategy performance
 
-### Phase 4: Paper Trading (Week 5-6)
+### Phase 4: Paper Trading (Week 5-6) - NOT STARTED
 
 **Goal:** Live validation with real market data
 
-| Task | Description | Effort | Priority |
-|------|-------------|--------|----------|
-| 4.1 | Integrate hybrid strategy with TUI paper trading | 4h | HIGH |
-| 4.2 | Add OCO order simulation in paper trader | 4h | HIGH |
-| 4.3 | Run paper trading for 2+ weeks | 2 weeks | HIGH |
-| 4.4 | Compare paper vs backtest results | 4h | HIGH |
-| 4.5 | Analyze regime detection accuracy in live data | 4h | MEDIUM |
+| Task | Description | Effort | Priority | Status |
+|------|-------------|--------|----------|--------|
+| 4.1 | Integrate hybrid strategy with TUI paper trading | 4h | HIGH | TODO |
+| 4.2 | Add OCO order simulation in paper trader | 4h | HIGH | TODO |
+| 4.3 | Run paper trading for 2+ weeks | 2 weeks | HIGH | TODO |
+| 4.4 | Compare paper vs backtest results | 4h | HIGH | TODO |
+| 4.5 | Analyze regime detection accuracy in live data | 4h | MEDIUM | TODO |
 
 **Deliverable:** Real-world validation of hybrid approach
 
@@ -393,6 +399,7 @@ src/
 | 2025-12-13 | Use A-S as execution layer, not strategy | A-S is good for quoting, not direction |
 | 2025-12-13 | OCO mandatory for all trades | Bound risk, learn from losses |
 | 2025-12-13 | Multi-symbol features required | Cross-asset confirmation improves signal |
+| 2025-12-16 | Phase 0 foundation complete | trend_features, signal_processing, regime modules implemented |
 
 ---
 
@@ -414,4 +421,4 @@ This is excellent odds for a solo effort building foundational quant infrastruct
 ---
 
 *Document maintained by: Development Team*
-*Last updated: December 13, 2025*
+*Last updated: December 16, 2025*
