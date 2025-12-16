@@ -18,7 +18,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use ingestor::algorithms::{MarketMakingAlgorithm, AlgorithmType, create_algorithm};
+//! use crate::algorithms::{MarketMakingAlgorithm, AlgorithmType, create_algorithm};
 //!
 //! // Create algorithm by type
 //! let algo = create_algorithm(AlgorithmType::AvellanedaStoikov, config)?;
@@ -68,7 +68,7 @@ pub use fixed_spread::{
 pub use registry::{AlgorithmRegistry, AlgorithmInfo, BacktestAlgorithmParams};
 
 // Re-export common types from market_maker for convenience
-pub use crate::market_maker::{
+pub use crate::trading::market_maker::{
     MMQuotes,
     Quote,
     QuoteSide,
@@ -165,14 +165,14 @@ pub fn create_algorithm(
     match algo_type {
         AlgorithmType::AvellanedaStoikov => {
             let config = if let Some(params) = regime_params {
-                crate::market_maker::AvellanedaStoikovConfig {
+                crate::trading::market_maker::AvellanedaStoikovConfig {
                     max_inventory,
                     quote_size,
                     regime_params: params,
                     ..Default::default()
                 }
             } else {
-                crate::market_maker::AvellanedaStoikovConfig {
+                crate::trading::market_maker::AvellanedaStoikovConfig {
                     max_inventory,
                     quote_size,
                     ..Default::default()

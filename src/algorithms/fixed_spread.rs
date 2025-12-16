@@ -43,7 +43,7 @@ use crate::algorithms::traits::{
     AlgorithmConfig, AlgorithmError, AlgorithmType, Configurable, MarketInput,
     MarketMakingAlgorithm, ParameterDefinition,
 };
-use crate::market_maker::{Fill, MMQuotes, MMState, MarketRegime, PnLTracker, Quote, QuoteSide};
+use crate::trading::market_maker::{Fill, MMQuotes, MMState, MarketRegime, PnLTracker, Quote, QuoteSide};
 
 // ============================================================================
 // Configuration
@@ -125,7 +125,7 @@ impl AlgorithmConfig for FixedSpreadConfig {
 /// # Example
 ///
 /// ```ignore
-/// use ingestor::algorithms::FixedSpreadAlgorithm;
+/// use crate::algorithms::FixedSpreadAlgorithm;
 /// use rust_decimal_macros::dec;
 ///
 /// let mut algo = FixedSpreadAlgorithm::new(FixedSpreadConfig {

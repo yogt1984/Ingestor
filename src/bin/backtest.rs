@@ -55,8 +55,8 @@ use ingestor::backtest::session_runner::{SessionRunner, SessionRunnerConfig, Sim
 use ingestor::backtest::validation_campaign::{
     ValidationCampaign, CampaignConfig, CampaignReport, ValidationGates, ValidationVerdict,
 };
-use ingestor::market_maker::{MMConfig, RegimeParams, RegimeConfig};
-use ingestor::mm_simulator::SimulatorConfig;
+use ingestor::trading::market_maker::{MMConfig, RegimeParams, RegimeConfig};
+use ingestor::trading::mm_simulator::SimulatorConfig;
 use ingestor::algorithms::{
     AlgorithmType, MLModelWeights,
     AlgorithmRegistry, BacktestAlgorithmParams,
@@ -1487,7 +1487,7 @@ fn run_regime_search(
     fill_probs_str: &str,
     output: Option<PathBuf>,
 ) -> Result<()> {
-    use ingestor::market_maker::RegimeThresholds;
+    use ingestor::trading::market_maker::RegimeThresholds;
 
     // Parse parameters
     let high_spreads: Vec<f64> = high_spreads_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
@@ -2248,7 +2248,7 @@ fn run_compare(
     // Build backtest config
     let backtest_config = BacktestConfig {
         replay: replay_config,
-        mm: ingestor::market_maker::MMConfig::default(),
+        mm: MMConfig::default(),
         simulator: SimulatorConfig {
             fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
             ..Default::default()
@@ -2374,7 +2374,7 @@ fn run_head_to_head(
 
     let backtest_config = BacktestConfig {
         replay: replay_config.clone(),
-        mm: ingestor::market_maker::MMConfig::default(),
+        mm: MMConfig::default(),
         simulator: SimulatorConfig {
             fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
             ..Default::default()

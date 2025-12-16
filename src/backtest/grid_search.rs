@@ -13,7 +13,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use ingestor::backtest::grid_search::{GridSearchEngine, GridSearchConfig, GridSearchResult};
+//! use crate::backtest::grid_search::{GridSearchEngine, GridSearchConfig, GridSearchResult};
 //!
 //! let config = GridSearchConfig {
 //!     spreads: vec![1.0, 2.0, 3.0],
@@ -38,8 +38,8 @@ use anyhow::Result;
 
 use crate::backtest::{BacktestEngine, BacktestConfig, FillSimulatorConfig};
 use crate::backtest::replay::ReplayConfig;
-use crate::market_maker::{MMConfig, RegimeParams, RegimeThresholds};
-use crate::mm_simulator::SimulatorConfig;
+use crate::trading::market_maker::{MMConfig, RegimeParams, RegimeThresholds};
+use crate::trading::mm_simulator::SimulatorConfig;
 
 /// Configuration for grid search
 #[derive(Debug, Clone, Serialize, Deserialize)]

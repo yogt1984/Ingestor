@@ -10,7 +10,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use ingestor::forward_testing::{ABTestManager, StatisticalTest, RegimeMonitor};
+//! use crate::forward_testing::{ABTestManager, StatisticalTest, RegimeMonitor};
 //!
 //! // Set up A/B test between two strategies
 //! let mut ab_test = ABTestManager::new(ABTestConfig::default());
@@ -25,14 +25,13 @@
 //! ```
 
 mod ab_testing;
+mod core;
 mod drift_detection;
 mod regime_monitor;
 mod statistical;
 
 pub use ab_testing::*;
+pub use core::*;
 pub use drift_detection::*;
 pub use regime_monitor::*;
 pub use statistical::*;
-
-// Re-export core types from the main forward_testing module
-pub use crate::forward_testing_core::*;

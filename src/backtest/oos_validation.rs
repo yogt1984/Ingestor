@@ -21,7 +21,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use ingestor::backtest::oos_validation::{OOSValidator, OOSConfig, ValidationReport};
+//! use crate::backtest::oos_validation::{OOSValidator, OOSConfig, ValidationReport};
 //!
 //! // Create validator with 20% hold-out
 //! let config = OOSConfig {
@@ -52,8 +52,8 @@ use crate::backtest::{
     ReplayEvent, ReplayConfig, FillSimulatorConfig,
 };
 use crate::backtest::statistics::StatisticalReport;
-use crate::market_maker::MMConfig;
-use crate::mm_simulator::SimulatorConfig;
+use crate::trading::market_maker::MMConfig;
+use crate::trading::mm_simulator::SimulatorConfig;
 
 /// Configuration for out-of-sample validation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -704,7 +704,7 @@ impl OOSValidator {
         skews: &[f64],
         fill_probs: &[f64],
     ) -> Result<Vec<ValidationReport>> {
-        use crate::market_maker::RegimeParams;
+        use crate::trading::market_maker::RegimeParams;
 
         let mut reports = Vec::new();
 

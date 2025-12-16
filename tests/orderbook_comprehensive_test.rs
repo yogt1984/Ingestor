@@ -1,5 +1,5 @@
 // Comprehensive tests for orderbook module
-use ingestor::orderbook::{ConcurrentOrderBook, OrderBookFeatures, OrderBookEngine, OrderBookEngineConfig};
+use ingestor::data::orderbook::{ConcurrentOrderBook, OrderBookFeatures, OrderBookEngine, OrderBookEngineConfig};
 use rust_decimal_macros::dec;
 use num::FromPrimitive;
 use std::sync::Arc;

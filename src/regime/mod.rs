@@ -23,7 +23,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use ingestor::regime::{RegimeDetector, ThresholdRegimeDetector, RegimeFeatures, MarketRegime};
+//! use crate::regime::{RegimeDetector, ThresholdRegimeDetector, RegimeFeatures, MarketRegime};
 //!
 //! let detector = ThresholdRegimeDetector::default();
 //! let features = RegimeFeatures {
@@ -911,7 +911,7 @@ impl SmoothedRegimeDetector {
 // Regime Engine - FeaturesSnapshot Integration
 // ============================================================================
 
-use crate::feature_fusion::FeaturesSnapshot;
+use crate::features::feature_fusion::FeaturesSnapshot;
 use crate::features::{TrendFeatureEngine, KalmanFilter, KalmanConfig};
 use rust_decimal::prelude::ToPrimitive;
 
@@ -948,8 +948,8 @@ impl Default for RegimeEngineConfig {
 /// # Usage
 ///
 /// ```ignore
-/// use ingestor::regime::{RegimeEngine, RegimeEngineConfig};
-/// use ingestor::feature_fusion::FeaturesSnapshot;
+/// use crate::regime::{RegimeEngine, RegimeEngineConfig};
+/// use crate::features::feature_fusion::FeaturesSnapshot;
 ///
 /// let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
 ///
@@ -2408,7 +2408,7 @@ mod tests {
 
     #[test]
     fn test_108_regime_engine_enrich_snapshot() {
-        use crate::feature_fusion::FeaturesSnapshot;
+        use crate::features::feature_fusion::FeaturesSnapshot;
 
         let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
 
@@ -2430,7 +2430,7 @@ mod tests {
 
     #[test]
     fn test_109_regime_engine_enrich_snapshot_values() {
-        use crate::feature_fusion::FeaturesSnapshot;
+        use crate::features::feature_fusion::FeaturesSnapshot;
 
         let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
 
@@ -2462,7 +2462,7 @@ mod tests {
 
     #[test]
     fn test_110_regime_engine_update_from_snapshot() {
-        use crate::feature_fusion::FeaturesSnapshot;
+        use crate::features::feature_fusion::FeaturesSnapshot;
         use rust_decimal_macros::dec;
 
         let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
@@ -2542,7 +2542,7 @@ mod tests {
 
     #[test]
     fn test_115_regime_engine_snapshot_enrichment_preserves_existing() {
-        use crate::feature_fusion::FeaturesSnapshot;
+        use crate::features::feature_fusion::FeaturesSnapshot;
         use rust_decimal_macros::dec;
 
         let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
@@ -2601,7 +2601,7 @@ mod tests {
 
     #[test]
     fn test_118_regime_engine_snapshot_with_no_entropy() {
-        use crate::feature_fusion::FeaturesSnapshot;
+        use crate::features::feature_fusion::FeaturesSnapshot;
         use rust_decimal_macros::dec;
 
         let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
@@ -2623,7 +2623,7 @@ mod tests {
 
     #[test]
     fn test_119_regime_engine_multiple_enrichments() {
-        use crate::feature_fusion::FeaturesSnapshot;
+        use crate::features::feature_fusion::FeaturesSnapshot;
 
         let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
 
@@ -2645,7 +2645,7 @@ mod tests {
 
     #[test]
     fn test_120_regime_engine_trend_features_populated() {
-        use crate::feature_fusion::FeaturesSnapshot;
+        use crate::features::feature_fusion::FeaturesSnapshot;
 
         let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
 

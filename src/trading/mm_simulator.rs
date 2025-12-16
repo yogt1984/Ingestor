@@ -11,9 +11,9 @@ use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 
 use crate::algorithms::{AlgorithmType, MarketInput, MarketMakingAlgorithm};
-use crate::market_maker::{Quote, QuoteSide, Fill, MarketMakerEngine, MMQuotes};
-use crate::risk_manager::{RiskManager, RiskConfig, RiskAction, RiskState, HaltReason};
-use crate::tradeslog::Trade;
+use crate::trading::market_maker::{Quote, QuoteSide, Fill, MarketMakerEngine, MMQuotes};
+use crate::trading::risk_manager::{RiskManager, RiskConfig, RiskAction, RiskState, HaltReason};
+use crate::data::tradeslog::Trade;
 
 /// Configuration for the simulator
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -410,7 +410,7 @@ impl GenericPaperTradingEngine {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PaperTradingState {
-    pub mm_state: crate::market_maker::MMState,
+    pub mm_state: crate::trading::market_maker::MMState,
     pub sim_stats: SimulatorStats,
     pub last_quotes: Option<MMQuotes>,
     #[serde(default)]
@@ -427,7 +427,7 @@ pub struct RiskManagedState {
     /// Current risk state
     pub risk_state: RiskState,
     /// Risk statistics
-    pub risk_stats: crate::risk_manager::RiskStats,
+    pub risk_stats: crate::trading::risk_manager::RiskStats,
     /// Number of quotes blocked by risk manager
     pub quotes_blocked: u64,
     /// Number of fills blocked (would-be fills that were prevented)
@@ -537,7 +537,7 @@ impl RiskManagedPaperTradingEngine {
     }
 
     /// Get risk statistics
-    pub fn risk_stats(&self) -> &crate::risk_manager::RiskStats {
+    pub fn risk_stats(&self) -> &crate::trading::risk_manager::RiskStats {
         self.risk_manager.stats()
     }
 
@@ -771,7 +771,7 @@ impl RiskManagedPaperTradingEngine {
 
     /// Create empty quotes (used when halted)
     fn create_empty_quotes(&self, best_bid: Decimal, best_ask: Decimal, entropy: f64) -> MMQuotes {
-        use crate::market_maker::{MarketRegime, RegimeThresholds};
+        use crate::trading::market_maker::{MarketRegime, RegimeThresholds};
         let mid = (best_bid + best_ask) / dec!(2);
         MMQuotes {
             bid: None,
@@ -787,7 +787,7 @@ impl RiskManagedPaperTradingEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::market_maker::MMConfig;
+    use crate::trading::market_maker::MMConfig;
 
     #[test]
     fn test_simulator_basic() {
@@ -808,7 +808,7 @@ mod tests {
                 side: QuoteSide::Ask,
                 timestamp_ms: 0,
             }),
-            regime: crate::market_maker::MarketRegime::HighEntropy,
+            regime: crate::trading::market_maker::MarketRegime::HighEntropy,
             fair_value: dec!(50005),
             half_spread: dec!(5),
             skew: dec!(0),
@@ -1220,7 +1220,7 @@ mod tests {
                 side: QuoteSide::Ask,
                 timestamp_ms: 0,
             }),
-            regime: crate::market_maker::MarketRegime::HighEntropy,
+            regime: crate::trading::market_maker::MarketRegime::HighEntropy,
             fair_value: dec!(50005),
             half_spread: dec!(5),
             skew: dec!(0),

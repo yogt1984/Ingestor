@@ -1,20 +1,48 @@
-pub mod orderbook;
-pub mod tradeslog;
-pub mod feature_fusion;
-pub mod persistence;
-pub mod illiquidity;
-pub mod entropy;
-pub mod volatility;
-pub mod toxicity;
-pub mod market_maker;
-pub mod risk_manager;
-pub mod mm_simulator;
-pub mod backtest;
-pub mod forward_testing_core;
-pub mod forward_testing;
-pub mod presets;
-pub mod lob_feed_manager;
-pub mod log_feed_manager;
-pub mod algorithms;
+//! Ingestor - Real-time market microstructure feature extraction platform
+//!
+//! This library provides:
+//! - **Data Layer**: Order book and trades log ingestion, feed management, persistence
+//! - **Features**: Entropy, illiquidity, volatility, toxicity, trend features, signal processing
+//! - **Trading**: Market making engine, paper trading simulator, risk management
+//! - **Backtesting**: Replay, harness, walk-forward validation
+//! - **Forward Testing**: A/B testing, drift detection, regime monitoring
+//! - **Algorithms**: Fixed spread, Avellaneda-Stoikov, ML-based spread/skew
+
+// Core modules
+pub mod data;
 pub mod features;
+pub mod trading;
+pub mod ui;
+
+// Analysis modules
+pub mod algorithms;
 pub mod regime;
+pub mod backtest;
+pub mod forward_testing;
+
+// Re-export commonly used types for convenience
+pub use data::{
+    ConcurrentOrderBook, OrderBook, OrderBookEngine, OrderBookFeatures, OrderBookEngineConfig,
+    ConcurrentTradesLog, TradesLog, TradesLogEngine, TradesLogFeatures, TradesLogEngineConfig,
+    LobFeedManager, LogFeedManager,
+    PersistenceEngine, save_feature_as_parquet_path,
+};
+
+pub use features::{
+    FeatureFusionEngine, FeaturesSnapshot,
+    IlliquidityEngine, IlliquidityMetrics, IlliquidityConfig,
+    EntropyEngine, EntropyMetrics, EntropyConfig,
+    VolatilityEngine, VolatilityMetrics, VolatilityConfig,
+    ToxicityEngine, ToxicityMetrics, ToxicityConfig,
+    TrendFeatureEngine, TrendFeatures, TrendFeatureConfig,
+    KalmanFilter, KalmanConfig, KalmanState, MultiSymbolKalman,
+};
+
+pub use trading::{
+    MarketMakerEngine, MMConfig, Quote,
+    RiskManagedPaperTradingEngine, SimulatorConfig,
+    RiskManager, RiskConfig,
+    ParameterPreset, PresetStore,
+};
+
+pub use regime::{RegimeEngine, RegimeEngineConfig};

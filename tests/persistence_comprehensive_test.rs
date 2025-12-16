@@ -1,6 +1,6 @@
 // Comprehensive tests for persistence module, especially parquet file content
-use ingestor::persistence::{save_feature_as_parquet, validate_parquet_schema};
-use ingestor::feature_fusion::FeaturesSnapshot;
+use ingestor::data::persistence::{save_feature_as_parquet, validate_parquet_schema};
+use ingestor::features::feature_fusion::FeaturesSnapshot;
 use rust_decimal_macros::dec;
 use num::FromPrimitive;
 use chrono::Utc;

@@ -1,11 +1,11 @@
 use ingestor::{
-    feature_fusion::{FeatureFusionEngine, FeaturesSnapshot},
-    orderbook::{ConcurrentOrderBook, OrderBookFeatures},
-    tradeslog::{ConcurrentTradesLog, Trade, TradesLogFeatures},
-    illiquidity::IlliquidityMetrics,
-    entropy::EntropyMetrics,
-    volatility::VolatilityMetrics,
-    toxicity::ToxicityMetrics,
+    features::feature_fusion::{FeatureFusionEngine, FeaturesSnapshot},
+    data::orderbook::{ConcurrentOrderBook, OrderBookFeatures},
+    data::tradeslog::{ConcurrentTradesLog, Trade, TradesLogFeatures},
+    features::illiquidity::IlliquidityMetrics,
+    features::entropy::EntropyMetrics,
+    features::volatility::VolatilityMetrics,
+    features::toxicity::ToxicityMetrics,
 };
 
 use rust_decimal_macros::dec;

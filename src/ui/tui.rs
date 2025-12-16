@@ -21,12 +21,12 @@ use ratatui::{
     text::{Span, Line},
 };
 
-use crate::feature_fusion::FeaturesSnapshot;
-use crate::market_maker::{MarketMakerEngine, MMConfig, MarketRegime};
-use crate::mm_simulator::{PaperTradingEngine, PaperTradingState, GenericPaperTradingEngine, RiskManagedPaperTradingEngine, RiskManagedState, SimulatorConfig};
-use crate::risk_manager::{RiskAction, RiskConfig};
-use ingestor::forward_testing::{ForwardTestSession, ForwardTestConfig};
-use crate::presets::{PresetStore, ParameterPreset};
+use crate::features::feature_fusion::FeaturesSnapshot;
+use crate::trading::market_maker::{MarketMakerEngine, MMConfig, MarketRegime};
+use crate::trading::mm_simulator::{PaperTradingEngine, PaperTradingState, GenericPaperTradingEngine, RiskManagedPaperTradingEngine, RiskManagedState, SimulatorConfig};
+use crate::trading::risk_manager::{RiskAction, RiskConfig};
+use crate::forward_testing::{ForwardTestSession, ForwardTestConfig};
+use crate::trading::presets::{PresetStore, ParameterPreset};
 use crate::algorithms::AlgorithmType;
 
 type Term = Terminal<CrosstermBackend<io::Stdout>>;
@@ -1176,7 +1176,7 @@ fn draw_data_info_screen(f: &mut ratatui::Frame) {
 
     // Try to load event count using replay
     let (event_count, time_range_str, duration_str, event_rate_str) = {
-        use ingestor::backtest::replay::{ParquetReplay, ReplayConfig};
+        use crate::backtest::replay::{ParquetReplay, ReplayConfig};
 
         let config = ReplayConfig {
             data_dir: data_dir.clone(),
@@ -1279,15 +1279,15 @@ fn draw_data_info_screen(f: &mut ratatui::Frame) {
 /// Draw grid search screen - runs hyperparameter optimization
 /// Mirrors CLI `backtest grid-search` command
 fn draw_grid_search_screen(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
-    use ingestor::backtest::grid_search::{GridSearchEngine, GridSearchConfig};
-    use ingestor::backtest::replay::ReplayConfig;
+    use crate::backtest::grid_search::{GridSearchEngine, GridSearchConfig};
+    use crate::backtest::replay::ReplayConfig;
 
     let size = f.size();
     let data_dir = std::path::PathBuf::from("./data/features");
 
     // Static storage for results (persists across redraws)
     use std::sync::OnceLock;
-    static GRID_SEARCH_RESULTS: OnceLock<Result<ingestor::backtest::grid_search::GridSearchResults, String>> = OnceLock::new();
+    static GRID_SEARCH_RESULTS: OnceLock<Result<crate::backtest::grid_search::GridSearchResults, String>> = OnceLock::new();
 
     let results = GRID_SEARCH_RESULTS.get_or_init(|| {
         let config = GridSearchConfig::default();
@@ -1444,15 +1444,15 @@ fn draw_grid_search_screen(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
 /// Draw sweep screen - runs parameter sensitivity analysis
 /// Mirrors CLI `backtest sweep` command
 fn draw_sweep_screen(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
-    use ingestor::backtest::sweep::{SweepEngine, SweepConfig};
-    use ingestor::backtest::replay::ReplayConfig;
+    use crate::backtest::sweep::{SweepEngine, SweepConfig};
+    use crate::backtest::replay::ReplayConfig;
 
     let size = f.size();
     let data_dir = std::path::PathBuf::from("./data/features");
 
     // Static storage for results (persists across redraws)
     use std::sync::OnceLock;
-    static SWEEP_RESULTS: OnceLock<Result<ingestor::backtest::sweep::SweepResults, String>> = OnceLock::new();
+    static SWEEP_RESULTS: OnceLock<Result<crate::backtest::sweep::SweepResults, String>> = OnceLock::new();
 
     let results = SWEEP_RESULTS.get_or_init(|| {
         let config = SweepConfig::default();
@@ -1514,7 +1514,7 @@ fn draw_sweep_screen(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
             lines.push(Line::from(header));
 
             // Build map for quick lookup
-            let mut result_map: std::collections::HashMap<(u32, u32), &ingestor::backtest::sweep::SweepResult> = std::collections::HashMap::new();
+            let mut result_map: std::collections::HashMap<(u32, u32), &crate::backtest::sweep::SweepResult> = std::collections::HashMap::new();
             for r in &sweep_results.results {
                 let spread_key = (r.spread * 100.0) as u32;
                 let skew_key = (r.skew * 100.0) as u32;
@@ -1635,14 +1635,14 @@ fn draw_sweep_screen(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
 }
 
 fn draw_oos_validation_screen(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
-    use ingestor::backtest::oos_validation::{OOSValidator, OOSConfig, OverfitVerdict, ValidationRecommendation};
+    use crate::backtest::oos_validation::{OOSValidator, OOSConfig, OverfitVerdict, ValidationRecommendation};
 
     let size = f.size();
     let data_dir = std::path::PathBuf::from("./data/features");
 
     // Static storage for results (persists across redraws)
     use std::sync::OnceLock;
-    static OOS_RESULTS: OnceLock<Result<Vec<ingestor::backtest::oos_validation::ValidationReport>, String>> = OnceLock::new();
+    static OOS_RESULTS: OnceLock<Result<Vec<crate::backtest::oos_validation::ValidationReport>, String>> = OnceLock::new();
 
     // Default parameters (best from grid search)
     let spreads = vec![1.0, 2.0, 3.0];
@@ -2764,7 +2764,7 @@ fn textwrap_simple(text: &str, max_width: usize) -> Vec<String> {
 
 /// Run backtest and display results
 fn draw_backtest_screen(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
-    use ingestor::backtest::{BacktestEngine, BacktestConfig, ReplayConfig};
+    use crate::backtest::{BacktestEngine, BacktestConfig, ReplayConfig};
     use std::path::PathBuf;
 
     let size = f.size();
@@ -2926,7 +2926,7 @@ fn draw_walkforward_screen(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
 
 /// Run data quality check and display results
 fn draw_dataquality_screen(f: &mut ratatui::Frame, scroll_offset: &mut u16) {
-    use ingestor::backtest::DataValidator;
+    use crate::backtest::DataValidator;
     let size = f.size();
     let data_dir = std::path::PathBuf::from("./data/features");
 

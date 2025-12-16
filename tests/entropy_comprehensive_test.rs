@@ -1,7 +1,7 @@
 // Comprehensive tests for entropy module
-use ingestor::entropy::{EntropyEngine, EntropyConfig};
-use ingestor::orderbook::ConcurrentOrderBook;
-use ingestor::tradeslog::{ConcurrentTradesLog, Trade};
+use ingestor::features::entropy::{EntropyEngine, EntropyConfig};
+use ingestor::data::orderbook::ConcurrentOrderBook;
+use ingestor::data::tradeslog::{ConcurrentTradesLog, Trade};
 use rust_decimal_macros::dec;
 use num::FromPrimitive;
 use std::sync::Arc;
@@ -33,7 +33,7 @@ async fn test_entropy_engine_creation() {
 async fn test_entropy_all_windows() {
     let ob = Arc::new(ConcurrentOrderBook::new());
     let tl = Arc::new(ConcurrentTradesLog::new(1000));
-    let (tx, _rx) = mpsc::channel::<ingestor::entropy::EntropyMetrics>(10);
+    let (tx, _rx) = mpsc::channel::<ingestor::features::entropy::EntropyMetrics>(10);
     
     let mut engine = EntropyEngine::new(
         ob.clone(),

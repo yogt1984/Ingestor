@@ -27,7 +27,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use ingestor::backtest::multi_objective::{MultiObjectiveOptimizer, MOConfig};
+//! use crate::backtest::multi_objective::{MultiObjectiveOptimizer, MOConfig};
 //!
 //! let config = MOConfig::default();
 //! let mut optimizer = MultiObjectiveOptimizer::new(config);
@@ -51,8 +51,8 @@ use crate::backtest::{
     BacktestEngine, BacktestConfig, BacktestResults,
     ReplayEvent, ReplayConfig, FillSimulatorConfig,
 };
-use crate::market_maker::{MMConfig, RegimeParams};
-use crate::mm_simulator::SimulatorConfig;
+use crate::trading::market_maker::{MMConfig, RegimeParams};
+use crate::trading::mm_simulator::SimulatorConfig;
 
 /// Configuration for multi-objective optimization
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -508,7 +508,7 @@ impl MultiObjectiveOptimizer {
             regime_params: RegimeParams::uniform(spread, skew),
             max_inventory: dec!(0.1),
             quote_size: dec!(0.001),
-            regime_thresholds: crate::market_maker::RegimeThresholds {
+            regime_thresholds: crate::trading::market_maker::RegimeThresholds {
                 high_entropy_threshold: high_entropy,
                 low_entropy_threshold: 0.4,
             },

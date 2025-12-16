@@ -13,7 +13,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use ingestor::backtest::paper_validation::{SessionValidator, ValidationConfig};
+//! use crate::backtest::paper_validation::{SessionValidator, ValidationConfig};
 //!
 //! let config = ValidationConfig::default();
 //! let validator = SessionValidator::new(config)?;
@@ -33,10 +33,10 @@ use anyhow::{Result, Context, bail};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::forward_testing_core::{
+use crate::forward_testing::{
     SessionSummary, SessionMetrics, load_session_summary, list_sessions,
 };
-use crate::presets::{ParameterPreset, PresetStore};
+use crate::trading::presets::{ParameterPreset, PresetStore};
 use crate::algorithms::AlgorithmType;
 
 /// Configuration for validation
@@ -741,7 +741,7 @@ impl SessionValidator {
         })
     }
 
-    fn find_matching_preset(&self, config: &crate::forward_testing_core::ForwardTestConfig) -> Option<&ParameterPreset> {
+    fn find_matching_preset(&self, config: &crate::forward_testing::ForwardTestConfig) -> Option<&ParameterPreset> {
         // First try exact name match
         if let Some(ref preset_name) = config.preset_name {
             if let Some(preset) = self.presets.presets.iter().find(|p| &p.name == preset_name) {
@@ -970,7 +970,7 @@ mod tests {
 
         let summary = SessionSummary {
             session_id: "test_session".to_string(),
-            config: crate::forward_testing_core::ForwardTestConfig::default(),
+            config: crate::forward_testing::ForwardTestConfig::default(),
             metrics,
             trade_count: 2,
         };
@@ -999,7 +999,7 @@ mod tests {
 
         let summary = SessionSummary {
             session_id: "test_session".to_string(),
-            config: crate::forward_testing_core::ForwardTestConfig::default(),
+            config: crate::forward_testing::ForwardTestConfig::default(),
             metrics,
             trade_count: 50,
         };
@@ -1110,7 +1110,7 @@ mod tests {
 
         let summary = SessionSummary {
             session_id: "asymmetric_test".to_string(),
-            config: crate::forward_testing_core::ForwardTestConfig::default(),
+            config: crate::forward_testing::ForwardTestConfig::default(),
             metrics,
             trade_count: 100,
         };
@@ -1136,7 +1136,7 @@ mod tests {
         metrics.win_rate = 0.60;
         metrics.quotes_generated = 1000; // Low fill rate
 
-        let mut forward_config = crate::forward_testing_core::ForwardTestConfig::default();
+        let mut forward_config = crate::forward_testing::ForwardTestConfig::default();
         forward_config.preset_name = Some("GridSearch-Best".to_string());
 
         let summary = SessionSummary {

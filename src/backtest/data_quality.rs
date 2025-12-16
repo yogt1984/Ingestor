@@ -557,7 +557,7 @@ impl Default for DataValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::feature_fusion::FeaturesSnapshot;
+    use crate::features::feature_fusion::FeaturesSnapshot;
 
     fn create_valid_event(ts: i64, mid_price: Decimal) -> ReplayEvent {
         let mut snap = FeaturesSnapshot::default();

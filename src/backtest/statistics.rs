@@ -20,7 +20,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use ingestor::backtest::statistics::{StatisticalReport, compute_statistics};
+//! use crate::backtest::statistics::{StatisticalReport, compute_statistics};
 //!
 //! let report = compute_statistics(&backtest_results, num_trials);
 //! report.print();

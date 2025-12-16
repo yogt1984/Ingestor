@@ -1,5 +1,5 @@
-use crate::lob_feed_manager::{SharedConnectionStatus, ConnectionStatus};
-use crate::tradeslog::{ConcurrentTradesLog, Trade};
+use crate::data::lob_feed_manager::{SharedConnectionStatus, ConnectionStatus};
+use crate::data::tradeslog::{ConcurrentTradesLog, Trade};
 use futures_util::StreamExt;
 use log::{debug, error, info};
 use rust_decimal::Decimal;

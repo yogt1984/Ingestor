@@ -67,7 +67,7 @@ use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::backtest::session_runner::{SessionResult, SessionState};
-use crate::presets::ParameterPreset;
+use crate::trading::presets::ParameterPreset;
 
 // ============================================================================
 // Configuration
@@ -1442,7 +1442,7 @@ fn normal_cdf(x: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::forward_testing_core::{SessionSummary, ForwardTestConfig, SessionMetrics};
+    use crate::forward_testing::{SessionSummary, ForwardTestConfig, SessionMetrics};
     use rust_decimal::Decimal;
     use rust_decimal_macros::dec;
 

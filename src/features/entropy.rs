@@ -8,9 +8,9 @@ use rust_decimal::prelude::ToPrimitive;
 use serde::Serialize;
 use chrono::{Utc, DateTime, Duration};
 use log::{info, warn};
-use crate::tradeslog::{ConcurrentTradesLog, Trade};
+use crate::data::tradeslog::{ConcurrentTradesLog, Trade};
 use num::FromPrimitive;
-use crate::orderbook::ConcurrentOrderBook;
+use crate::data::orderbook::ConcurrentOrderBook;
 
 #[derive(Debug, Clone)]
 pub struct EntropyConfig {

@@ -12,7 +12,7 @@ use rust_decimal::prelude::*;
 use serde::{Deserialize, Serialize};
 use anyhow::{Result, Context};
 
-use crate::feature_fusion::FeaturesSnapshot;
+use crate::features::feature_fusion::FeaturesSnapshot;
 
 /// Configuration for the replay engine
 #[derive(Debug, Clone, Serialize, Deserialize)]

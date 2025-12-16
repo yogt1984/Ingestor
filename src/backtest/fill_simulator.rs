@@ -15,8 +15,8 @@ use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 
-use crate::feature_fusion::FeaturesSnapshot;
-use crate::market_maker::{Quote, QuoteSide, Fill, MMQuotes};
+use crate::features::feature_fusion::FeaturesSnapshot;
+use crate::trading::market_maker::{Quote, QuoteSide, Fill, MMQuotes};
 
 /// Configuration for the fill simulator
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -577,7 +577,7 @@ mod tests {
         let quotes = MMQuotes {
             bid: Some(make_quote(50000.0, true)),
             ask: Some(make_quote(50010.0, false)),
-            regime: crate::market_maker::MarketRegime::HighEntropy,
+            regime: crate::trading::market_maker::MarketRegime::HighEntropy,
             fair_value: dec!(50005),
             half_spread: dec!(5),
             skew: dec!(0),
@@ -605,7 +605,7 @@ mod tests {
         let quotes = MMQuotes {
             bid: Some(make_quote(50000.0, true)),
             ask: Some(make_quote(50010.0, false)),
-            regime: crate::market_maker::MarketRegime::HighEntropy,
+            regime: crate::trading::market_maker::MarketRegime::HighEntropy,
             fair_value: dec!(50005),
             half_spread: dec!(5),
             skew: dec!(0),
@@ -634,7 +634,7 @@ mod tests {
         let quotes = MMQuotes {
             bid: Some(make_quote(50000.0, true)),
             ask: Some(make_quote(50010.0, false)),
-            regime: crate::market_maker::MarketRegime::HighEntropy,
+            regime: crate::trading::market_maker::MarketRegime::HighEntropy,
             fair_value: dec!(50005),
             half_spread: dec!(5),
             skew: dec!(0),
@@ -665,7 +665,7 @@ mod tests {
         let quotes = MMQuotes {
             bid: Some(make_quote(50000.0, true)),
             ask: Some(make_quote(50010.0, false)),
-            regime: crate::market_maker::MarketRegime::HighEntropy,
+            regime: crate::trading::market_maker::MarketRegime::HighEntropy,
             fair_value: dec!(50005),
             half_spread: dec!(5),
             skew: dec!(0),
@@ -700,7 +700,7 @@ mod tests {
         let quotes = MMQuotes {
             bid: Some(make_quote(50000.0, true)),
             ask: None,
-            regime: crate::market_maker::MarketRegime::HighEntropy,
+            regime: crate::trading::market_maker::MarketRegime::HighEntropy,
             fair_value: dec!(50005),
             half_spread: dec!(5),
             skew: dec!(0),

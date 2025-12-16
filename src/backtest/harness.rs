@@ -13,7 +13,7 @@
 //! The backtest engine supports any algorithm implementing `MarketMakingAlgorithm`:
 //!
 //! ```ignore
-//! use ingestor::algorithms::{MarketMakingAlgorithm, AvellanedaStoikovAlgorithm};
+//! use crate::algorithms::{MarketMakingAlgorithm, AvellanedaStoikovAlgorithm};
 //!
 //! // Create with default A-S algorithm
 //! let engine = BacktestEngine::new(config);
@@ -35,8 +35,8 @@ use crate::algorithms::{
     MarketMakingAlgorithm, MarketInput, AvellanedaStoikovAlgorithm,
     compute_entropy_score, compute_flow_imbalance,
 };
-use crate::market_maker::{MMConfig, Fill, QuoteSide};
-use crate::mm_simulator::SimulatorConfig;
+use crate::trading::market_maker::{MMConfig, Fill, QuoteSide};
+use crate::trading::mm_simulator::SimulatorConfig;
 
 use super::replay::{ParquetReplay, ReplayConfig, ReplayEvent};
 use super::fill_simulator::{FillSimulator, FillSimulatorConfig, MarketState};
@@ -491,7 +491,7 @@ impl BacktestEngine {
     fn simulate_fills_naive(
         &self,
         current_mid: Decimal,
-        quotes: &crate::market_maker::MMQuotes,
+        quotes: &crate::trading::market_maker::MMQuotes,
         timestamp_ms: u64,
     ) -> Vec<Fill> {
         let mut fills = Vec::new();

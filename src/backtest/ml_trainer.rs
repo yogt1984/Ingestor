@@ -25,7 +25,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use ingestor::backtest::ml_trainer::{MLTrainer, MLTrainerConfig};
+//! use crate::backtest::ml_trainer::{MLTrainer, MLTrainerConfig};
 //!
 //! let config = MLTrainerConfig::default();
 //! let mut trainer = MLTrainer::new(config)?;
@@ -47,8 +47,8 @@ use crate::backtest::{
     BacktestEngine, BacktestConfig, BacktestResults,
     ReplayEvent, ReplayConfig, FillSimulatorConfig,
 };
-use crate::market_maker::MMConfig;
-use crate::mm_simulator::SimulatorConfig;
+use crate::trading::market_maker::MMConfig;
+use crate::trading::mm_simulator::SimulatorConfig;
 
 // ============================================================================
 // Configuration
@@ -512,7 +512,7 @@ mod tests {
     use rust_decimal_macros::dec;
 
     fn create_test_events(count: usize) -> Vec<ReplayEvent> {
-        use crate::feature_fusion::FeaturesSnapshot;
+        use crate::features::feature_fusion::FeaturesSnapshot;
 
         (0..count)
             .map(|i| {

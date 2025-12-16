@@ -1,7 +1,7 @@
 // Test helpers for creating test data
-use ingestor::tradeslog::Trade;
-use ingestor::orderbook::ConcurrentOrderBook;
-use ingestor::tradeslog::ConcurrentTradesLog;
+use ingestor::data::tradeslog::Trade;
+use ingestor::data::orderbook::ConcurrentOrderBook;
+use ingestor::data::tradeslog::ConcurrentTradesLog;
 use num::FromPrimitive;
 use std::sync::Arc;
 

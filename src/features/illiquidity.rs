@@ -6,8 +6,8 @@ use rust_decimal_macros::dec;
 use serde::{Serialize, Deserialize};
 use chrono::Utc;
 use metrics::{Counter, Histogram, Gauge};
-use crate::orderbook::{ConcurrentOrderBook};
-use crate::tradeslog::{ConcurrentTradesLog, TradesLogFeatures, Trade};
+use crate::data::orderbook::{ConcurrentOrderBook};
+use crate::data::tradeslog::{ConcurrentTradesLog, TradesLogFeatures, Trade};
 use log;
 
 #[derive(Debug, Clone, Deserialize)]

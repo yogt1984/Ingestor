@@ -9,7 +9,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::algorithms::{AlgorithmType, MLModelWeights};
-use crate::market_maker::{MMConfig, RegimeThresholds, RegimeParams};
+use crate::trading::market_maker::{MMConfig, RegimeThresholds, RegimeParams};
 
 /// A saved parameter preset with metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
