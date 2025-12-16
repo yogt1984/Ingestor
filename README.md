@@ -112,7 +112,7 @@ Binance WebSocket
 - [x] Implement `signal_processing.rs` (Kalman filter for velocity/acceleration)
 - [ ] Add multi-symbol data ingestion (ETH, SOL minimum)
 - [ ] Implement `cross_asset.rs` (correlation, joint momentum)
-- [ ] Create `RegimeDetector` trait and basic implementation
+- [x] Create `RegimeDetector` trait and basic implementation
 - [ ] Add regime labels to `FeaturesSnapshot`
 
 ### Phase 1: Hybrid Strategy
