@@ -91,6 +91,14 @@ fn create_complete_snapshot() -> FeaturesSnapshot {
         arrival_asymmetry: Some(dec!(0.15)),
         size_toxicity_ratio: Some(dec!(1.2)),
         toxicity_index: Some(dec!(0.28)),
+        // Regime detection fields
+        regime: Some("TrendingUp".to_string()),
+        regime_confidence: Some(0.85),
+        trend_strength: Some(0.6),
+        regime_persistence: Some(0.65),
+        trend_momentum: Some(0.3),
+        trend_monotonicity: Some(0.75),
+        trend_hurst: Some(0.62),
     }
 }
 

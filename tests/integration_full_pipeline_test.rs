@@ -273,6 +273,14 @@ async fn test_persistence_engine_with_entropy() {
             arrival_asymmetry: Some(dec!(0.15)),
             size_toxicity_ratio: Some(dec!(1.2)),
             toxicity_index: Some(dec!(0.28)),
+            // Regime detection fields
+            regime: Some("MeanReverting".to_string()),
+            regime_confidence: Some(0.85),
+            trend_strength: Some(0.2),
+            regime_persistence: Some(0.45),
+            trend_momentum: Some(0.1),
+            trend_monotonicity: Some(0.6),
+            trend_hurst: Some(0.45),
         };
         
         tx.send(snapshot).unwrap();

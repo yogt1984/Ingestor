@@ -249,6 +249,15 @@ impl ParquetReplay {
             arrival_asymmetry: self.get_decimal(df, "arrival_asymmetry", row),
             size_toxicity_ratio: self.get_decimal(df, "size_toxicity_ratio", row),
             toxicity_index: self.get_decimal(df, "toxicity_index", row),
+
+            // Regime (may be None if not present in parquet - backward compatible)
+            regime: self.get_string(df, "regime", row),
+            regime_confidence: self.get_f64(df, "regime_confidence", row),
+            trend_strength: self.get_f64(df, "trend_strength", row),
+            regime_persistence: self.get_f64(df, "regime_persistence", row),
+            trend_momentum: self.get_f64(df, "trend_momentum", row),
+            trend_monotonicity: self.get_f64(df, "trend_monotonicity", row),
+            trend_hurst: self.get_f64(df, "trend_hurst", row),
         })
     }
 
