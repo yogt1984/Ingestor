@@ -90,6 +90,21 @@ pub struct FeaturesSnapshot {
     pub arrival_asymmetry: Option<Decimal>,
     pub size_toxicity_ratio: Option<Decimal>,
     pub toxicity_index: Option<Decimal>,
+    // Regime detection fields (Phase 0.4)
+    /// Detected market regime: "TrendingUp", "TrendingDown", "MeanReverting", "Uncertain"
+    pub regime: Option<String>,
+    /// Confidence in regime classification (0.0 - 1.0)
+    pub regime_confidence: Option<f64>,
+    /// Trend strength from -1.0 (strong down) to 1.0 (strong up)
+    pub trend_strength: Option<f64>,
+    /// Hurst exponent indicating persistence (>0.5 trending, <0.5 mean-reverting)
+    pub regime_persistence: Option<f64>,
+    /// Momentum from TrendFeatureEngine (price velocity)
+    pub trend_momentum: Option<f64>,
+    /// Monotonicity from TrendFeatureEngine (directional consistency)
+    pub trend_monotonicity: Option<f64>,
+    /// Hurst exponent from TrendFeatureEngine
+    pub trend_hurst: Option<f64>,
 }
 
 pub struct FeatureFusionEngine {
@@ -287,6 +302,14 @@ impl FeatureFusionEngine {
                     arrival_asymmetry: toxicity_metrics.arrival_asymmetry,
                     size_toxicity_ratio: toxicity_metrics.size_toxicity_ratio,
                     toxicity_index: toxicity_metrics.toxicity_index,
+                    // Regime detection fields (populated by RegimeEngine if enabled)
+                    regime: None,
+                    regime_confidence: None,
+                    trend_strength: None,
+                    regime_persistence: None,
+                    trend_momentum: None,
+                    trend_monotonicity: None,
+                    trend_hurst: None,
                 };
 
                 // Send snapshot whenever we have new data

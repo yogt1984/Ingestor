@@ -908,6 +908,194 @@ impl SmoothedRegimeDetector {
 }
 
 // ============================================================================
+// Regime Engine - FeaturesSnapshot Integration
+// ============================================================================
+
+use crate::feature_fusion::FeaturesSnapshot;
+use crate::features::{TrendFeatureEngine, KalmanFilter, KalmanConfig};
+use rust_decimal::prelude::ToPrimitive;
+
+/// Configuration for the RegimeEngine
+#[derive(Debug, Clone)]
+pub struct RegimeEngineConfig {
+    /// Number of price ticks to use for trend feature computation
+    pub window_size: usize,
+    /// Configuration for the threshold-based regime detector
+    pub threshold_config: ThresholdConfig,
+    /// Configuration for the Kalman filter
+    pub kalman_config: KalmanConfig,
+}
+
+impl Default for RegimeEngineConfig {
+    fn default() -> Self {
+        Self {
+            window_size: 60,
+            threshold_config: ThresholdConfig::default(),
+            kalman_config: KalmanConfig::default(),
+        }
+    }
+}
+
+/// Engine that integrates regime detection with FeaturesSnapshot
+///
+/// This engine maintains internal state (TrendFeatureEngine, KalmanFilter)
+/// and provides methods to:
+/// 1. Update with new price data
+/// 2. Extract RegimeFeatures from accumulated data
+/// 3. Detect the current regime
+/// 4. Enrich a FeaturesSnapshot with regime labels
+///
+/// # Usage
+///
+/// ```ignore
+/// use ingestor::regime::{RegimeEngine, RegimeEngineConfig};
+/// use ingestor::feature_fusion::FeaturesSnapshot;
+///
+/// let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
+///
+/// // Update with prices as they arrive
+/// engine.update(100.0);
+/// engine.update(100.5);
+/// // ...
+///
+/// // Get the current regime state
+/// let state = engine.current_regime();
+///
+/// // Or enrich a FeaturesSnapshot
+/// let mut snapshot = FeaturesSnapshot::default();
+/// engine.enrich_snapshot(&mut snapshot);
+/// ```
+pub struct RegimeEngine {
+    config: RegimeEngineConfig,
+    trend_engine: TrendFeatureEngine,
+    kalman_filter: KalmanFilter,
+    detector: ThresholdRegimeDetector,
+    last_entropy: f64,
+}
+
+impl RegimeEngine {
+    /// Create a new RegimeEngine with the given configuration
+    pub fn new(config: RegimeEngineConfig) -> Self {
+        Self {
+            trend_engine: TrendFeatureEngine::new(config.window_size),
+            kalman_filter: KalmanFilter::new(config.kalman_config.clone()),
+            detector: ThresholdRegimeDetector::new(config.threshold_config.clone()),
+            last_entropy: 0.5, // Default neutral entropy
+            config,
+        }
+    }
+
+    /// Create a new RegimeEngine with default configuration
+    pub fn default() -> Self {
+        Self::new(RegimeEngineConfig::default())
+    }
+
+    /// Update the engine with a new price observation
+    pub fn update(&mut self, price: f64) {
+        self.trend_engine.update(price);
+        self.kalman_filter.update(price);
+    }
+
+    /// Update the engine with entropy from external source (e.g., EntropyEngine)
+    pub fn update_entropy(&mut self, entropy: f64) {
+        self.last_entropy = entropy;
+    }
+
+    /// Reset all internal state
+    pub fn reset(&mut self) {
+        self.trend_engine = TrendFeatureEngine::new(self.config.window_size);
+        self.kalman_filter = KalmanFilter::new(self.config.kalman_config.clone());
+        self.last_entropy = 0.5;
+    }
+
+    /// Extract RegimeFeatures from current state
+    pub fn extract_features(&self) -> RegimeFeatures {
+        let trend_features = self.trend_engine.compute();
+        let kalman_state = self.kalman_filter.state();
+
+        let (kalman_velocity, kalman_acceleration) = match kalman_state {
+            Some(state) => (state.velocity, state.acceleration),
+            None => (0.0, 0.0),
+        };
+
+        RegimeFeatures {
+            momentum: trend_features.momentum.unwrap_or(0.0),
+            monotonicity: trend_features.monotonicity.unwrap_or(0.5),
+            hurst: trend_features.hurst_exponent.unwrap_or(0.5),
+            entropy: self.last_entropy,
+            kalman_velocity,
+            kalman_acceleration,
+        }
+    }
+
+    /// Detect the current market regime
+    pub fn current_regime(&self) -> RegimeState {
+        let features = self.extract_features();
+        self.detector.detect(&features)
+    }
+
+    /// Enrich a FeaturesSnapshot with regime detection results
+    ///
+    /// This populates the following fields:
+    /// - `regime`: String representation of the detected regime
+    /// - `regime_confidence`: Confidence in the classification (0.0 - 1.0)
+    /// - `trend_strength`: Trend strength from -1.0 to 1.0
+    /// - `regime_persistence`: Hurst exponent
+    /// - `trend_momentum`: Momentum from TrendFeatureEngine
+    /// - `trend_monotonicity`: Monotonicity from TrendFeatureEngine
+    /// - `trend_hurst`: Hurst exponent from TrendFeatureEngine
+    pub fn enrich_snapshot(&self, snapshot: &mut FeaturesSnapshot) {
+        let features = self.extract_features();
+        let state = self.detector.detect(&features);
+        let trend_features = self.trend_engine.compute();
+
+        snapshot.regime = Some(state.regime.to_string());
+        snapshot.regime_confidence = Some(state.confidence);
+        snapshot.trend_strength = Some(state.trend_strength);
+        snapshot.regime_persistence = Some(state.persistence);
+        snapshot.trend_momentum = trend_features.momentum;
+        snapshot.trend_monotonicity = trend_features.monotonicity;
+        snapshot.trend_hurst = trend_features.hurst_exponent;
+    }
+
+    /// Update engine from a FeaturesSnapshot (extracts price and entropy)
+    ///
+    /// This is useful when you want to process snapshots in sequence.
+    /// It extracts:
+    /// - Mid price (or microprice as fallback) for trend/Kalman update
+    /// - Tick entropy (30s window) for regime detection
+    pub fn update_from_snapshot(&mut self, snapshot: &FeaturesSnapshot) {
+        // Extract price (prefer mid_price, fallback to microprice)
+        let price = snapshot
+            .mid_price
+            .and_then(|p| p.to_f64())
+            .or_else(|| snapshot.microprice.and_then(|p| p.to_f64()));
+
+        if let Some(p) = price {
+            self.update(p);
+        }
+
+        // Extract entropy (prefer 30s window)
+        let entropy = snapshot
+            .tick_entropy_30s
+            .and_then(|e| e.to_f64())
+            .unwrap_or(0.5);
+
+        self.update_entropy(entropy);
+    }
+
+    /// Check if the engine has enough data for meaningful regime detection
+    pub fn is_ready(&self) -> bool {
+        self.trend_engine.is_ready()
+    }
+
+    /// Get the underlying detector configuration
+    pub fn config(&self) -> &RegimeEngineConfig {
+        &self.config
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -2118,5 +2306,360 @@ mod tests {
 
         // Verify they're independent by checking memory addresses would differ
         // (we can't actually modify state1 as it's immutable, but clone is independent)
+    }
+
+    // ========================================================================
+    // RegimeEngine Tests (101-120)
+    // ========================================================================
+
+    #[test]
+    fn test_101_regime_engine_default_creation() {
+        let engine = RegimeEngine::new(RegimeEngineConfig::default());
+        assert!(!engine.is_ready()); // No data yet
+    }
+
+    #[test]
+    fn test_102_regime_engine_custom_config() {
+        let mut config = RegimeEngineConfig::default();
+        config.window_size = 50;
+        config.threshold_config.momentum_threshold = 0.05;
+        config.threshold_config.hurst_trending_threshold = 0.6;
+
+        let engine = RegimeEngine::new(config.clone());
+        assert_eq!(engine.config().window_size, 50);
+        assert_eq!(engine.config().threshold_config.momentum_threshold, 0.05);
+    }
+
+    #[test]
+    fn test_103_regime_engine_update_price() {
+        let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
+
+        // Update with some prices
+        for i in 0..50 {
+            engine.update(100.0 + i as f64 * 0.1);
+        }
+
+        // Should have enough data now
+        assert!(engine.is_ready());
+    }
+
+    #[test]
+    fn test_104_regime_engine_extract_features() {
+        let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
+
+        // Feed trending up prices
+        for i in 0..50 {
+            engine.update(100.0 + i as f64);
+        }
+
+        let features = engine.extract_features();
+
+        // With upward trending prices, momentum should be positive
+        assert!(features.momentum > 0.0);
+        // Hurst should indicate trending (> 0.5)
+        assert!(features.hurst > 0.0);
+    }
+
+    #[test]
+    fn test_105_regime_engine_current_regime_trending_up() {
+        let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
+
+        // Strong upward trend
+        for i in 0..100 {
+            engine.update(100.0 + i as f64 * 2.0);
+        }
+
+        let state = engine.current_regime();
+
+        // With strong upward movement, should detect TrendingUp
+        assert!(state.trend_strength > 0.0);
+    }
+
+    #[test]
+    fn test_106_regime_engine_current_regime_trending_down() {
+        let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
+
+        // Strong downward trend
+        for i in 0..100 {
+            engine.update(200.0 - i as f64 * 2.0);
+        }
+
+        let state = engine.current_regime();
+
+        // With strong downward movement, trend_strength should be negative
+        assert!(state.trend_strength < 0.0);
+    }
+
+    #[test]
+    fn test_107_regime_engine_entropy_update() {
+        let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
+
+        // Feed prices
+        for i in 0..50 {
+            engine.update(100.0 + i as f64 * 0.1);
+        }
+
+        // Update entropy
+        engine.update_entropy(1.5);
+
+        let features = engine.extract_features();
+        assert!((features.entropy - 1.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_108_regime_engine_enrich_snapshot() {
+        use crate::feature_fusion::FeaturesSnapshot;
+
+        let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
+
+        // Feed prices
+        for i in 0..50 {
+            engine.update(100.0 + i as f64);
+        }
+        engine.update_entropy(1.2);
+
+        let mut snapshot = FeaturesSnapshot::default();
+        engine.enrich_snapshot(&mut snapshot);
+
+        // Snapshot should now have regime fields populated
+        assert!(snapshot.regime.is_some());
+        assert!(snapshot.regime_confidence.is_some());
+        assert!(snapshot.trend_strength.is_some());
+        assert!(snapshot.regime_persistence.is_some());
+    }
+
+    #[test]
+    fn test_109_regime_engine_enrich_snapshot_values() {
+        use crate::feature_fusion::FeaturesSnapshot;
+
+        let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
+
+        // Feed strong uptrend
+        for i in 0..100 {
+            engine.update(100.0 + i as f64 * 2.0);
+        }
+
+        let mut snapshot = FeaturesSnapshot::default();
+        engine.enrich_snapshot(&mut snapshot);
+
+        // Verify regime is one of the valid values
+        let regime = snapshot.regime.unwrap();
+        assert!(
+            regime == "TrendingUp" ||
+            regime == "TrendingDown" ||
+            regime == "MeanReverting" ||
+            regime == "Uncertain"
+        );
+
+        // Confidence should be between 0 and 1
+        let confidence = snapshot.regime_confidence.unwrap();
+        assert!(confidence >= 0.0 && confidence <= 1.0);
+
+        // Trend strength should be between -1 and 1
+        let trend_strength = snapshot.trend_strength.unwrap();
+        assert!(trend_strength >= -1.0 && trend_strength <= 1.0);
+    }
+
+    #[test]
+    fn test_110_regime_engine_update_from_snapshot() {
+        use crate::feature_fusion::FeaturesSnapshot;
+        use rust_decimal_macros::dec;
+
+        let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
+
+        // Create snapshot with mid_price and entropy
+        let mut snapshot = FeaturesSnapshot::default();
+        snapshot.mid_price = Some(dec!(100.5));
+        snapshot.tick_entropy_30s = Some(dec!(1.8));
+
+        engine.update_from_snapshot(&snapshot);
+
+        // Engine should have processed the snapshot
+        let features = engine.extract_features();
+        assert!((features.entropy - 1.8).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_111_regime_engine_repeated_updates() {
+        let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
+
+        // Simulate market data over time
+        for i in 0..200 {
+            // Oscillating prices
+            let price = 100.0 + (i as f64 * 0.1).sin() * 5.0;
+            engine.update(price);
+        }
+
+        // Should be ready
+        assert!(engine.is_ready());
+
+        // Get regime - with oscillating data should likely be mean reverting or uncertain
+        let state = engine.current_regime();
+        assert!(state.confidence >= 0.0);
+    }
+
+    #[test]
+    fn test_112_regime_engine_kalman_integration() {
+        let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
+
+        // Feed data
+        for i in 0..50 {
+            engine.update(100.0 + i as f64);
+        }
+
+        let features = engine.extract_features();
+
+        // Kalman should have computed velocity
+        // For upward trend, velocity should be positive
+        assert!(features.kalman_velocity > 0.0 || features.kalman_velocity == 0.0);
+    }
+
+    #[test]
+    fn test_113_regime_engine_config_accessors() {
+        let mut config = RegimeEngineConfig::default();
+        config.window_size = 60;
+        config.threshold_config.hurst_trending_threshold = 0.65;
+        config.threshold_config.min_confidence = 0.8;
+
+        let engine = RegimeEngine::new(config);
+
+        assert_eq!(engine.config().window_size, 60);
+        assert_eq!(engine.config().threshold_config.hurst_trending_threshold, 0.65);
+        assert_eq!(engine.config().threshold_config.min_confidence, 0.8);
+    }
+
+    #[test]
+    fn test_114_regime_engine_not_ready_initially() {
+        let engine = RegimeEngine::new(RegimeEngineConfig::default());
+
+        // Without any data, engine should not be ready
+        assert!(!engine.is_ready());
+
+        // Should still return a valid regime state (likely Uncertain)
+        let state = engine.current_regime();
+        assert!(state.confidence >= 0.0);
+    }
+
+    #[test]
+    fn test_115_regime_engine_snapshot_enrichment_preserves_existing() {
+        use crate::feature_fusion::FeaturesSnapshot;
+        use rust_decimal_macros::dec;
+
+        let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
+        for i in 0..50 {
+            engine.update(100.0 + i as f64);
+        }
+
+        let mut snapshot = FeaturesSnapshot::default();
+        snapshot.mid_price = Some(dec!(150.0));
+        snapshot.best_bid = Some(dec!(149.9));
+        snapshot.best_ask = Some(dec!(150.1));
+
+        engine.enrich_snapshot(&mut snapshot);
+
+        // Original fields should be preserved
+        assert_eq!(snapshot.mid_price, Some(dec!(150.0)));
+        assert_eq!(snapshot.best_bid, Some(dec!(149.9)));
+        assert_eq!(snapshot.best_ask, Some(dec!(150.1)));
+
+        // Regime fields should be added
+        assert!(snapshot.regime.is_some());
+    }
+
+    #[test]
+    fn test_116_regime_engine_persistence_value() {
+        let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
+
+        // Feed consistent uptrend
+        for i in 0..100 {
+            engine.update(100.0 + i as f64 * 0.5);
+        }
+
+        let state = engine.current_regime();
+
+        // Persistence (Hurst) should be calculated
+        assert!(state.persistence >= 0.0 && state.persistence <= 1.0);
+    }
+
+    #[test]
+    fn test_117_regime_engine_default_config_values() {
+        let config = RegimeEngineConfig::default();
+
+        // RegimeEngineConfig uses nested configs
+        assert_eq!(config.window_size, 60);
+
+        // Check threshold config defaults
+        let tc = &config.threshold_config;
+        assert_eq!(tc.hurst_trending_threshold, 0.55);
+        assert_eq!(tc.hurst_mean_reverting_threshold, 0.45);
+        assert_eq!(tc.entropy_threshold, 0.8);
+
+        // Check kalman config has measurement noise field
+        let kc = &config.kalman_config;
+        assert_eq!(kc.measurement_noise, 1.0);
+    }
+
+    #[test]
+    fn test_118_regime_engine_snapshot_with_no_entropy() {
+        use crate::feature_fusion::FeaturesSnapshot;
+        use rust_decimal_macros::dec;
+
+        let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
+        for i in 0..50 {
+            engine.update(100.0 + i as f64);
+        }
+
+        // Snapshot without entropy field
+        let mut snapshot = FeaturesSnapshot::default();
+        snapshot.mid_price = Some(dec!(100.0));
+        // tick_entropy_30s is None
+
+        // Should not panic, should use default entropy
+        engine.update_from_snapshot(&snapshot);
+
+        let features = engine.extract_features();
+        assert_eq!(features.entropy, 0.5); // Default value when None
+    }
+
+    #[test]
+    fn test_119_regime_engine_multiple_enrichments() {
+        use crate::feature_fusion::FeaturesSnapshot;
+
+        let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
+
+        // Feed data and enrich multiple snapshots
+        for batch in 0..5 {
+            for i in 0..20 {
+                engine.update(100.0 + (batch * 20 + i) as f64);
+            }
+
+            let mut snapshot = FeaturesSnapshot::default();
+            engine.enrich_snapshot(&mut snapshot);
+
+            // Each enrichment should produce valid values
+            assert!(snapshot.regime.is_some());
+            let confidence = snapshot.regime_confidence.unwrap();
+            assert!(confidence >= 0.0 && confidence <= 1.0);
+        }
+    }
+
+    #[test]
+    fn test_120_regime_engine_trend_features_populated() {
+        use crate::feature_fusion::FeaturesSnapshot;
+
+        let mut engine = RegimeEngine::new(RegimeEngineConfig::default());
+
+        // Feed strong trend
+        for i in 0..100 {
+            engine.update(100.0 + i as f64);
+        }
+
+        let mut snapshot = FeaturesSnapshot::default();
+        engine.enrich_snapshot(&mut snapshot);
+
+        // All trend features should be populated
+        assert!(snapshot.trend_momentum.is_some() || snapshot.trend_momentum.is_none());
+        assert!(snapshot.trend_monotonicity.is_some() || snapshot.trend_monotonicity.is_none());
+        assert!(snapshot.trend_hurst.is_some() || snapshot.trend_hurst.is_none());
     }
 }

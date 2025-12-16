@@ -110,6 +110,14 @@ pub fn save_feature_as_parquet(features: &[FeaturesSnapshot], filepath: impl AsR
         "arrival_asymmetry" => features.iter().map(|f| decimal_to_f64(f.arrival_asymmetry)).collect::<Vec<_>>(),
         "size_toxicity_ratio" => features.iter().map(|f| decimal_to_f64(f.size_toxicity_ratio)).collect::<Vec<_>>(),
         "toxicity_index" => features.iter().map(|f| decimal_to_f64(f.toxicity_index)).collect::<Vec<_>>(),
+        // Regime detection fields
+        "regime" => features.iter().map(|f| f.regime.clone().unwrap_or_default()).collect::<Vec<_>>(),
+        "regime_confidence" => features.iter().map(|f| f.regime_confidence.unwrap_or(f64::NAN)).collect::<Vec<_>>(),
+        "trend_strength" => features.iter().map(|f| f.trend_strength.unwrap_or(f64::NAN)).collect::<Vec<_>>(),
+        "regime_persistence" => features.iter().map(|f| f.regime_persistence.unwrap_or(f64::NAN)).collect::<Vec<_>>(),
+        "trend_momentum" => features.iter().map(|f| f.trend_momentum.unwrap_or(f64::NAN)).collect::<Vec<_>>(),
+        "trend_monotonicity" => features.iter().map(|f| f.trend_monotonicity.unwrap_or(f64::NAN)).collect::<Vec<_>>(),
+        "trend_hurst" => features.iter().map(|f| f.trend_hurst.unwrap_or(f64::NAN)).collect::<Vec<_>>(),
     ].context("Failed to create DataFrame")?;
 
     // Create parent directories if they don't exist
@@ -166,6 +174,9 @@ pub fn validate_parquet_schema(filepath: &Path) -> Result<Vec<String>> {
         "volume_tick_entropy_15m",
         // Complex vector fields
         "volume_vector", "pwi_vector",
+        // Regime detection fields
+        "regime", "regime_confidence", "trend_strength", "regime_persistence",
+        "trend_momentum", "trend_monotonicity", "trend_hurst",
     ];
     
     let actual_columns: Vec<String> = df.get_column_names().iter().map(|s| s.to_string()).collect();
@@ -505,6 +516,14 @@ mod tests {
             arrival_asymmetry: Some(dec!(0.15)),
             size_toxicity_ratio: Some(dec!(1.2)),
             toxicity_index: Some(dec!(0.28)),
+            // Regime detection fields
+            regime: Some("TrendingUp".to_string()),
+            regime_confidence: Some(0.85),
+            trend_strength: Some(0.65),
+            regime_persistence: Some(0.58),
+            trend_momentum: Some(0.002),
+            trend_monotonicity: Some(0.72),
+            trend_hurst: Some(0.58),
         }
     }
 
