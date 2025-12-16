@@ -109,7 +109,7 @@ Binance WebSocket
 
 ### Phase 0: Foundation
 - [x] Implement `trend_features.rs` (momentum, monotonicity, Hurst exponent)
-- [ ] Implement `signal_processing.rs` (Kalman filter for velocity/acceleration)
+- [x] Implement `signal_processing.rs` (Kalman filter for velocity/acceleration)
 - [ ] Add multi-symbol data ingestion (ETH, SOL minimum)
 - [ ] Implement `cross_asset.rs` (correlation, joint momentum)
 - [ ] Create `RegimeDetector` trait and basic implementation
