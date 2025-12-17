@@ -56,7 +56,7 @@ pub mod grid_search;
 pub mod sweep;
 
 pub use replay::{ParquetReplay, ReplayEvent, ReplayConfig};
-pub use harness::{BacktestEngine, BacktestConfig, BacktestResults};
+pub use harness::{BacktestEngine, BacktestConfig, BacktestResults, OCOConfig, OCOBacktestStats, OCOTriggerRecord};
 pub use metrics::{PerformanceMetrics, TradeLog, EquityCurve};
 pub use fill_simulator::{FillSimulator, FillSimulatorConfig, FillEvent, MarketState};
 pub use walk_forward::{WalkForwardEngine, WalkForwardConfig, WalkForwardResults};

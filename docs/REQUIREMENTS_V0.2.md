@@ -1,8 +1,8 @@
 # INGESTOR v0.2 Requirements & Roadmap
 
-**Document Version:** 1.1
+**Document Version:** 1.2
 **Created:** December 13, 2025
-**Last Updated:** December 16, 2025
+**Last Updated:** December 17, 2025
 **Philosophy:** Pivot from latency-dependent MM to prediction-dependent trend-following.
 
 ---
@@ -209,19 +209,26 @@ pub enum StrategyDecision {
 
 **Deliverable:** Working hybrid strategy that adapts to detected regimes
 
-### Phase 2: Risk Management (Week 3) - NOT STARTED
+### Phase 2: Risk Management (Week 3) - COMPLETE
 
 **Goal:** OCO and position management
 
 | Task | Description | Effort | Priority | Status |
 |------|-------------|--------|----------|--------|
-| 2.1 | Implement `OCOManager` for take-profit/stop-loss | 4h | HIGH | TODO |
-| 2.2 | Implement `PositionManager` (size limits, exposure) | 3h | HIGH | TODO |
-| 2.3 | Add drawdown tracking and circuit breaker | 3h | MEDIUM | TODO |
-| 2.4 | Integrate OCO with backtest harness | 4h | HIGH | TODO |
-| 2.5 | Add position P&L tracking in real-time | 2h | MEDIUM | TODO |
+| 2.1 | Implement `OCOManager` for take-profit/stop-loss | 4h | HIGH | DONE |
+| 2.2 | Implement `PositionManager` (size limits, exposure) | 3h | HIGH | DONE |
+| 2.3 | Add drawdown tracking and circuit breaker | 3h | MEDIUM | DONE |
+| 2.4 | Integrate OCO with backtest harness | 4h | HIGH | DONE |
+| 2.5 | Add position P&L tracking in real-time | 2h | MEDIUM | DONE |
 
 **Deliverable:** Complete risk management layer
+
+**Implementation Notes (Dec 17, 2025):**
+- `src/trading/oco_manager.rs`: OCOManager with basis points and absolute price support, comprehensive stats, 49 unit tests (1285 LOC)
+- `src/trading/position_manager.rs`: PositionManager with volatility-based sizing, Kelly criterion, exposure limits, 35 unit tests
+- `src/trading/risk_manager.rs`: RiskManager with staged circuit breaker (Normal/Warning/ReduceOnly/Halt/Emergency), drawdown tracking, recovery metrics
+- `src/backtest/harness.rs`: OCO integration with BacktestEngine - enter_position_with_oco(), OCO trigger processing, OCOBacktestStats, 17 new integration tests
+- `src/trading/pnl_tracker.rs`: RealTimePnLTracker with FIFO cost basis, P&L attribution by source, equity/drawdown curves, Sharpe ratio, 56 unit tests
 
 ### Phase 3: Backtesting & Validation (Week 4) - NOT STARTED
 
@@ -400,6 +407,7 @@ src/
 | 2025-12-13 | OCO mandatory for all trades | Bound risk, learn from losses |
 | 2025-12-13 | Multi-symbol features required | Cross-asset confirmation improves signal |
 | 2025-12-16 | Phase 0 foundation complete | trend_features, signal_processing, regime modules implemented |
+| 2025-12-17 | Phase 2 risk management complete | OCO, position, risk managers + backtest integration |
 
 ---
 
@@ -421,4 +429,4 @@ This is excellent odds for a solo effort building foundational quant infrastruct
 ---
 
 *Document maintained by: Development Team*
-*Last updated: December 16, 2025*
+*Last updated: December 17, 2025*

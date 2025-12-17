@@ -37,6 +37,7 @@ use crate::algorithms::{
 };
 use crate::trading::market_maker::{MMConfig, Fill, QuoteSide};
 use crate::trading::mm_simulator::SimulatorConfig;
+use crate::trading::oco_manager::{OCOManager, OCOOrder, OCOStats, OCOTrigger, Side as OCOSide, TriggerType};
 
 use super::replay::{ParquetReplay, ReplayConfig, ReplayEvent};
 use super::fill_simulator::{FillSimulator, FillSimulatorConfig, MarketState};
@@ -45,6 +46,33 @@ use super::metrics::{
     EquityCurve, EquityPoint,
 };
 use super::statistics::{StatisticalReport, compute_statistics};
+
+/// Configuration for OCO (One-Cancels-Other) orders in backtest
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OCOConfig {
+    /// Enable OCO order management
+    pub enabled: bool,
+    /// Default take-profit in basis points
+    pub default_tp_bps: Decimal,
+    /// Default stop-loss in basis points
+    pub default_sl_bps: Decimal,
+    /// Maximum concurrent OCO orders (0 = unlimited)
+    pub max_concurrent_orders: usize,
+    /// Maximum history size to retain
+    pub max_history_size: usize,
+}
+
+impl Default for OCOConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            default_tp_bps: dec!(20),  // +20 bps take profit
+            default_sl_bps: dec!(10),  // -10 bps stop loss
+            max_concurrent_orders: 0,  // unlimited
+            max_history_size: 1000,
+        }
+    }
+}
 
 /// Configuration for the backtest
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +95,8 @@ pub struct BacktestConfig {
     pub verbose: bool,
     /// Whether to use realistic fill simulation (vs naive)
     pub use_realistic_fills: bool,
+    /// OCO (One-Cancels-Other) order configuration
+    pub oco: OCOConfig,
 }
 
 impl Default for BacktestConfig {
@@ -81,6 +111,7 @@ impl Default for BacktestConfig {
             equity_sample_interval: 100, // Every 100 events
             verbose: true,
             use_realistic_fills: true, // Use realistic fills by default
+            oco: OCOConfig::default(),
         }
     }
 }
@@ -96,6 +127,119 @@ pub struct BacktestResults {
     pub fills_generated: usize,
     /// Fill simulation statistics
     pub fill_stats: FillStats,
+    /// OCO (One-Cancels-Other) order statistics
+    pub oco_stats: Option<OCOBacktestStats>,
+}
+
+/// Statistics for OCO orders during backtest
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OCOBacktestStats {
+    /// Total number of OCO orders placed
+    pub total_orders: u64,
+    /// Number of take profit triggers
+    pub tp_triggers: u64,
+    /// Number of stop loss triggers
+    pub sl_triggers: u64,
+    /// Total realized P&L from OCO trades
+    pub total_pnl: Decimal,
+    /// Total winning trades value
+    pub total_wins: Decimal,
+    /// Total losing trades value
+    pub total_losses: Decimal,
+    /// Win rate percentage
+    pub win_rate: f64,
+    /// Average trade duration in milliseconds
+    pub avg_duration_ms: f64,
+    /// Maximum drawdown from OCO trades
+    pub max_drawdown: Decimal,
+    /// Profit factor (gross wins / gross losses)
+    pub profit_factor: f64,
+    /// Risk/reward ratio (avg win / avg loss)
+    pub risk_reward_ratio: f64,
+    /// Number of long trades
+    pub long_trades: u64,
+    /// Number of short trades
+    pub short_trades: u64,
+    /// Trigger history (last N triggers)
+    pub trigger_history: Vec<OCOTriggerRecord>,
+}
+
+/// Record of an OCO trigger for history
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OCOTriggerRecord {
+    pub order_id: String,
+    pub trigger_type: String,
+    pub side: String,
+    pub entry_price: Decimal,
+    pub exit_price: Decimal,
+    pub size: Decimal,
+    pub pnl: Decimal,
+    pub pnl_bps: Decimal,
+    pub duration_ms: u64,
+    pub timestamp_ms: u64,
+}
+
+impl OCOBacktestStats {
+    /// Create from OCOStats
+    pub fn from_oco_stats(stats: &OCOStats, history: &[OCOTrigger]) -> Self {
+        let trigger_history: Vec<OCOTriggerRecord> = history
+            .iter()
+            .map(|t| OCOTriggerRecord {
+                order_id: t.order_id.clone(),
+                trigger_type: match t.trigger_type {
+                    TriggerType::TakeProfit => "TakeProfit".to_string(),
+                    TriggerType::StopLoss => "StopLoss".to_string(),
+                },
+                side: match t.side {
+                    OCOSide::Buy => "Buy".to_string(),
+                    OCOSide::Sell => "Sell".to_string(),
+                },
+                entry_price: t.entry_price,
+                exit_price: t.exit_price,
+                size: t.size,
+                pnl: t.realized_pnl,
+                pnl_bps: t.pnl_bps,
+                duration_ms: t.duration_ms,
+                timestamp_ms: 0, // Will be set by caller
+            })
+            .collect();
+
+        // Count long vs short trades
+        let long_trades = history.iter().filter(|t| t.side == OCOSide::Buy).count() as u64;
+        let short_trades = history.iter().filter(|t| t.side == OCOSide::Sell).count() as u64;
+
+        Self {
+            total_orders: stats.total_orders,
+            tp_triggers: stats.tp_triggers,
+            sl_triggers: stats.sl_triggers,
+            total_pnl: stats.total_pnl,
+            total_wins: stats.total_wins,
+            total_losses: stats.total_losses,
+            win_rate: stats.win_rate(),
+            avg_duration_ms: stats.avg_duration_ms,
+            max_drawdown: stats.max_drawdown,
+            profit_factor: stats.profit_factor(),
+            risk_reward_ratio: stats.risk_reward_ratio(),
+            long_trades,
+            short_trades,
+            trigger_history,
+        }
+    }
+
+    /// Print OCO statistics report
+    pub fn print_report(&self) {
+        println!("OCO ORDER STATISTICS");
+        println!("  Total Orders: {}", self.total_orders);
+        println!("  TP Triggers:  {} | SL Triggers: {}", self.tp_triggers, self.sl_triggers);
+        println!("  Win Rate:     {:.1}%", self.win_rate);
+        println!("  Total P&L:    {:.4}", self.total_pnl);
+        println!("  Total Wins:   {:.4} | Total Losses: {:.4}", self.total_wins, self.total_losses);
+        println!("  Profit Factor: {:.2}", self.profit_factor);
+        println!("  Risk/Reward:   {:.2}", self.risk_reward_ratio);
+        println!("  Avg Duration:  {:.1}ms", self.avg_duration_ms);
+        println!("  Max Drawdown:  {:.4}", self.max_drawdown);
+        println!("  Long Trades:   {} | Short Trades: {}", self.long_trades, self.short_trades);
+    }
 }
 
 /// Statistics from the fill simulator
@@ -143,6 +287,12 @@ impl BacktestResults {
             println!();
         }
 
+        // Print OCO statistics if enabled
+        if let Some(ref oco_stats) = self.oco_stats {
+            oco_stats.print_report();
+            println!();
+        }
+
         self.metrics.print_report();
     }
 
@@ -186,18 +336,23 @@ impl BacktestResults {
 /// Backtest engine
 ///
 /// Runs backtests using any algorithm implementing `MarketMakingAlgorithm`.
+/// Optionally includes OCO (One-Cancels-Other) order management for directional trades.
 pub struct BacktestEngine {
     config: BacktestConfig,
     replay: ParquetReplay,
     /// The market making algorithm (polymorphic)
     algorithm: Box<dyn MarketMakingAlgorithm>,
     fill_sim: FillSimulator,
+    /// OCO order manager for directional trades (optional)
+    oco_manager: Option<OCOManager>,
 
     // State
     trade_log: TradeLog,
     equity_curve: EquityCurve,
     events_processed: usize,
     fills_generated: usize,
+    /// Counter for generating unique OCO order IDs
+    oco_order_counter: u64,
 
     // For market state tracking
     last_mid_price: Option<Decimal>,
@@ -209,17 +364,32 @@ impl BacktestEngine {
         let replay = ParquetReplay::new(config.replay.clone());
         let algorithm = Self::create_default_algorithm(&config.mm);
         let fill_sim = FillSimulator::new(config.fill_sim.clone());
+        let oco_manager = Self::create_oco_manager(&config.oco);
 
         Self {
             config,
             replay,
             algorithm,
             fill_sim,
+            oco_manager,
             trade_log: TradeLog::new(),
             equity_curve: EquityCurve::new(),
             events_processed: 0,
             fills_generated: 0,
+            oco_order_counter: 0,
             last_mid_price: None,
+        }
+    }
+
+    /// Create OCO manager if enabled
+    fn create_oco_manager(oco_config: &OCOConfig) -> Option<OCOManager> {
+        if oco_config.enabled {
+            Some(OCOManager::with_config(
+                oco_config.max_concurrent_orders,
+                oco_config.max_history_size,
+            ))
+        } else {
+            None
         }
     }
 
@@ -237,16 +407,19 @@ impl BacktestEngine {
     ) -> Self {
         let replay = ParquetReplay::new(config.replay.clone());
         let fill_sim = FillSimulator::new(config.fill_sim.clone());
+        let oco_manager = Self::create_oco_manager(&config.oco);
 
         Self {
             config,
             replay,
             algorithm,
             fill_sim,
+            oco_manager,
             trade_log: TradeLog::new(),
             equity_curve: EquityCurve::new(),
             events_processed: 0,
             fills_generated: 0,
+            oco_order_counter: 0,
             last_mid_price: None,
         }
     }
@@ -257,16 +430,19 @@ impl BacktestEngine {
         let replay = ParquetReplay::from_events(events);
         let algorithm = Self::create_default_algorithm(&config.mm);
         let fill_sim = FillSimulator::new(config.fill_sim.clone());
+        let oco_manager = Self::create_oco_manager(&config.oco);
 
         Self {
             config,
             replay,
             algorithm,
             fill_sim,
+            oco_manager,
             trade_log: TradeLog::new(),
             equity_curve: EquityCurve::new(),
             events_processed: 0,
             fills_generated: 0,
+            oco_order_counter: 0,
             last_mid_price: None,
         }
     }
@@ -279,16 +455,19 @@ impl BacktestEngine {
     ) -> Self {
         let replay = ParquetReplay::from_events(events);
         let fill_sim = FillSimulator::new(config.fill_sim.clone());
+        let oco_manager = Self::create_oco_manager(&config.oco);
 
         Self {
             config,
             replay,
             algorithm,
             fill_sim,
+            oco_manager,
             trade_log: TradeLog::new(),
             equity_curve: EquityCurve::new(),
             events_processed: 0,
             fills_generated: 0,
+            oco_order_counter: 0,
             last_mid_price: None,
         }
     }
@@ -333,7 +512,14 @@ impl BacktestEngine {
         self.equity_curve = EquityCurve::new();
         self.events_processed = 0;
         self.fills_generated = 0;
+        self.oco_order_counter = 0;
         self.last_mid_price = None;
+
+        // Reset OCO manager if enabled
+        if let Some(ref mut oco_mgr) = self.oco_manager {
+            oco_mgr.clear_orders();
+            oco_mgr.reset_stats();
+        }
 
         // Record initial equity
         self.record_equity(0);
@@ -403,6 +589,11 @@ impl BacktestEngine {
             },
         };
 
+        // Collect OCO stats if enabled
+        let oco_stats = self.oco_manager.as_ref().map(|oco_mgr| {
+            OCOBacktestStats::from_oco_stats(oco_mgr.stats(), oco_mgr.history())
+        });
+
         Ok(BacktestResults {
             config: self.config.clone(),
             metrics,
@@ -411,6 +602,7 @@ impl BacktestEngine {
             events_processed: self.events_processed,
             fills_generated: self.fills_generated,
             fill_stats,
+            oco_stats,
         })
     }
 
@@ -454,6 +646,14 @@ impl BacktestEngine {
             timestamp_ms,
         };
 
+        // Check OCO triggers BEFORE processing MM quotes (exits take priority)
+        if let Some(ref mut oco_mgr) = self.oco_manager {
+            let triggers = oco_mgr.check_triggers_at_time(mid_price, timestamp_ms);
+            for trigger in triggers {
+                self.process_oco_trigger(&trigger, timestamp_ms)?;
+            }
+        }
+
         // Compute quotes via trait interface
         let quotes = self.algorithm.compute_quotes(&market_input);
 
@@ -483,6 +683,29 @@ impl BacktestEngine {
 
         self.last_mid_price = Some(mid_price);
         self.events_processed += 1;
+
+        Ok(())
+    }
+
+    /// Process an OCO trigger (take-profit or stop-loss)
+    fn process_oco_trigger(&mut self, trigger: &OCOTrigger, timestamp_ms: u64) -> Result<()> {
+        let fee_rate = self.config.fill_sim.fee_rate;
+        let fee = trigger.exit_price * trigger.size * fee_rate;
+
+        // Record the exit trade
+        self.trade_log.add(TradeRecord {
+            timestamp_ms: timestamp_ms as i64,
+            side: match trigger.side {
+                OCOSide::Buy => TradeSide::Sell,   // Closing long = sell
+                OCOSide::Sell => TradeSide::Buy,  // Closing short = buy
+            },
+            price: trigger.exit_price,
+            size: trigger.size,
+            fee,
+            pnl: Some(trigger.realized_pnl - fee),
+        });
+
+        self.fills_generated += 1;
 
         Ok(())
     }
@@ -600,6 +823,154 @@ impl BacktestEngine {
             current_pnl: self.algorithm.pnl().total_pnl,
             current_inventory: self.algorithm.inventory(),
         }
+    }
+
+    // ========================================================================
+    // OCO Order Management Methods
+    // ========================================================================
+
+    /// Enter a directional position with OCO (take-profit/stop-loss) protection
+    ///
+    /// This is the primary method for entering trades with bounded risk.
+    /// When the position is opened, an OCO order is automatically created
+    /// with the specified take-profit and stop-loss levels.
+    ///
+    /// # Arguments
+    /// * `side` - Buy (long) or Sell (short)
+    /// * `entry_price` - Entry price for the position
+    /// * `size` - Position size
+    /// * `tp_bps` - Take-profit in basis points from entry
+    /// * `sl_bps` - Stop-loss in basis points from entry
+    /// * `timestamp_ms` - Current timestamp
+    ///
+    /// # Returns
+    /// * `Ok(order_id)` - The OCO order ID if successful
+    /// * `Err` - If OCO is not enabled or order creation failed
+    pub fn enter_position_with_oco(
+        &mut self,
+        side: OCOSide,
+        entry_price: Decimal,
+        size: Decimal,
+        tp_bps: Decimal,
+        sl_bps: Decimal,
+        timestamp_ms: u64,
+    ) -> Result<String> {
+        let oco_mgr = self.oco_manager.as_mut()
+            .ok_or_else(|| anyhow::anyhow!("OCO not enabled. Set oco.enabled = true in config."))?;
+
+        // Generate unique order ID
+        self.oco_order_counter += 1;
+        let order_id = format!("oco_{}", self.oco_order_counter);
+
+        // Create OCO order from basis points
+        let order = OCOOrder::from_bps(
+            order_id.clone(),
+            side,
+            entry_price,
+            size,
+            tp_bps,
+            sl_bps,
+        );
+
+        // Record entry trade
+        let fee_rate = self.config.fill_sim.fee_rate;
+        let fee = entry_price * size * fee_rate;
+        self.trade_log.add(TradeRecord {
+            timestamp_ms: timestamp_ms as i64,
+            side: match side {
+                OCOSide::Buy => TradeSide::Buy,
+                OCOSide::Sell => TradeSide::Sell,
+            },
+            price: entry_price,
+            size,
+            fee,
+            pnl: None, // Entry has no realized PnL
+        });
+
+        // Add OCO order
+        oco_mgr.add_order(order)
+            .map_err(|e| anyhow::anyhow!("Failed to add OCO order: {}", e))?;
+
+        self.fills_generated += 1;
+
+        Ok(order_id)
+    }
+
+    /// Enter a position using default TP/SL from config
+    pub fn enter_position(
+        &mut self,
+        side: OCOSide,
+        entry_price: Decimal,
+        size: Decimal,
+        timestamp_ms: u64,
+    ) -> Result<String> {
+        let tp_bps = self.config.oco.default_tp_bps;
+        let sl_bps = self.config.oco.default_sl_bps;
+        self.enter_position_with_oco(side, entry_price, size, tp_bps, sl_bps, timestamp_ms)
+    }
+
+    /// Enter a long position with default OCO parameters
+    pub fn enter_long(
+        &mut self,
+        entry_price: Decimal,
+        size: Decimal,
+        timestamp_ms: u64,
+    ) -> Result<String> {
+        self.enter_position(OCOSide::Buy, entry_price, size, timestamp_ms)
+    }
+
+    /// Enter a short position with default OCO parameters
+    pub fn enter_short(
+        &mut self,
+        entry_price: Decimal,
+        size: Decimal,
+        timestamp_ms: u64,
+    ) -> Result<String> {
+        self.enter_position(OCOSide::Sell, entry_price, size, timestamp_ms)
+    }
+
+    /// Cancel an active OCO order
+    pub fn cancel_oco_order(&mut self, order_id: &str) -> Option<OCOOrder> {
+        self.oco_manager.as_mut()?.remove_order(order_id)
+    }
+
+    /// Get active OCO order count
+    pub fn active_oco_orders(&self) -> usize {
+        self.oco_manager.as_ref().map(|m| m.active_order_count()).unwrap_or(0)
+    }
+
+    /// Check if OCO is enabled
+    pub fn oco_enabled(&self) -> bool {
+        self.oco_manager.is_some()
+    }
+
+    /// Get OCO statistics (if enabled)
+    pub fn oco_stats(&self) -> Option<&OCOStats> {
+        self.oco_manager.as_ref().map(|m| m.stats())
+    }
+
+    /// Get current unrealized P&L from OCO positions
+    pub fn oco_unrealized_pnl(&self, current_price: Decimal) -> Decimal {
+        self.oco_manager
+            .as_ref()
+            .map(|m| m.unrealized_pnl(current_price))
+            .unwrap_or(Decimal::ZERO)
+    }
+
+    /// Get total OCO exposure (sum of all position sizes)
+    pub fn oco_total_exposure(&self) -> Decimal {
+        self.oco_manager
+            .as_ref()
+            .map(|m| m.total_exposure())
+            .unwrap_or(Decimal::ZERO)
+    }
+
+    /// Get net OCO exposure (long - short)
+    pub fn oco_net_exposure(&self) -> Decimal {
+        self.oco_manager
+            .as_ref()
+            .map(|m| m.net_exposure())
+            .unwrap_or(Decimal::ZERO)
     }
 }
 
@@ -737,5 +1108,262 @@ mod tests {
         let algo = BacktestEngine::create_default_algorithm(&mm_config);
 
         assert_eq!(algo.algorithm_type(), AlgorithmType::AvellanedaStoikov);
+    }
+
+    // ========================================================================
+    // OCO Integration Tests
+    // ========================================================================
+
+    #[test]
+    fn test_oco_config_default() {
+        let config = OCOConfig::default();
+        assert!(!config.enabled);
+        assert_eq!(config.default_tp_bps, dec!(20));
+        assert_eq!(config.default_sl_bps, dec!(10));
+        assert_eq!(config.max_concurrent_orders, 0);
+        assert_eq!(config.max_history_size, 1000);
+    }
+
+    #[test]
+    fn test_backtest_config_with_oco_disabled() {
+        let config = BacktestConfig::default();
+        assert!(!config.oco.enabled);
+    }
+
+    #[test]
+    fn test_backtest_config_with_oco_enabled() {
+        let config = BacktestConfig {
+            oco: OCOConfig {
+                enabled: true,
+                default_tp_bps: dec!(30),
+                default_sl_bps: dec!(15),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(config.oco.enabled);
+        assert_eq!(config.oco.default_tp_bps, dec!(30));
+        assert_eq!(config.oco.default_sl_bps, dec!(15));
+    }
+
+    #[test]
+    fn test_engine_oco_disabled_by_default() {
+        let config = BacktestConfig::default();
+        let engine = BacktestEngine::new(config);
+
+        assert!(!engine.oco_enabled());
+        assert_eq!(engine.active_oco_orders(), 0);
+    }
+
+    #[test]
+    fn test_engine_oco_enabled() {
+        let config = BacktestConfig {
+            oco: OCOConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let engine = BacktestEngine::new(config);
+
+        assert!(engine.oco_enabled());
+        assert_eq!(engine.active_oco_orders(), 0);
+    }
+
+    #[test]
+    fn test_engine_enter_position_requires_oco_enabled() {
+        let config = BacktestConfig::default(); // OCO disabled
+        let mut engine = BacktestEngine::new(config);
+
+        let result = engine.enter_long(dec!(50000), dec!(0.1), 1000);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_engine_enter_long_position() {
+        let config = BacktestConfig {
+            oco: OCOConfig {
+                enabled: true,
+                default_tp_bps: dec!(20),
+                default_sl_bps: dec!(10),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut engine = BacktestEngine::new(config);
+
+        let order_id = engine.enter_long(dec!(50000), dec!(0.1), 1000).unwrap();
+
+        assert_eq!(order_id, "oco_1");
+        assert_eq!(engine.active_oco_orders(), 1);
+    }
+
+    #[test]
+    fn test_engine_enter_short_position() {
+        let config = BacktestConfig {
+            oco: OCOConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut engine = BacktestEngine::new(config);
+
+        let order_id = engine.enter_short(dec!(50000), dec!(0.1), 1000).unwrap();
+
+        assert_eq!(order_id, "oco_1");
+        assert_eq!(engine.active_oco_orders(), 1);
+    }
+
+    #[test]
+    fn test_engine_enter_position_with_custom_oco() {
+        let config = BacktestConfig {
+            oco: OCOConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut engine = BacktestEngine::new(config);
+
+        let order_id = engine.enter_position_with_oco(
+            OCOSide::Buy,
+            dec!(50000),
+            dec!(0.1),
+            dec!(50),  // +50 bps TP
+            dec!(25),  // -25 bps SL
+            1000,
+        ).unwrap();
+
+        assert_eq!(order_id, "oco_1");
+    }
+
+    #[test]
+    fn test_engine_cancel_oco_order() {
+        let config = BacktestConfig {
+            oco: OCOConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut engine = BacktestEngine::new(config);
+
+        let order_id = engine.enter_long(dec!(50000), dec!(0.1), 1000).unwrap();
+        assert_eq!(engine.active_oco_orders(), 1);
+
+        let cancelled = engine.cancel_oco_order(&order_id);
+        assert!(cancelled.is_some());
+        assert_eq!(engine.active_oco_orders(), 0);
+    }
+
+    #[test]
+    fn test_engine_oco_exposure_tracking() {
+        let config = BacktestConfig {
+            oco: OCOConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut engine = BacktestEngine::new(config);
+
+        // Enter two positions
+        engine.enter_long(dec!(50000), dec!(0.1), 1000).unwrap();
+        engine.enter_short(dec!(51000), dec!(0.05), 2000).unwrap();
+
+        // Total exposure = 0.1 + 0.05 = 0.15
+        assert_eq!(engine.oco_total_exposure(), dec!(0.15));
+
+        // Net exposure = 0.1 - 0.05 = 0.05 (long-biased)
+        assert_eq!(engine.oco_net_exposure(), dec!(0.05));
+    }
+
+    #[test]
+    fn test_engine_multiple_oco_orders() {
+        let config = BacktestConfig {
+            oco: OCOConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut engine = BacktestEngine::new(config);
+
+        let order1 = engine.enter_long(dec!(50000), dec!(0.1), 1000).unwrap();
+        let order2 = engine.enter_short(dec!(51000), dec!(0.05), 2000).unwrap();
+        let order3 = engine.enter_long(dec!(49000), dec!(0.08), 3000).unwrap();
+
+        assert_eq!(order1, "oco_1");
+        assert_eq!(order2, "oco_2");
+        assert_eq!(order3, "oco_3");
+        assert_eq!(engine.active_oco_orders(), 3);
+    }
+
+    #[test]
+    fn test_oco_backtest_stats_from_empty() {
+        let stats = OCOStats::default();
+        let history: Vec<OCOTrigger> = vec![];
+        let bt_stats = OCOBacktestStats::from_oco_stats(&stats, &history);
+
+        assert_eq!(bt_stats.total_orders, 0);
+        assert_eq!(bt_stats.tp_triggers, 0);
+        assert_eq!(bt_stats.sl_triggers, 0);
+        assert_eq!(bt_stats.win_rate, 0.0);
+    }
+
+    #[test]
+    fn test_oco_trigger_record_creation() {
+        let record = OCOTriggerRecord {
+            order_id: "test_1".to_string(),
+            trigger_type: "TakeProfit".to_string(),
+            side: "Buy".to_string(),
+            entry_price: dec!(50000),
+            exit_price: dec!(50100),
+            size: dec!(0.1),
+            pnl: dec!(10),
+            pnl_bps: dec!(20),
+            duration_ms: 5000,
+            timestamp_ms: 1000000,
+        };
+
+        assert_eq!(record.order_id, "test_1");
+        assert_eq!(record.trigger_type, "TakeProfit");
+        assert_eq!(record.pnl_bps, dec!(20));
+    }
+
+    #[test]
+    fn test_oco_unrealized_pnl_no_positions() {
+        let config = BacktestConfig {
+            oco: OCOConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let engine = BacktestEngine::new(config);
+
+        assert_eq!(engine.oco_unrealized_pnl(dec!(50000)), Decimal::ZERO);
+    }
+
+    #[test]
+    fn test_oco_unrealized_pnl_with_position() {
+        let config = BacktestConfig {
+            oco: OCOConfig {
+                enabled: true,
+                default_tp_bps: dec!(20),
+                default_sl_bps: dec!(10),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut engine = BacktestEngine::new(config);
+
+        // Enter long at 50000
+        engine.enter_long(dec!(50000), dec!(0.1), 1000).unwrap();
+
+        // Price moved to 50100 (+20 bps) = profit of 0.1 * 100 = 10
+        let unrealized = engine.oco_unrealized_pnl(dec!(50100));
+        assert_eq!(unrealized, dec!(10));
     }
 }
