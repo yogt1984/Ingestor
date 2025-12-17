@@ -7,6 +7,8 @@
 //! - Quote rate limiting
 //! - Position timeout (force close after duration)
 //! - Circuit breakers for abnormal conditions
+//! - **Enhanced drawdown tracking** - trailing, time-weighted, recovery metrics
+//! - **Staged circuit breakers** - warning, reduce-only, halt, emergency levels
 //!
 //! # Design Philosophy
 //!
@@ -15,6 +17,15 @@
 //! 2. **Reduce** - Reduce position only (close trades allowed, new positions blocked)
 //! 3. **Halt** - No new quotes, existing positions remain
 //! 4. **Emergency** - Full stop, should trigger position liquidation
+//!
+//! # Circuit Breaker Stages
+//!
+//! The circuit breaker operates in stages to provide graduated risk control:
+//! - **Stage 0 (Normal)**: All operations allowed
+//! - **Stage 1 (Warning)**: Operations allowed, alerts generated
+//! - **Stage 2 (Reduce Only)**: Only position-reducing trades allowed
+//! - **Stage 3 (Halt)**: All trading halted, positions maintained
+//! - **Stage 4 (Emergency)**: Full stop, liquidation may be triggered
 //!
 //! # Usage
 //!
@@ -33,6 +44,10 @@
 //!
 //! // After a fill
 //! risk_mgr.on_fill(&fill, &mm_state, current_time_ms);
+//!
+//! // Get drawdown metrics
+//! let metrics = risk_mgr.drawdown_metrics();
+//! println!("Current drawdown: {:.2}%", metrics.current_drawdown * 100.0);
 //! ```
 
 use chrono::{DateTime, Utc};
@@ -43,6 +58,337 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
 use crate::trading::market_maker::{Fill, QuoteSide, MMState};
+
+// ============================================================================
+// Circuit Breaker Types
+// ============================================================================
+
+/// Circuit breaker stage levels (0-4)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum CircuitBreakerStage {
+    /// Normal operation - all trading allowed
+    Normal = 0,
+    /// Warning level - trading allowed but alerts generated
+    Warning = 1,
+    /// Reduce only - only position-reducing trades allowed
+    ReduceOnly = 2,
+    /// Halt - all trading halted
+    Halt = 3,
+    /// Emergency - full stop, may trigger liquidation
+    Emergency = 4,
+}
+
+impl Default for CircuitBreakerStage {
+    fn default() -> Self {
+        Self::Normal
+    }
+}
+
+impl CircuitBreakerStage {
+    /// Check if trading is allowed at this stage
+    pub fn allows_trading(&self) -> bool {
+        matches!(self, Self::Normal | Self::Warning | Self::ReduceOnly)
+    }
+
+    /// Check if new positions are allowed at this stage
+    pub fn allows_new_positions(&self) -> bool {
+        matches!(self, Self::Normal | Self::Warning)
+    }
+
+    /// Get the next higher stage
+    pub fn escalate(&self) -> Self {
+        match self {
+            Self::Normal => Self::Warning,
+            Self::Warning => Self::ReduceOnly,
+            Self::ReduceOnly => Self::Halt,
+            Self::Halt => Self::Emergency,
+            Self::Emergency => Self::Emergency,
+        }
+    }
+
+    /// Get the next lower stage (for recovery)
+    pub fn de_escalate(&self) -> Self {
+        match self {
+            Self::Normal => Self::Normal,
+            Self::Warning => Self::Normal,
+            Self::ReduceOnly => Self::Warning,
+            Self::Halt => Self::ReduceOnly,
+            Self::Emergency => Self::Halt,
+        }
+    }
+}
+
+/// Circuit breaker configuration with staged thresholds
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CircuitBreakerConfig {
+    /// Drawdown threshold for warning (e.g., 0.05 = 5%)
+    pub warning_drawdown: f64,
+    /// Drawdown threshold for reduce-only (e.g., 0.08 = 8%)
+    pub reduce_only_drawdown: f64,
+    /// Drawdown threshold for halt (e.g., 0.10 = 10%)
+    pub halt_drawdown: f64,
+    /// Drawdown threshold for emergency (e.g., 0.20 = 20%)
+    pub emergency_drawdown: f64,
+
+    /// Daily loss threshold for warning
+    pub warning_daily_loss: Decimal,
+    /// Daily loss threshold for reduce-only
+    pub reduce_only_daily_loss: Decimal,
+    /// Daily loss threshold for halt
+    pub halt_daily_loss: Decimal,
+
+    /// Consecutive losses for warning
+    pub warning_consecutive_losses: u32,
+    /// Consecutive losses for reduce-only
+    pub reduce_only_consecutive_losses: u32,
+    /// Consecutive losses for halt
+    pub halt_consecutive_losses: u32,
+
+    /// Enable automatic de-escalation when conditions improve
+    pub auto_de_escalate: bool,
+    /// Minimum time at each stage before de-escalation (ms)
+    pub min_stage_duration_ms: u64,
+    /// Required improvement factor for de-escalation (e.g., 0.8 = 80% of threshold)
+    pub de_escalation_threshold: f64,
+}
+
+impl Default for CircuitBreakerConfig {
+    fn default() -> Self {
+        Self {
+            // Staged drawdown thresholds
+            warning_drawdown: 0.05,        // 5%
+            reduce_only_drawdown: 0.08,    // 8%
+            halt_drawdown: 0.10,           // 10%
+            emergency_drawdown: 0.20,      // 20%
+
+            // Staged daily loss thresholds
+            warning_daily_loss: dec!(0.02),      // 0.02 BTC
+            reduce_only_daily_loss: dec!(0.035), // 0.035 BTC
+            halt_daily_loss: dec!(0.05),         // 0.05 BTC
+
+            // Staged consecutive loss thresholds
+            warning_consecutive_losses: 3,
+            reduce_only_consecutive_losses: 5,
+            halt_consecutive_losses: 8,
+
+            // Recovery settings
+            auto_de_escalate: true,
+            min_stage_duration_ms: 60_000,  // 1 minute minimum
+            de_escalation_threshold: 0.7,   // Must be at 70% of threshold to de-escalate
+        }
+    }
+}
+
+impl CircuitBreakerConfig {
+    /// Validate the configuration
+    pub fn validate(&self) -> Result<(), String> {
+        if self.warning_drawdown >= self.reduce_only_drawdown {
+            return Err("warning_drawdown must be < reduce_only_drawdown".to_string());
+        }
+        if self.reduce_only_drawdown >= self.halt_drawdown {
+            return Err("reduce_only_drawdown must be < halt_drawdown".to_string());
+        }
+        if self.halt_drawdown >= self.emergency_drawdown {
+            return Err("halt_drawdown must be < emergency_drawdown".to_string());
+        }
+        if self.de_escalation_threshold <= 0.0 || self.de_escalation_threshold >= 1.0 {
+            return Err("de_escalation_threshold must be between 0 and 1".to_string());
+        }
+        Ok(())
+    }
+
+    /// Get the circuit breaker stage for a given drawdown
+    pub fn stage_for_drawdown(&self, drawdown: f64) -> CircuitBreakerStage {
+        if drawdown >= self.emergency_drawdown {
+            CircuitBreakerStage::Emergency
+        } else if drawdown >= self.halt_drawdown {
+            CircuitBreakerStage::Halt
+        } else if drawdown >= self.reduce_only_drawdown {
+            CircuitBreakerStage::ReduceOnly
+        } else if drawdown >= self.warning_drawdown {
+            CircuitBreakerStage::Warning
+        } else {
+            CircuitBreakerStage::Normal
+        }
+    }
+
+    /// Get the circuit breaker stage for daily loss
+    pub fn stage_for_daily_loss(&self, daily_loss: Decimal) -> CircuitBreakerStage {
+        if daily_loss >= self.halt_daily_loss {
+            CircuitBreakerStage::Halt
+        } else if daily_loss >= self.reduce_only_daily_loss {
+            CircuitBreakerStage::ReduceOnly
+        } else if daily_loss >= self.warning_daily_loss {
+            CircuitBreakerStage::Warning
+        } else {
+            CircuitBreakerStage::Normal
+        }
+    }
+
+    /// Get the circuit breaker stage for consecutive losses
+    pub fn stage_for_consecutive_losses(&self, losses: u32) -> CircuitBreakerStage {
+        if losses >= self.halt_consecutive_losses {
+            CircuitBreakerStage::Halt
+        } else if losses >= self.reduce_only_consecutive_losses {
+            CircuitBreakerStage::ReduceOnly
+        } else if losses >= self.warning_consecutive_losses {
+            CircuitBreakerStage::Warning
+        } else {
+            CircuitBreakerStage::Normal
+        }
+    }
+}
+
+// ============================================================================
+// Drawdown Tracking Types
+// ============================================================================
+
+/// Comprehensive drawdown metrics
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DrawdownMetrics {
+    /// Current drawdown from peak (as decimal, e.g., 0.05 = 5%)
+    pub current_drawdown: f64,
+    /// Maximum drawdown ever observed
+    pub max_drawdown: f64,
+    /// Average drawdown over the session
+    pub average_drawdown: f64,
+    /// Current peak equity value
+    pub peak_equity: Decimal,
+    /// Current equity value
+    pub current_equity: Decimal,
+    /// Time spent in drawdown (ms)
+    pub time_in_drawdown_ms: u64,
+    /// Number of drawdown periods
+    pub drawdown_count: u32,
+    /// Average drawdown duration (ms)
+    pub avg_drawdown_duration_ms: u64,
+    /// Longest drawdown duration (ms)
+    pub max_drawdown_duration_ms: u64,
+    /// Time since peak (ms) - current drawdown duration
+    pub current_drawdown_duration_ms: u64,
+    /// Recovery factor (total profit / max drawdown)
+    pub recovery_factor: f64,
+    /// Calmar ratio (annualized return / max drawdown)
+    pub calmar_ratio: f64,
+}
+
+/// Drawdown period record for analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DrawdownPeriod {
+    /// Start time of drawdown
+    pub start_time_ms: u64,
+    /// End time of drawdown (None if ongoing)
+    pub end_time_ms: Option<u64>,
+    /// Peak equity at start
+    pub peak_equity: Decimal,
+    /// Trough equity (lowest point)
+    pub trough_equity: Decimal,
+    /// Maximum drawdown during this period
+    pub max_drawdown: f64,
+    /// Whether this drawdown has been recovered from
+    pub recovered: bool,
+}
+
+impl DrawdownPeriod {
+    /// Create a new drawdown period
+    pub fn new(start_time_ms: u64, peak_equity: Decimal) -> Self {
+        Self {
+            start_time_ms,
+            end_time_ms: None,
+            peak_equity,
+            trough_equity: peak_equity,
+            max_drawdown: 0.0,
+            recovered: false,
+        }
+    }
+
+    /// Update the trough if current equity is lower
+    pub fn update_trough(&mut self, equity: Decimal) {
+        if equity < self.trough_equity {
+            self.trough_equity = equity;
+            if self.peak_equity > Decimal::ZERO {
+                self.max_drawdown = ((self.peak_equity - self.trough_equity) / self.peak_equity)
+                    .to_f64()
+                    .unwrap_or(0.0);
+            }
+        }
+    }
+
+    /// Mark the drawdown as recovered
+    pub fn mark_recovered(&mut self, end_time_ms: u64) {
+        self.end_time_ms = Some(end_time_ms);
+        self.recovered = true;
+    }
+
+    /// Get the duration of this drawdown period
+    pub fn duration_ms(&self, current_time_ms: u64) -> u64 {
+        self.end_time_ms.unwrap_or(current_time_ms).saturating_sub(self.start_time_ms)
+    }
+}
+
+/// Circuit breaker state tracking
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CircuitBreakerState {
+    /// Current stage
+    pub stage: CircuitBreakerStage,
+    /// Time when entered current stage
+    pub stage_entered_ms: u64,
+    /// Reason for current stage
+    pub reason: Option<String>,
+    /// Number of stage escalations
+    pub escalation_count: u32,
+    /// Number of stage de-escalations
+    pub de_escalation_count: u32,
+    /// Time spent in each stage (cumulative)
+    pub time_per_stage_ms: [u64; 5],
+}
+
+impl Default for CircuitBreakerState {
+    fn default() -> Self {
+        Self {
+            stage: CircuitBreakerStage::Normal,
+            stage_entered_ms: 0,
+            reason: None,
+            escalation_count: 0,
+            de_escalation_count: 0,
+            time_per_stage_ms: [0; 5],
+        }
+    }
+}
+
+impl CircuitBreakerState {
+    /// Update time tracking when stage changes
+    pub fn update_time(&mut self, current_time_ms: u64) {
+        let duration = current_time_ms.saturating_sub(self.stage_entered_ms);
+        self.time_per_stage_ms[self.stage as usize] += duration;
+    }
+
+    /// Set new stage
+    pub fn set_stage(&mut self, new_stage: CircuitBreakerStage, current_time_ms: u64, reason: Option<String>) {
+        if new_stage != self.stage {
+            self.update_time(current_time_ms);
+
+            if new_stage > self.stage {
+                self.escalation_count += 1;
+            } else {
+                self.de_escalation_count += 1;
+            }
+
+            self.stage = new_stage;
+            self.stage_entered_ms = current_time_ms;
+            self.reason = reason;
+        }
+    }
+
+    /// Check if minimum stage duration has passed
+    pub fn can_de_escalate(&self, current_time_ms: u64, min_duration_ms: u64) -> bool {
+        current_time_ms.saturating_sub(self.stage_entered_ms) >= min_duration_ms
+    }
+}
+
+// ============================================================================
+// Risk Management Configuration
+// ============================================================================
 
 /// Risk management configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +430,12 @@ pub struct RiskConfig {
     pub auto_recover: bool,
     /// Time before auto-recovery attempt in milliseconds
     pub recovery_delay_ms: u64,
+
+    // === Circuit Breaker ===
+    /// Enable staged circuit breaker (if false, uses legacy behavior)
+    pub use_staged_circuit_breaker: bool,
+    /// Staged circuit breaker configuration
+    pub circuit_breaker: CircuitBreakerConfig,
 }
 
 impl Default for RiskConfig {
@@ -113,6 +465,10 @@ impl Default for RiskConfig {
             // Recovery
             auto_recover: true,
             recovery_delay_ms: 300_000, // 5 minutes
+
+            // Circuit breaker
+            use_staged_circuit_breaker: true,
+            circuit_breaker: CircuitBreakerConfig::default(),
         }
     }
 }
@@ -134,6 +490,22 @@ impl RiskConfig {
             max_volatility: 0.03,
             auto_recover: false,
             recovery_delay_ms: 600_000, // 10 minutes
+            use_staged_circuit_breaker: true,
+            circuit_breaker: CircuitBreakerConfig {
+                warning_drawdown: 0.03,
+                reduce_only_drawdown: 0.04,
+                halt_drawdown: 0.05,
+                emergency_drawdown: 0.10,
+                warning_daily_loss: dec!(0.01),
+                reduce_only_daily_loss: dec!(0.015),
+                halt_daily_loss: dec!(0.02),
+                warning_consecutive_losses: 2,
+                reduce_only_consecutive_losses: 3,
+                halt_consecutive_losses: 5,
+                auto_de_escalate: false,
+                min_stage_duration_ms: 120_000,
+                de_escalation_threshold: 0.6,
+            },
         }
     }
 
@@ -153,6 +525,22 @@ impl RiskConfig {
             max_volatility: 0.10,
             auto_recover: true,
             recovery_delay_ms: 60_000,
+            use_staged_circuit_breaker: true,
+            circuit_breaker: CircuitBreakerConfig {
+                warning_drawdown: 0.10,
+                reduce_only_drawdown: 0.15,
+                halt_drawdown: 0.20,
+                emergency_drawdown: 0.35,
+                warning_daily_loss: dec!(0.05),
+                reduce_only_daily_loss: dec!(0.07),
+                halt_daily_loss: dec!(0.10),
+                warning_consecutive_losses: 5,
+                reduce_only_consecutive_losses: 8,
+                halt_consecutive_losses: 12,
+                auto_de_escalate: true,
+                min_stage_duration_ms: 30_000,
+                de_escalation_threshold: 0.8,
+            },
         }
     }
 
@@ -334,6 +722,24 @@ pub struct RiskManager {
     // Halt tracking
     /// Time when halt started
     halt_start_ms: Option<u64>,
+
+    // === Enhanced Drawdown Tracking ===
+    /// Current drawdown period (if in drawdown)
+    current_drawdown_period: Option<DrawdownPeriod>,
+    /// Historical drawdown periods for analysis
+    drawdown_history: Vec<DrawdownPeriod>,
+    /// Sum of all drawdown observations for average calculation
+    drawdown_sum: f64,
+    /// Count of drawdown observations
+    drawdown_observation_count: u64,
+    /// Time when tracking started
+    tracking_start_ms: u64,
+    /// Initial equity at start
+    initial_equity: Decimal,
+
+    // === Circuit Breaker State ===
+    /// Staged circuit breaker state
+    circuit_breaker_state: CircuitBreakerState,
 }
 
 impl RiskManager {
@@ -353,6 +759,15 @@ impl RiskManager {
             recent_quotes: VecDeque::new(),
             recent_fills: VecDeque::new(),
             halt_start_ms: None,
+            // Enhanced drawdown tracking
+            current_drawdown_period: None,
+            drawdown_history: Vec::new(),
+            drawdown_sum: 0.0,
+            drawdown_observation_count: 0,
+            tracking_start_ms: 0,
+            initial_equity: dec!(0),
+            // Circuit breaker
+            circuit_breaker_state: CircuitBreakerState::default(),
         }
     }
 
@@ -374,6 +789,288 @@ impl RiskManager {
     /// Get risk events
     pub fn events(&self) -> &[RiskEvent] {
         &self.events
+    }
+
+    /// Get current circuit breaker state
+    pub fn circuit_breaker_state(&self) -> &CircuitBreakerState {
+        &self.circuit_breaker_state
+    }
+
+    /// Get current circuit breaker stage
+    pub fn circuit_breaker_stage(&self) -> CircuitBreakerStage {
+        self.circuit_breaker_state.stage
+    }
+
+    /// Get drawdown history
+    pub fn drawdown_history(&self) -> &[DrawdownPeriod] {
+        &self.drawdown_history
+    }
+
+    /// Get comprehensive drawdown metrics
+    pub fn drawdown_metrics(&self, current_time_ms: u64) -> DrawdownMetrics {
+        let current_drawdown = self.calculate_drawdown_internal();
+        let elapsed_ms = current_time_ms.saturating_sub(self.tracking_start_ms);
+
+        // Calculate time in drawdown
+        let mut total_drawdown_time = 0u64;
+        let mut completed_periods: Vec<&DrawdownPeriod> = Vec::new();
+
+        for period in &self.drawdown_history {
+            if period.recovered {
+                total_drawdown_time += period.duration_ms(current_time_ms);
+                completed_periods.push(period);
+            }
+        }
+
+        // Add current drawdown period time if active
+        if let Some(ref period) = self.current_drawdown_period {
+            total_drawdown_time += period.duration_ms(current_time_ms);
+        }
+
+        // Calculate statistics
+        let drawdown_count = self.drawdown_history.len() as u32
+            + if self.current_drawdown_period.is_some() { 1 } else { 0 };
+
+        let avg_drawdown = if self.drawdown_observation_count > 0 {
+            self.drawdown_sum / self.drawdown_observation_count as f64
+        } else {
+            0.0
+        };
+
+        let avg_duration = if !completed_periods.is_empty() {
+            completed_periods.iter()
+                .map(|p| p.duration_ms(current_time_ms))
+                .sum::<u64>() / completed_periods.len() as u64
+        } else {
+            0
+        };
+
+        let max_duration = self.drawdown_history.iter()
+            .chain(self.current_drawdown_period.iter())
+            .map(|p| p.duration_ms(current_time_ms))
+            .max()
+            .unwrap_or(0);
+
+        let current_duration = self.current_drawdown_period.as_ref()
+            .map(|p| p.duration_ms(current_time_ms))
+            .unwrap_or(0);
+
+        // Calculate recovery factor and Calmar ratio
+        let total_return = if self.initial_equity > Decimal::ZERO {
+            ((self.peak_equity - self.initial_equity) / self.initial_equity)
+                .to_f64()
+                .unwrap_or(0.0)
+        } else {
+            0.0
+        };
+
+        let recovery_factor = if self.stats.peak_drawdown > 0.0 {
+            total_return / self.stats.peak_drawdown
+        } else {
+            0.0
+        };
+
+        // Annualize for Calmar ratio (assuming ~252 trading days)
+        let years = elapsed_ms as f64 / (365.25 * 24.0 * 60.0 * 60.0 * 1000.0);
+        let annualized_return = if years > 0.0 {
+            total_return / years
+        } else {
+            0.0
+        };
+
+        let calmar_ratio = if self.stats.peak_drawdown > 0.0 {
+            annualized_return / self.stats.peak_drawdown
+        } else {
+            0.0
+        };
+
+        DrawdownMetrics {
+            current_drawdown,
+            max_drawdown: self.stats.peak_drawdown,
+            average_drawdown: avg_drawdown,
+            peak_equity: self.peak_equity,
+            current_equity: self.peak_equity * Decimal::from_f64(1.0 - current_drawdown).unwrap_or(Decimal::ONE),
+            time_in_drawdown_ms: total_drawdown_time,
+            drawdown_count,
+            avg_drawdown_duration_ms: avg_duration,
+            max_drawdown_duration_ms: max_duration,
+            current_drawdown_duration_ms: current_duration,
+            recovery_factor,
+            calmar_ratio,
+        }
+    }
+
+    /// Initialize tracking with initial equity
+    pub fn initialize_tracking(&mut self, initial_equity: Decimal, start_time_ms: u64) {
+        self.initial_equity = initial_equity;
+        self.peak_equity = initial_equity;
+        self.tracking_start_ms = start_time_ms;
+        self.daily_pnl_start = initial_equity;
+    }
+
+    /// Update drawdown tracking based on current equity
+    pub fn update_drawdown_tracking(&mut self, current_equity: Decimal, current_time_ms: u64) {
+        let current_drawdown = if self.peak_equity > Decimal::ZERO {
+            ((self.peak_equity - current_equity) / self.peak_equity)
+                .to_f64()
+                .unwrap_or(0.0)
+                .max(0.0)
+        } else {
+            0.0
+        };
+
+        // Track for average calculation
+        self.drawdown_sum += current_drawdown;
+        self.drawdown_observation_count += 1;
+
+        // Update peak if new high
+        if current_equity > self.peak_equity {
+            // Check if we're recovering from a drawdown
+            if let Some(mut period) = self.current_drawdown_period.take() {
+                period.mark_recovered(current_time_ms);
+                self.drawdown_history.push(period);
+            }
+            self.peak_equity = current_equity;
+        } else if current_drawdown > 0.0 {
+            // We're in a drawdown
+            if let Some(ref mut period) = self.current_drawdown_period {
+                period.update_trough(current_equity);
+            } else {
+                // Start a new drawdown period
+                let mut period = DrawdownPeriod::new(current_time_ms, self.peak_equity);
+                period.update_trough(current_equity);
+                self.current_drawdown_period = Some(period);
+            }
+        }
+
+        // Update peak drawdown stat
+        if current_drawdown > self.stats.peak_drawdown {
+            self.stats.peak_drawdown = current_drawdown;
+        }
+    }
+
+    /// Check staged circuit breaker and return appropriate action
+    pub fn check_staged_circuit_breaker(
+        &mut self,
+        drawdown: f64,
+        daily_loss: Decimal,
+        current_time_ms: u64,
+    ) -> RiskAction {
+        if !self.config.use_staged_circuit_breaker {
+            // Fall back to legacy behavior
+            return RiskAction::Allow;
+        }
+
+        let cb_config = &self.config.circuit_breaker;
+
+        // Determine the required stage based on current conditions
+        let drawdown_stage = cb_config.stage_for_drawdown(drawdown);
+        let daily_loss_stage = cb_config.stage_for_daily_loss(daily_loss);
+        let consecutive_loss_stage = cb_config.stage_for_consecutive_losses(self.consecutive_losses);
+
+        // Take the most severe stage
+        let required_stage = drawdown_stage.max(daily_loss_stage).max(consecutive_loss_stage);
+
+        // Determine reason for the stage
+        let reason = if drawdown_stage >= daily_loss_stage && drawdown_stage >= consecutive_loss_stage {
+            format!("Drawdown {:.2}%", drawdown * 100.0)
+        } else if daily_loss_stage >= consecutive_loss_stage {
+            format!("Daily loss {}", daily_loss)
+        } else {
+            format!("{} consecutive losses", self.consecutive_losses)
+        };
+
+        // Handle stage transitions
+        let current_stage = self.circuit_breaker_state.stage;
+
+        if required_stage > current_stage {
+            // Escalate
+            self.circuit_breaker_state.set_stage(required_stage, current_time_ms, Some(reason.clone()));
+            self.log_event(
+                current_time_ms,
+                RiskEventType::StateChange,
+                format!("Circuit breaker escalated to {:?}: {}", required_stage, reason),
+            );
+        } else if required_stage < current_stage && cb_config.auto_de_escalate {
+            // Check if we can de-escalate
+            if self.circuit_breaker_state.can_de_escalate(current_time_ms, cb_config.min_stage_duration_ms) {
+                // Check if conditions are sufficiently improved
+                let de_escalate_threshold = cb_config.de_escalation_threshold;
+                let target_stage = current_stage.de_escalate();
+
+                let can_de_escalate = match target_stage {
+                    CircuitBreakerStage::Normal => {
+                        drawdown < cb_config.warning_drawdown * de_escalate_threshold
+                            && daily_loss < cb_config.warning_daily_loss * Decimal::from_f64(de_escalate_threshold).unwrap()
+                            && self.consecutive_losses < cb_config.warning_consecutive_losses
+                    }
+                    CircuitBreakerStage::Warning => {
+                        drawdown < cb_config.reduce_only_drawdown * de_escalate_threshold
+                            && daily_loss < cb_config.reduce_only_daily_loss * Decimal::from_f64(de_escalate_threshold).unwrap()
+                            && self.consecutive_losses < cb_config.reduce_only_consecutive_losses
+                    }
+                    CircuitBreakerStage::ReduceOnly => {
+                        drawdown < cb_config.halt_drawdown * de_escalate_threshold
+                            && daily_loss < cb_config.halt_daily_loss * Decimal::from_f64(de_escalate_threshold).unwrap()
+                            && self.consecutive_losses < cb_config.halt_consecutive_losses
+                    }
+                    _ => false,
+                };
+
+                if can_de_escalate {
+                    self.circuit_breaker_state.set_stage(target_stage, current_time_ms, None);
+                    self.log_event(
+                        current_time_ms,
+                        RiskEventType::Recovery,
+                        format!("Circuit breaker de-escalated to {:?}", target_stage),
+                    );
+                }
+            }
+        }
+
+        // Return action based on current stage
+        match self.circuit_breaker_state.stage {
+            CircuitBreakerStage::Normal => RiskAction::Allow,
+            CircuitBreakerStage::Warning => {
+                // Generate warning but allow trading
+                self.log_event(
+                    current_time_ms,
+                    RiskEventType::LimitWarning,
+                    format!("Warning: {}", reason),
+                );
+                RiskAction::Allow
+            }
+            CircuitBreakerStage::ReduceOnly => RiskAction::ReduceOnly,
+            CircuitBreakerStage::Halt => RiskAction::Halt {
+                reason: HaltReason::MaxDrawdownExceeded,
+            },
+            CircuitBreakerStage::Emergency => RiskAction::Emergency {
+                reason: EmergencyReason::CatastrophicLoss,
+            },
+        }
+    }
+
+    /// Force circuit breaker to a specific stage (for testing or manual override)
+    pub fn set_circuit_breaker_stage(&mut self, stage: CircuitBreakerStage, current_time_ms: u64, reason: Option<String>) {
+        self.circuit_breaker_state.set_stage(stage, current_time_ms, reason);
+    }
+
+    /// Get time spent at each circuit breaker stage
+    pub fn circuit_breaker_time_breakdown(&self, current_time_ms: u64) -> [u64; 5] {
+        let mut times = self.circuit_breaker_state.time_per_stage_ms;
+        // Add time for current stage
+        let current_duration = current_time_ms.saturating_sub(self.circuit_breaker_state.stage_entered_ms);
+        times[self.circuit_breaker_state.stage as usize] += current_duration;
+        times
+    }
+
+    // Internal helper for drawdown calculation
+    fn calculate_drawdown_internal(&self) -> f64 {
+        if let Some(ref period) = self.current_drawdown_period {
+            period.max_drawdown
+        } else {
+            0.0
+        }
     }
 
     /// Check risk before generating a quote
@@ -1388,5 +2085,1184 @@ mod tests {
             let display = format!("{}", reason);
             assert!(!display.is_empty());
         }
+    }
+
+    // ============================================================================
+    // CircuitBreakerStage Tests
+    // ============================================================================
+
+    #[test]
+    fn test_circuit_breaker_stage_default() {
+        let stage = CircuitBreakerStage::default();
+        assert_eq!(stage, CircuitBreakerStage::Normal);
+    }
+
+    #[test]
+    fn test_circuit_breaker_stage_allows_trading() {
+        assert!(CircuitBreakerStage::Normal.allows_trading());
+        assert!(CircuitBreakerStage::Warning.allows_trading());
+        assert!(CircuitBreakerStage::ReduceOnly.allows_trading());
+        assert!(!CircuitBreakerStage::Halt.allows_trading());
+        assert!(!CircuitBreakerStage::Emergency.allows_trading());
+    }
+
+    #[test]
+    fn test_circuit_breaker_stage_allows_new_positions() {
+        assert!(CircuitBreakerStage::Normal.allows_new_positions());
+        assert!(CircuitBreakerStage::Warning.allows_new_positions());
+        assert!(!CircuitBreakerStage::ReduceOnly.allows_new_positions());
+        assert!(!CircuitBreakerStage::Halt.allows_new_positions());
+        assert!(!CircuitBreakerStage::Emergency.allows_new_positions());
+    }
+
+    #[test]
+    fn test_circuit_breaker_stage_escalate() {
+        assert_eq!(CircuitBreakerStage::Normal.escalate(), CircuitBreakerStage::Warning);
+        assert_eq!(CircuitBreakerStage::Warning.escalate(), CircuitBreakerStage::ReduceOnly);
+        assert_eq!(CircuitBreakerStage::ReduceOnly.escalate(), CircuitBreakerStage::Halt);
+        assert_eq!(CircuitBreakerStage::Halt.escalate(), CircuitBreakerStage::Emergency);
+        assert_eq!(CircuitBreakerStage::Emergency.escalate(), CircuitBreakerStage::Emergency);
+    }
+
+    #[test]
+    fn test_circuit_breaker_stage_de_escalate() {
+        assert_eq!(CircuitBreakerStage::Normal.de_escalate(), CircuitBreakerStage::Normal);
+        assert_eq!(CircuitBreakerStage::Warning.de_escalate(), CircuitBreakerStage::Normal);
+        assert_eq!(CircuitBreakerStage::ReduceOnly.de_escalate(), CircuitBreakerStage::Warning);
+        assert_eq!(CircuitBreakerStage::Halt.de_escalate(), CircuitBreakerStage::ReduceOnly);
+        assert_eq!(CircuitBreakerStage::Emergency.de_escalate(), CircuitBreakerStage::Halt);
+    }
+
+    #[test]
+    fn test_circuit_breaker_stage_ordering() {
+        assert!(CircuitBreakerStage::Normal < CircuitBreakerStage::Warning);
+        assert!(CircuitBreakerStage::Warning < CircuitBreakerStage::ReduceOnly);
+        assert!(CircuitBreakerStage::ReduceOnly < CircuitBreakerStage::Halt);
+        assert!(CircuitBreakerStage::Halt < CircuitBreakerStage::Emergency);
+    }
+
+    #[test]
+    fn test_circuit_breaker_stage_as_usize() {
+        assert_eq!(CircuitBreakerStage::Normal as usize, 0);
+        assert_eq!(CircuitBreakerStage::Warning as usize, 1);
+        assert_eq!(CircuitBreakerStage::ReduceOnly as usize, 2);
+        assert_eq!(CircuitBreakerStage::Halt as usize, 3);
+        assert_eq!(CircuitBreakerStage::Emergency as usize, 4);
+    }
+
+    #[test]
+    fn test_circuit_breaker_stage_serialization() {
+        let stage = CircuitBreakerStage::ReduceOnly;
+        let json = serde_json::to_string(&stage).unwrap();
+        let deserialized: CircuitBreakerStage = serde_json::from_str(&json).unwrap();
+        assert_eq!(stage, deserialized);
+    }
+
+    // ============================================================================
+    // CircuitBreakerConfig Tests
+    // ============================================================================
+
+    #[test]
+    fn test_circuit_breaker_config_default() {
+        let config = CircuitBreakerConfig::default();
+        assert_eq!(config.warning_drawdown, 0.05);
+        assert_eq!(config.reduce_only_drawdown, 0.08);
+        assert_eq!(config.halt_drawdown, 0.10);
+        assert_eq!(config.emergency_drawdown, 0.20);
+        assert!(config.auto_de_escalate);
+        assert_eq!(config.min_stage_duration_ms, 60_000);
+    }
+
+    #[test]
+    fn test_circuit_breaker_config_validate_valid() {
+        let config = CircuitBreakerConfig::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_circuit_breaker_config_validate_warning_ge_reduce_only() {
+        let mut config = CircuitBreakerConfig::default();
+        config.warning_drawdown = 0.10;
+        config.reduce_only_drawdown = 0.08;
+        assert!(config.validate().is_err());
+        assert!(config.validate().unwrap_err().contains("warning_drawdown"));
+    }
+
+    #[test]
+    fn test_circuit_breaker_config_validate_reduce_only_ge_halt() {
+        let mut config = CircuitBreakerConfig::default();
+        config.reduce_only_drawdown = 0.12;
+        config.halt_drawdown = 0.10;
+        assert!(config.validate().is_err());
+        assert!(config.validate().unwrap_err().contains("reduce_only_drawdown"));
+    }
+
+    #[test]
+    fn test_circuit_breaker_config_validate_halt_ge_emergency() {
+        let mut config = CircuitBreakerConfig::default();
+        config.halt_drawdown = 0.25;
+        config.emergency_drawdown = 0.20;
+        assert!(config.validate().is_err());
+        assert!(config.validate().unwrap_err().contains("halt_drawdown"));
+    }
+
+    #[test]
+    fn test_circuit_breaker_config_validate_de_escalation_threshold_bounds() {
+        let mut config = CircuitBreakerConfig::default();
+
+        config.de_escalation_threshold = 0.0;
+        assert!(config.validate().is_err());
+
+        config.de_escalation_threshold = 1.0;
+        assert!(config.validate().is_err());
+
+        config.de_escalation_threshold = -0.5;
+        assert!(config.validate().is_err());
+
+        config.de_escalation_threshold = 1.5;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_circuit_breaker_config_stage_for_drawdown_normal() {
+        let config = CircuitBreakerConfig::default();
+        assert_eq!(config.stage_for_drawdown(0.0), CircuitBreakerStage::Normal);
+        assert_eq!(config.stage_for_drawdown(0.02), CircuitBreakerStage::Normal);
+        assert_eq!(config.stage_for_drawdown(0.049), CircuitBreakerStage::Normal);
+    }
+
+    #[test]
+    fn test_circuit_breaker_config_stage_for_drawdown_warning() {
+        let config = CircuitBreakerConfig::default();
+        assert_eq!(config.stage_for_drawdown(0.05), CircuitBreakerStage::Warning);
+        assert_eq!(config.stage_for_drawdown(0.06), CircuitBreakerStage::Warning);
+        assert_eq!(config.stage_for_drawdown(0.079), CircuitBreakerStage::Warning);
+    }
+
+    #[test]
+    fn test_circuit_breaker_config_stage_for_drawdown_reduce_only() {
+        let config = CircuitBreakerConfig::default();
+        assert_eq!(config.stage_for_drawdown(0.08), CircuitBreakerStage::ReduceOnly);
+        assert_eq!(config.stage_for_drawdown(0.09), CircuitBreakerStage::ReduceOnly);
+        assert_eq!(config.stage_for_drawdown(0.099), CircuitBreakerStage::ReduceOnly);
+    }
+
+    #[test]
+    fn test_circuit_breaker_config_stage_for_drawdown_halt() {
+        let config = CircuitBreakerConfig::default();
+        assert_eq!(config.stage_for_drawdown(0.10), CircuitBreakerStage::Halt);
+        assert_eq!(config.stage_for_drawdown(0.15), CircuitBreakerStage::Halt);
+        assert_eq!(config.stage_for_drawdown(0.199), CircuitBreakerStage::Halt);
+    }
+
+    #[test]
+    fn test_circuit_breaker_config_stage_for_drawdown_emergency() {
+        let config = CircuitBreakerConfig::default();
+        assert_eq!(config.stage_for_drawdown(0.20), CircuitBreakerStage::Emergency);
+        assert_eq!(config.stage_for_drawdown(0.50), CircuitBreakerStage::Emergency);
+        assert_eq!(config.stage_for_drawdown(1.0), CircuitBreakerStage::Emergency);
+    }
+
+    #[test]
+    fn test_circuit_breaker_config_stage_for_daily_loss() {
+        let config = CircuitBreakerConfig::default();
+
+        // Normal
+        assert_eq!(config.stage_for_daily_loss(dec!(0.01)), CircuitBreakerStage::Normal);
+
+        // Warning
+        assert_eq!(config.stage_for_daily_loss(dec!(0.02)), CircuitBreakerStage::Warning);
+        assert_eq!(config.stage_for_daily_loss(dec!(0.03)), CircuitBreakerStage::Warning);
+
+        // ReduceOnly
+        assert_eq!(config.stage_for_daily_loss(dec!(0.035)), CircuitBreakerStage::ReduceOnly);
+        assert_eq!(config.stage_for_daily_loss(dec!(0.04)), CircuitBreakerStage::ReduceOnly);
+
+        // Halt
+        assert_eq!(config.stage_for_daily_loss(dec!(0.05)), CircuitBreakerStage::Halt);
+        assert_eq!(config.stage_for_daily_loss(dec!(0.10)), CircuitBreakerStage::Halt);
+    }
+
+    #[test]
+    fn test_circuit_breaker_config_stage_for_consecutive_losses() {
+        let config = CircuitBreakerConfig::default();
+
+        // Normal
+        assert_eq!(config.stage_for_consecutive_losses(0), CircuitBreakerStage::Normal);
+        assert_eq!(config.stage_for_consecutive_losses(2), CircuitBreakerStage::Normal);
+
+        // Warning
+        assert_eq!(config.stage_for_consecutive_losses(3), CircuitBreakerStage::Warning);
+        assert_eq!(config.stage_for_consecutive_losses(4), CircuitBreakerStage::Warning);
+
+        // ReduceOnly
+        assert_eq!(config.stage_for_consecutive_losses(5), CircuitBreakerStage::ReduceOnly);
+        assert_eq!(config.stage_for_consecutive_losses(7), CircuitBreakerStage::ReduceOnly);
+
+        // Halt
+        assert_eq!(config.stage_for_consecutive_losses(8), CircuitBreakerStage::Halt);
+        assert_eq!(config.stage_for_consecutive_losses(100), CircuitBreakerStage::Halt);
+    }
+
+    #[test]
+    fn test_circuit_breaker_config_serialization() {
+        let config = CircuitBreakerConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: CircuitBreakerConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(config.warning_drawdown, deserialized.warning_drawdown);
+        assert_eq!(config.auto_de_escalate, deserialized.auto_de_escalate);
+    }
+
+    // ============================================================================
+    // DrawdownPeriod Tests
+    // ============================================================================
+
+    #[test]
+    fn test_drawdown_period_new() {
+        let period = DrawdownPeriod::new(1000, dec!(100));
+        assert_eq!(period.start_time_ms, 1000);
+        assert!(period.end_time_ms.is_none());
+        assert_eq!(period.peak_equity, dec!(100));
+        assert_eq!(period.trough_equity, dec!(100));
+        assert_eq!(period.max_drawdown, 0.0);
+        assert!(!period.recovered);
+    }
+
+    #[test]
+    fn test_drawdown_period_update_trough() {
+        let mut period = DrawdownPeriod::new(1000, dec!(100));
+
+        // First trough update
+        period.update_trough(dec!(95));
+        assert_eq!(period.trough_equity, dec!(95));
+        assert!((period.max_drawdown - 0.05).abs() < 0.0001);
+
+        // Deeper trough
+        period.update_trough(dec!(90));
+        assert_eq!(period.trough_equity, dec!(90));
+        assert!((period.max_drawdown - 0.10).abs() < 0.0001);
+
+        // Higher value should not update trough
+        period.update_trough(dec!(92));
+        assert_eq!(period.trough_equity, dec!(90));
+        assert!((period.max_drawdown - 0.10).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_drawdown_period_update_trough_zero_peak() {
+        let mut period = DrawdownPeriod::new(1000, dec!(0));
+        period.update_trough(dec!(-5));
+        // Should not panic and drawdown should be 0 due to zero peak
+        assert_eq!(period.trough_equity, dec!(-5));
+        assert_eq!(period.max_drawdown, 0.0);
+    }
+
+    #[test]
+    fn test_drawdown_period_mark_recovered() {
+        let mut period = DrawdownPeriod::new(1000, dec!(100));
+        period.update_trough(dec!(90));
+
+        assert!(!period.recovered);
+        assert!(period.end_time_ms.is_none());
+
+        period.mark_recovered(5000);
+
+        assert!(period.recovered);
+        assert_eq!(period.end_time_ms, Some(5000));
+    }
+
+    #[test]
+    fn test_drawdown_period_duration_ongoing() {
+        let period = DrawdownPeriod::new(1000, dec!(100));
+
+        assert_eq!(period.duration_ms(3000), 2000);
+        assert_eq!(period.duration_ms(10000), 9000);
+    }
+
+    #[test]
+    fn test_drawdown_period_duration_recovered() {
+        let mut period = DrawdownPeriod::new(1000, dec!(100));
+        period.mark_recovered(5000);
+
+        // Duration should be fixed once recovered
+        assert_eq!(period.duration_ms(5000), 4000);
+        assert_eq!(period.duration_ms(10000), 4000);
+    }
+
+    #[test]
+    fn test_drawdown_period_duration_same_time() {
+        let period = DrawdownPeriod::new(1000, dec!(100));
+        assert_eq!(period.duration_ms(1000), 0);
+    }
+
+    #[test]
+    fn test_drawdown_period_serialization() {
+        let mut period = DrawdownPeriod::new(1000, dec!(100));
+        period.update_trough(dec!(90));
+        period.mark_recovered(5000);
+
+        let json = serde_json::to_string(&period).unwrap();
+        let deserialized: DrawdownPeriod = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(period.start_time_ms, deserialized.start_time_ms);
+        assert_eq!(period.end_time_ms, deserialized.end_time_ms);
+        assert_eq!(period.peak_equity, deserialized.peak_equity);
+        assert_eq!(period.recovered, deserialized.recovered);
+    }
+
+    // ============================================================================
+    // CircuitBreakerState Tests
+    // ============================================================================
+
+    #[test]
+    fn test_circuit_breaker_state_default() {
+        let state = CircuitBreakerState::default();
+        assert_eq!(state.stage, CircuitBreakerStage::Normal);
+        assert_eq!(state.stage_entered_ms, 0);
+        assert!(state.reason.is_none());
+        assert_eq!(state.escalation_count, 0);
+        assert_eq!(state.de_escalation_count, 0);
+        assert_eq!(state.time_per_stage_ms, [0; 5]);
+    }
+
+    #[test]
+    fn test_circuit_breaker_state_update_time() {
+        let mut state = CircuitBreakerState::default();
+        state.stage_entered_ms = 1000;
+
+        state.update_time(5000);
+
+        assert_eq!(state.time_per_stage_ms[0], 4000); // Normal stage
+    }
+
+    #[test]
+    fn test_circuit_breaker_state_set_stage_escalation() {
+        let mut state = CircuitBreakerState::default();
+        state.stage_entered_ms = 0;
+
+        state.set_stage(CircuitBreakerStage::Warning, 1000, Some("Test reason".to_string()));
+
+        assert_eq!(state.stage, CircuitBreakerStage::Warning);
+        assert_eq!(state.stage_entered_ms, 1000);
+        assert_eq!(state.reason, Some("Test reason".to_string()));
+        assert_eq!(state.escalation_count, 1);
+        assert_eq!(state.de_escalation_count, 0);
+        assert_eq!(state.time_per_stage_ms[0], 1000); // Time in Normal
+    }
+
+    #[test]
+    fn test_circuit_breaker_state_set_stage_de_escalation() {
+        let mut state = CircuitBreakerState::default();
+        state.stage = CircuitBreakerStage::Warning;
+        state.stage_entered_ms = 1000;
+
+        state.set_stage(CircuitBreakerStage::Normal, 5000, None);
+
+        assert_eq!(state.stage, CircuitBreakerStage::Normal);
+        assert_eq!(state.stage_entered_ms, 5000);
+        assert!(state.reason.is_none());
+        assert_eq!(state.escalation_count, 0);
+        assert_eq!(state.de_escalation_count, 1);
+        assert_eq!(state.time_per_stage_ms[1], 4000); // Time in Warning
+    }
+
+    #[test]
+    fn test_circuit_breaker_state_set_stage_same_stage_no_change() {
+        let mut state = CircuitBreakerState::default();
+        state.stage_entered_ms = 1000;
+        state.reason = Some("Original".to_string());
+
+        state.set_stage(CircuitBreakerStage::Normal, 5000, Some("New".to_string()));
+
+        // Should not change anything
+        assert_eq!(state.stage_entered_ms, 1000);
+        assert_eq!(state.reason, Some("Original".to_string()));
+        assert_eq!(state.escalation_count, 0);
+        assert_eq!(state.de_escalation_count, 0);
+    }
+
+    #[test]
+    fn test_circuit_breaker_state_can_de_escalate() {
+        let mut state = CircuitBreakerState::default();
+        state.stage_entered_ms = 1000;
+
+        // Before min duration
+        assert!(!state.can_de_escalate(2000, 5000));
+
+        // At min duration
+        assert!(state.can_de_escalate(6000, 5000));
+
+        // After min duration
+        assert!(state.can_de_escalate(10000, 5000));
+    }
+
+    #[test]
+    fn test_circuit_breaker_state_multiple_transitions() {
+        let mut state = CircuitBreakerState::default();
+
+        // Normal -> Warning
+        state.set_stage(CircuitBreakerStage::Warning, 1000, Some("DD 5%".to_string()));
+        // Warning -> ReduceOnly
+        state.set_stage(CircuitBreakerStage::ReduceOnly, 2000, Some("DD 8%".to_string()));
+        // ReduceOnly -> Warning (de-escalate)
+        state.set_stage(CircuitBreakerStage::Warning, 5000, None);
+        // Warning -> Normal (de-escalate)
+        state.set_stage(CircuitBreakerStage::Normal, 8000, None);
+
+        assert_eq!(state.escalation_count, 2);
+        assert_eq!(state.de_escalation_count, 2);
+        assert_eq!(state.time_per_stage_ms[0], 1000);  // Normal
+        assert_eq!(state.time_per_stage_ms[1], 4000);  // Warning (1000-2000, 5000-8000)
+        assert_eq!(state.time_per_stage_ms[2], 3000);  // ReduceOnly (2000-5000)
+    }
+
+    #[test]
+    fn test_circuit_breaker_state_serialization() {
+        let mut state = CircuitBreakerState::default();
+        state.stage = CircuitBreakerStage::Warning;
+        state.stage_entered_ms = 1000;
+        state.reason = Some("Test".to_string());
+        state.escalation_count = 3;
+
+        let json = serde_json::to_string(&state).unwrap();
+        let deserialized: CircuitBreakerState = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(state.stage, deserialized.stage);
+        assert_eq!(state.escalation_count, deserialized.escalation_count);
+    }
+
+    // ============================================================================
+    // DrawdownMetrics Tests
+    // ============================================================================
+
+    #[test]
+    fn test_drawdown_metrics_default() {
+        let metrics = DrawdownMetrics::default();
+        assert_eq!(metrics.current_drawdown, 0.0);
+        assert_eq!(metrics.max_drawdown, 0.0);
+        assert_eq!(metrics.drawdown_count, 0);
+        assert_eq!(metrics.recovery_factor, 0.0);
+        assert_eq!(metrics.calmar_ratio, 0.0);
+    }
+
+    #[test]
+    fn test_drawdown_metrics_serialization() {
+        let metrics = DrawdownMetrics {
+            current_drawdown: 0.05,
+            max_drawdown: 0.10,
+            average_drawdown: 0.03,
+            peak_equity: dec!(100),
+            current_equity: dec!(95),
+            time_in_drawdown_ms: 5000,
+            drawdown_count: 3,
+            avg_drawdown_duration_ms: 1000,
+            max_drawdown_duration_ms: 2000,
+            current_drawdown_duration_ms: 500,
+            recovery_factor: 2.5,
+            calmar_ratio: 1.8,
+        };
+
+        let json = serde_json::to_string(&metrics).unwrap();
+        let deserialized: DrawdownMetrics = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(metrics.current_drawdown, deserialized.current_drawdown);
+        assert_eq!(metrics.drawdown_count, deserialized.drawdown_count);
+        assert_eq!(metrics.recovery_factor, deserialized.recovery_factor);
+    }
+
+    // ============================================================================
+    // RiskManager Enhanced Drawdown Tracking Tests
+    // ============================================================================
+
+    #[test]
+    fn test_initialize_tracking() {
+        let config = RiskConfig::default();
+        let mut manager = RiskManager::new(config);
+
+        manager.initialize_tracking(dec!(1.0), 1000);
+
+        assert_eq!(manager.initial_equity, dec!(1.0));
+        assert_eq!(manager.peak_equity, dec!(1.0));
+        assert_eq!(manager.tracking_start_ms, 1000);
+        assert_eq!(manager.daily_pnl_start, dec!(1.0));
+    }
+
+    #[test]
+    fn test_update_drawdown_tracking_new_high() {
+        let config = RiskConfig::default();
+        let mut manager = RiskManager::new(config);
+        manager.initialize_tracking(dec!(100), 0);
+
+        // New high
+        manager.update_drawdown_tracking(dec!(110), 1000);
+
+        assert_eq!(manager.peak_equity, dec!(110));
+        assert!(manager.current_drawdown_period.is_none());
+        assert_eq!(manager.drawdown_observation_count, 1);
+    }
+
+    #[test]
+    fn test_update_drawdown_tracking_entering_drawdown() {
+        let config = RiskConfig::default();
+        let mut manager = RiskManager::new(config);
+        manager.initialize_tracking(dec!(100), 0);
+
+        // Enter drawdown
+        manager.update_drawdown_tracking(dec!(95), 1000);
+
+        assert_eq!(manager.peak_equity, dec!(100));
+        assert!(manager.current_drawdown_period.is_some());
+
+        let period = manager.current_drawdown_period.as_ref().unwrap();
+        assert_eq!(period.trough_equity, dec!(95));
+        assert!((period.max_drawdown - 0.05).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_update_drawdown_tracking_deepening_drawdown() {
+        let config = RiskConfig::default();
+        let mut manager = RiskManager::new(config);
+        manager.initialize_tracking(dec!(100), 0);
+
+        // Enter and deepen drawdown
+        manager.update_drawdown_tracking(dec!(95), 1000);
+        manager.update_drawdown_tracking(dec!(90), 2000);
+
+        let period = manager.current_drawdown_period.as_ref().unwrap();
+        assert_eq!(period.trough_equity, dec!(90));
+        assert!((period.max_drawdown - 0.10).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_update_drawdown_tracking_recovery() {
+        let config = RiskConfig::default();
+        let mut manager = RiskManager::new(config);
+        manager.initialize_tracking(dec!(100), 0);
+
+        // Enter drawdown
+        manager.update_drawdown_tracking(dec!(90), 1000);
+        assert!(manager.current_drawdown_period.is_some());
+
+        // Recover to new high
+        manager.update_drawdown_tracking(dec!(105), 5000);
+
+        assert!(manager.current_drawdown_period.is_none());
+        assert_eq!(manager.drawdown_history.len(), 1);
+
+        let recovered = &manager.drawdown_history[0];
+        assert!(recovered.recovered);
+        assert_eq!(recovered.end_time_ms, Some(5000));
+    }
+
+    #[test]
+    fn test_update_drawdown_tracking_multiple_periods() {
+        let config = RiskConfig::default();
+        let mut manager = RiskManager::new(config);
+        manager.initialize_tracking(dec!(100), 0);
+
+        // First drawdown
+        manager.update_drawdown_tracking(dec!(90), 1000);
+        manager.update_drawdown_tracking(dec!(105), 2000); // Recover
+
+        // Second drawdown
+        manager.update_drawdown_tracking(dec!(100), 3000);
+        manager.update_drawdown_tracking(dec!(110), 4000); // Recover
+
+        // Third drawdown (ongoing)
+        manager.update_drawdown_tracking(dec!(100), 5000);
+
+        assert_eq!(manager.drawdown_history.len(), 2);
+        assert!(manager.current_drawdown_period.is_some());
+    }
+
+    #[test]
+    fn test_update_drawdown_tracking_peak_drawdown_stat() {
+        let config = RiskConfig::default();
+        let mut manager = RiskManager::new(config);
+        manager.initialize_tracking(dec!(100), 0);
+
+        manager.update_drawdown_tracking(dec!(92), 1000); // 8% drawdown
+        assert!((manager.stats.peak_drawdown - 0.08).abs() < 0.0001);
+
+        manager.update_drawdown_tracking(dec!(88), 2000); // 12% drawdown
+        assert!((manager.stats.peak_drawdown - 0.12).abs() < 0.0001);
+
+        // Recovery shouldn't reduce peak drawdown
+        manager.update_drawdown_tracking(dec!(110), 3000);
+        assert!((manager.stats.peak_drawdown - 0.12).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_drawdown_metrics_calculation() {
+        let config = RiskConfig::default();
+        let mut manager = RiskManager::new(config);
+        manager.initialize_tracking(dec!(100), 0);
+
+        // Create drawdown history
+        manager.update_drawdown_tracking(dec!(90), 1000);  // 10% DD
+        manager.update_drawdown_tracking(dec!(110), 5000); // Recover
+        manager.update_drawdown_tracking(dec!(100), 6000); // New DD (~9%)
+        manager.update_drawdown_tracking(dec!(95), 7000);  // Deeper
+
+        let metrics = manager.drawdown_metrics(10000);
+
+        assert!(metrics.current_drawdown > 0.0);
+        assert!(metrics.max_drawdown > 0.0);
+        assert_eq!(metrics.drawdown_count, 2);
+        assert!(metrics.time_in_drawdown_ms > 0);
+    }
+
+    #[test]
+    fn test_drawdown_metrics_no_drawdown() {
+        let config = RiskConfig::default();
+        let mut manager = RiskManager::new(config);
+        manager.initialize_tracking(dec!(100), 0);
+
+        // Only gains
+        manager.update_drawdown_tracking(dec!(110), 1000);
+        manager.update_drawdown_tracking(dec!(120), 2000);
+
+        let metrics = manager.drawdown_metrics(5000);
+
+        assert_eq!(metrics.current_drawdown, 0.0);
+        assert_eq!(metrics.drawdown_count, 0);
+        assert_eq!(metrics.time_in_drawdown_ms, 0);
+    }
+
+    #[test]
+    fn test_drawdown_history_access() {
+        let config = RiskConfig::default();
+        let mut manager = RiskManager::new(config);
+        manager.initialize_tracking(dec!(100), 0);
+
+        manager.update_drawdown_tracking(dec!(90), 1000);
+        manager.update_drawdown_tracking(dec!(110), 2000);
+
+        let history = manager.drawdown_history();
+        assert_eq!(history.len(), 1);
+        assert!(history[0].recovered);
+    }
+
+    // ============================================================================
+    // Staged Circuit Breaker Tests
+    // ============================================================================
+
+    #[test]
+    fn test_circuit_breaker_state_access() {
+        let config = RiskConfig::default();
+        let manager = RiskManager::new(config);
+
+        let state = manager.circuit_breaker_state();
+        assert_eq!(state.stage, CircuitBreakerStage::Normal);
+    }
+
+    #[test]
+    fn test_circuit_breaker_stage_access() {
+        let config = RiskConfig::default();
+        let manager = RiskManager::new(config);
+
+        assert_eq!(manager.circuit_breaker_stage(), CircuitBreakerStage::Normal);
+    }
+
+    #[test]
+    fn test_check_staged_circuit_breaker_disabled() {
+        let mut config = RiskConfig::default();
+        config.use_staged_circuit_breaker = false;
+        let mut manager = RiskManager::new(config);
+
+        let action = manager.check_staged_circuit_breaker(0.15, dec!(0.1), 1000);
+
+        assert_eq!(action, RiskAction::Allow);
+    }
+
+    #[test]
+    fn test_check_staged_circuit_breaker_normal() {
+        let mut config = RiskConfig::default();
+        config.use_staged_circuit_breaker = true;
+        let mut manager = RiskManager::new(config);
+
+        let action = manager.check_staged_circuit_breaker(0.02, dec!(0.01), 1000);
+
+        assert_eq!(action, RiskAction::Allow);
+        assert_eq!(manager.circuit_breaker_stage(), CircuitBreakerStage::Normal);
+    }
+
+    #[test]
+    fn test_check_staged_circuit_breaker_warning() {
+        let mut config = RiskConfig::default();
+        config.use_staged_circuit_breaker = true;
+        let mut manager = RiskManager::new(config);
+
+        // 6% drawdown triggers warning
+        let action = manager.check_staged_circuit_breaker(0.06, dec!(0.01), 1000);
+
+        assert_eq!(action, RiskAction::Allow); // Warning still allows trading
+        assert_eq!(manager.circuit_breaker_stage(), CircuitBreakerStage::Warning);
+    }
+
+    #[test]
+    fn test_check_staged_circuit_breaker_reduce_only() {
+        let mut config = RiskConfig::default();
+        config.use_staged_circuit_breaker = true;
+        let mut manager = RiskManager::new(config);
+
+        // 9% drawdown triggers reduce-only
+        let action = manager.check_staged_circuit_breaker(0.09, dec!(0.01), 1000);
+
+        assert_eq!(action, RiskAction::ReduceOnly);
+        assert_eq!(manager.circuit_breaker_stage(), CircuitBreakerStage::ReduceOnly);
+    }
+
+    #[test]
+    fn test_check_staged_circuit_breaker_halt() {
+        let mut config = RiskConfig::default();
+        config.use_staged_circuit_breaker = true;
+        let mut manager = RiskManager::new(config);
+
+        // 12% drawdown triggers halt
+        let action = manager.check_staged_circuit_breaker(0.12, dec!(0.01), 1000);
+
+        assert!(matches!(action, RiskAction::Halt { .. }));
+        assert_eq!(manager.circuit_breaker_stage(), CircuitBreakerStage::Halt);
+    }
+
+    #[test]
+    fn test_check_staged_circuit_breaker_emergency() {
+        let mut config = RiskConfig::default();
+        config.use_staged_circuit_breaker = true;
+        let mut manager = RiskManager::new(config);
+
+        // 25% drawdown triggers emergency
+        let action = manager.check_staged_circuit_breaker(0.25, dec!(0.01), 1000);
+
+        assert!(matches!(action, RiskAction::Emergency { .. }));
+        assert_eq!(manager.circuit_breaker_stage(), CircuitBreakerStage::Emergency);
+    }
+
+    #[test]
+    fn test_check_staged_circuit_breaker_daily_loss_trigger() {
+        let mut config = RiskConfig::default();
+        config.use_staged_circuit_breaker = true;
+        let mut manager = RiskManager::new(config);
+
+        // Small drawdown but high daily loss
+        let action = manager.check_staged_circuit_breaker(0.01, dec!(0.04), 1000);
+
+        assert_eq!(action, RiskAction::ReduceOnly);
+        assert_eq!(manager.circuit_breaker_stage(), CircuitBreakerStage::ReduceOnly);
+    }
+
+    #[test]
+    fn test_check_staged_circuit_breaker_consecutive_loss_trigger() {
+        let mut config = RiskConfig::default();
+        config.use_staged_circuit_breaker = true;
+        let mut manager = RiskManager::new(config);
+
+        // Simulate consecutive losses
+        manager.consecutive_losses = 6; // Above reduce_only threshold (5)
+
+        let action = manager.check_staged_circuit_breaker(0.01, dec!(0.01), 1000);
+
+        assert_eq!(action, RiskAction::ReduceOnly);
+    }
+
+    #[test]
+    fn test_check_staged_circuit_breaker_takes_max_severity() {
+        let mut config = RiskConfig::default();
+        config.use_staged_circuit_breaker = true;
+        let mut manager = RiskManager::new(config);
+
+        // Warning from drawdown, ReduceOnly from consecutive losses
+        manager.consecutive_losses = 5;
+
+        let action = manager.check_staged_circuit_breaker(0.06, dec!(0.01), 1000);
+
+        // Should be at ReduceOnly (higher severity)
+        assert_eq!(action, RiskAction::ReduceOnly);
+    }
+
+    #[test]
+    fn test_check_staged_circuit_breaker_escalation_event_logged() {
+        let mut config = RiskConfig::default();
+        config.use_staged_circuit_breaker = true;
+        let mut manager = RiskManager::new(config);
+
+        let initial_events = manager.events.len();
+
+        manager.check_staged_circuit_breaker(0.09, dec!(0.01), 1000);
+
+        assert!(manager.events.len() > initial_events);
+    }
+
+    #[test]
+    fn test_check_staged_circuit_breaker_de_escalation() {
+        let mut config = RiskConfig::default();
+        config.use_staged_circuit_breaker = true;
+        config.circuit_breaker.auto_de_escalate = true;
+        config.circuit_breaker.min_stage_duration_ms = 1000;
+        config.circuit_breaker.de_escalation_threshold = 0.7;
+        let mut manager = RiskManager::new(config);
+
+        // Escalate to warning
+        manager.check_staged_circuit_breaker(0.06, dec!(0.01), 0);
+        assert_eq!(manager.circuit_breaker_stage(), CircuitBreakerStage::Warning);
+
+        // Conditions improve significantly and min duration passed
+        manager.check_staged_circuit_breaker(0.02, dec!(0.005), 2000);
+
+        // Should de-escalate to Normal (0.02 < 0.05 * 0.7 = 0.035)
+        assert_eq!(manager.circuit_breaker_stage(), CircuitBreakerStage::Normal);
+    }
+
+    #[test]
+    fn test_check_staged_circuit_breaker_no_de_escalation_before_min_duration() {
+        let mut config = RiskConfig::default();
+        config.use_staged_circuit_breaker = true;
+        config.circuit_breaker.auto_de_escalate = true;
+        config.circuit_breaker.min_stage_duration_ms = 5000;
+        let mut manager = RiskManager::new(config);
+
+        // Escalate to warning
+        manager.check_staged_circuit_breaker(0.06, dec!(0.01), 0);
+        assert_eq!(manager.circuit_breaker_stage(), CircuitBreakerStage::Warning);
+
+        // Conditions improve but min duration not passed
+        manager.check_staged_circuit_breaker(0.02, dec!(0.005), 1000);
+
+        // Should still be Warning
+        assert_eq!(manager.circuit_breaker_stage(), CircuitBreakerStage::Warning);
+    }
+
+    #[test]
+    fn test_check_staged_circuit_breaker_no_de_escalation_when_disabled() {
+        let mut config = RiskConfig::default();
+        config.use_staged_circuit_breaker = true;
+        config.circuit_breaker.auto_de_escalate = false;
+        config.circuit_breaker.min_stage_duration_ms = 0;
+        let mut manager = RiskManager::new(config);
+
+        // Escalate to warning
+        manager.check_staged_circuit_breaker(0.06, dec!(0.01), 0);
+
+        // Conditions improve
+        manager.check_staged_circuit_breaker(0.02, dec!(0.005), 10000);
+
+        // Should still be Warning (auto de-escalate disabled)
+        assert_eq!(manager.circuit_breaker_stage(), CircuitBreakerStage::Warning);
+    }
+
+    #[test]
+    fn test_set_circuit_breaker_stage_manual() {
+        let config = RiskConfig::default();
+        let mut manager = RiskManager::new(config);
+
+        manager.set_circuit_breaker_stage(
+            CircuitBreakerStage::Halt,
+            1000,
+            Some("Manual override".to_string()),
+        );
+
+        assert_eq!(manager.circuit_breaker_stage(), CircuitBreakerStage::Halt);
+        assert_eq!(
+            manager.circuit_breaker_state().reason,
+            Some("Manual override".to_string())
+        );
+    }
+
+    #[test]
+    fn test_circuit_breaker_time_breakdown() {
+        let mut config = RiskConfig::default();
+        config.use_staged_circuit_breaker = true;
+        let mut manager = RiskManager::new(config);
+
+        // Start in Normal
+        manager.circuit_breaker_state.stage_entered_ms = 0;
+
+        // Escalate to Warning at t=1000
+        manager.check_staged_circuit_breaker(0.06, dec!(0.01), 1000);
+
+        // Escalate to ReduceOnly at t=3000
+        manager.check_staged_circuit_breaker(0.09, dec!(0.01), 3000);
+
+        // Get breakdown at t=5000
+        let breakdown = manager.circuit_breaker_time_breakdown(5000);
+
+        assert_eq!(breakdown[0], 1000);  // Normal: 0-1000
+        assert_eq!(breakdown[1], 2000);  // Warning: 1000-3000
+        assert_eq!(breakdown[2], 2000);  // ReduceOnly: 3000-5000
+    }
+
+    #[test]
+    fn test_circuit_breaker_escalation_count() {
+        let mut config = RiskConfig::default();
+        config.use_staged_circuit_breaker = true;
+        let mut manager = RiskManager::new(config);
+
+        manager.check_staged_circuit_breaker(0.06, dec!(0.01), 1000); // -> Warning
+        manager.check_staged_circuit_breaker(0.09, dec!(0.01), 2000); // -> ReduceOnly
+        manager.check_staged_circuit_breaker(0.12, dec!(0.01), 3000); // -> Halt
+
+        assert_eq!(manager.circuit_breaker_state().escalation_count, 3);
+    }
+
+    #[test]
+    fn test_risk_config_presets_circuit_breaker() {
+        let conservative = RiskConfig::conservative();
+        let aggressive = RiskConfig::aggressive();
+
+        // Conservative should have tighter thresholds
+        assert!(conservative.circuit_breaker.warning_drawdown < aggressive.circuit_breaker.warning_drawdown);
+        assert!(conservative.circuit_breaker.halt_drawdown < aggressive.circuit_breaker.halt_drawdown);
+
+        // Conservative should not auto-de-escalate
+        assert!(!conservative.circuit_breaker.auto_de_escalate);
+        assert!(aggressive.circuit_breaker.auto_de_escalate);
+    }
+
+    // ============================================================================
+    // Integration Tests
+    // ============================================================================
+
+    #[test]
+    fn test_drawdown_and_circuit_breaker_integration() {
+        let mut config = RiskConfig::default();
+        config.use_staged_circuit_breaker = true;
+        let mut manager = RiskManager::new(config);
+
+        manager.initialize_tracking(dec!(100), 0);
+
+        // Update drawdown tracking as equity declines
+        manager.update_drawdown_tracking(dec!(97), 1000);  // 3% - Normal
+        manager.update_drawdown_tracking(dec!(94), 2000);  // 6% - Warning
+        manager.update_drawdown_tracking(dec!(91), 3000);  // 9% - ReduceOnly
+
+        let metrics = manager.drawdown_metrics(4000);
+
+        assert!(metrics.current_drawdown > 0.08);
+        assert_eq!(metrics.drawdown_count, 1);
+
+        // Check circuit breaker matches current drawdown
+        let action = manager.check_staged_circuit_breaker(
+            metrics.current_drawdown,
+            dec!(0),
+            4000
+        );
+
+        assert_eq!(action, RiskAction::ReduceOnly);
+    }
+
+    #[test]
+    fn test_full_drawdown_cycle_with_recovery() {
+        let mut config = RiskConfig::default();
+        config.use_staged_circuit_breaker = true;
+        config.circuit_breaker.auto_de_escalate = true;
+        config.circuit_breaker.min_stage_duration_ms = 100;
+        config.circuit_breaker.de_escalation_threshold = 0.7;
+        let mut manager = RiskManager::new(config);
+
+        manager.initialize_tracking(dec!(100), 0);
+
+        // Declining equity
+        manager.update_drawdown_tracking(dec!(93), 1000);  // 7% DD
+        manager.check_staged_circuit_breaker(0.07, dec!(0), 1000);
+        assert_eq!(manager.circuit_breaker_stage(), CircuitBreakerStage::Warning);
+
+        // Recovery
+        manager.update_drawdown_tracking(dec!(105), 2000);
+
+        // Drawdown period should be closed
+        assert!(manager.current_drawdown_period.is_none());
+        assert_eq!(manager.drawdown_history.len(), 1);
+
+        // Circuit breaker should de-escalate
+        manager.check_staged_circuit_breaker(0.0, dec!(0), 2000);
+        assert_eq!(manager.circuit_breaker_stage(), CircuitBreakerStage::Normal);
+    }
+
+    #[test]
+    fn test_consecutive_losses_affect_circuit_breaker() {
+        let mut config = RiskConfig::default();
+        config.use_staged_circuit_breaker = true;
+        let mut manager = RiskManager::new(config);
+
+        let state = create_mm_state(dec!(0.01), dec!(0));
+        let fill = create_fill(QuoteSide::Ask, dec!(0.01));
+
+        // Record losses
+        for i in 0..6 {
+            manager.on_fill(&fill, &state, Some(dec!(-0.001)), i * 1000);
+        }
+
+        assert_eq!(manager.consecutive_losses, 6);
+
+        // Check circuit breaker
+        let action = manager.check_staged_circuit_breaker(0.01, dec!(0.01), 7000);
+
+        // 6 consecutive losses triggers ReduceOnly
+        assert_eq!(action, RiskAction::ReduceOnly);
+    }
+
+    #[test]
+    fn test_drawdown_metrics_with_multiple_periods() {
+        let config = RiskConfig::default();
+        let mut manager = RiskManager::new(config);
+        manager.initialize_tracking(dec!(100), 0);
+
+        // First drawdown: 10%
+        manager.update_drawdown_tracking(dec!(90), 1000);
+        manager.update_drawdown_tracking(dec!(110), 5000);
+
+        // Second drawdown: 5%
+        manager.update_drawdown_tracking(dec!(104.5), 6000);
+        manager.update_drawdown_tracking(dec!(115), 10000);
+
+        // Third drawdown: 8% (ongoing)
+        manager.update_drawdown_tracking(dec!(105.8), 11000);
+
+        let metrics = manager.drawdown_metrics(15000);
+
+        assert_eq!(metrics.drawdown_count, 3); // 2 completed + 1 ongoing
+        assert_eq!(manager.drawdown_history.len(), 2);
+        assert!(manager.current_drawdown_period.is_some());
+
+        // Average duration should be calculated from completed periods
+        assert!(metrics.avg_drawdown_duration_ms > 0);
+    }
+
+    #[test]
+    fn test_circuit_breaker_reason_tracking() {
+        let mut config = RiskConfig::default();
+        config.use_staged_circuit_breaker = true;
+        let mut manager = RiskManager::new(config);
+
+        // Trigger via drawdown
+        manager.check_staged_circuit_breaker(0.09, dec!(0.01), 1000);
+
+        let reason = manager.circuit_breaker_state().reason.as_ref().unwrap();
+        assert!(reason.contains("Drawdown"));
+
+        // Reset and trigger via daily loss
+        manager.set_circuit_breaker_stage(CircuitBreakerStage::Normal, 2000, None);
+        manager.check_staged_circuit_breaker(0.01, dec!(0.04), 3000);
+
+        let reason = manager.circuit_breaker_state().reason.as_ref().unwrap();
+        assert!(reason.contains("Daily loss"));
+    }
+
+    #[test]
+    fn test_circuit_breaker_de_escalation_from_reduce_only_to_warning() {
+        let mut config = RiskConfig::default();
+        config.use_staged_circuit_breaker = true;
+        config.circuit_breaker.auto_de_escalate = true;
+        config.circuit_breaker.min_stage_duration_ms = 100;
+        config.circuit_breaker.de_escalation_threshold = 0.7;
+        let mut manager = RiskManager::new(config);
+
+        // Escalate to ReduceOnly
+        manager.check_staged_circuit_breaker(0.09, dec!(0.01), 0);
+        assert_eq!(manager.circuit_breaker_stage(), CircuitBreakerStage::ReduceOnly);
+
+        // To de-escalate from ReduceOnly to Warning, we need:
+        // drawdown < halt_drawdown * de_escalation_threshold = 0.10 * 0.7 = 0.07
+        // daily_loss < halt_daily_loss * de_escalation_threshold = 0.05 * 0.7 = 0.035
+        // consecutive_losses < halt_consecutive_losses = 8
+        // Let's use a much lower drawdown to ensure de-escalation
+        manager.check_staged_circuit_breaker(0.05, dec!(0.01), 1000);
+
+        assert_eq!(manager.circuit_breaker_stage(), CircuitBreakerStage::Warning);
+    }
+
+    #[test]
+    fn test_drawdown_average_calculation() {
+        let config = RiskConfig::default();
+        let mut manager = RiskManager::new(config);
+        manager.initialize_tracking(dec!(100), 0);
+
+        // Multiple observations
+        manager.update_drawdown_tracking(dec!(100), 1000); // 0% DD
+        manager.update_drawdown_tracking(dec!(95), 2000);  // 5% DD
+        manager.update_drawdown_tracking(dec!(90), 3000);  // 10% DD
+        manager.update_drawdown_tracking(dec!(95), 4000);  // Still 10% (trough at 90)
+        manager.update_drawdown_tracking(dec!(100), 5000); // Back to 0% (new peak)
+
+        let metrics = manager.drawdown_metrics(6000);
+
+        // Average should be positive (we had some drawdown observations)
+        assert!(metrics.average_drawdown > 0.0);
+        assert!(metrics.average_drawdown <= metrics.max_drawdown);
+    }
+
+    #[test]
+    fn test_risk_manager_with_staged_circuit_breaker_in_config() {
+        let config = RiskConfig {
+            use_staged_circuit_breaker: true,
+            circuit_breaker: CircuitBreakerConfig {
+                warning_drawdown: 0.03,
+                reduce_only_drawdown: 0.05,
+                halt_drawdown: 0.07,
+                emergency_drawdown: 0.15,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let mut manager = RiskManager::new(config);
+
+        // Test with custom thresholds
+        manager.check_staged_circuit_breaker(0.04, dec!(0), 1000);
+        assert_eq!(manager.circuit_breaker_stage(), CircuitBreakerStage::Warning);
+
+        manager.check_staged_circuit_breaker(0.06, dec!(0), 2000);
+        assert_eq!(manager.circuit_breaker_stage(), CircuitBreakerStage::ReduceOnly);
+
+        manager.check_staged_circuit_breaker(0.08, dec!(0), 3000);
+        assert_eq!(manager.circuit_breaker_stage(), CircuitBreakerStage::Halt);
+    }
+
+    #[test]
+    fn test_zero_initial_equity_handling() {
+        let config = RiskConfig::default();
+        let mut manager = RiskManager::new(config);
+        manager.initialize_tracking(dec!(0), 0);
+
+        // Should not panic
+        manager.update_drawdown_tracking(dec!(-10), 1000);
+
+        let metrics = manager.drawdown_metrics(2000);
+        assert_eq!(metrics.current_drawdown, 0.0);
+    }
+
+    #[test]
+    fn test_negative_equity_handling() {
+        let config = RiskConfig::default();
+        let mut manager = RiskManager::new(config);
+        manager.initialize_tracking(dec!(100), 0);
+
+        // Equity goes negative
+        manager.update_drawdown_tracking(dec!(-50), 1000);
+
+        let metrics = manager.drawdown_metrics(2000);
+
+        // Should handle gracefully - drawdown should be capped or calculated safely
+        assert!(metrics.current_drawdown >= 0.0);
+    }
+
+    #[test]
+    fn test_circuit_breaker_recovery_factor_calculation() {
+        let config = RiskConfig::default();
+        let mut manager = RiskManager::new(config);
+        manager.initialize_tracking(dec!(100), 0);
+
+        // Make profit and experience drawdown
+        manager.update_drawdown_tracking(dec!(120), 1000);  // 20% gain
+        manager.update_drawdown_tracking(dec!(108), 2000);  // 10% DD from 120
+
+        let metrics = manager.drawdown_metrics(3000);
+
+        // Recovery factor = total return / max drawdown
+        // Total return = (120 - 100) / 100 = 0.20
+        // Max DD = 10%
+        // Recovery factor should be ~2.0
+        assert!(metrics.recovery_factor > 0.0);
     }
 }
