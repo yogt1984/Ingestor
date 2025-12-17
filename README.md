@@ -67,6 +67,16 @@ cargo run --release --bin backtest -- --data ./data/features
 - Volatility: realized volatility, bipower variation, jump detection
 - Toxicity: VPIN, adverse selection metrics
 
+### Risk Management (NEW in v0.2)
+
+| Component | Features |
+|-----------|----------|
+| **OCO Manager** | Take-profit/stop-loss orders, basis point offsets, absolute prices |
+| **Position Manager** | Volatility-based sizing, Kelly criterion, exposure limits |
+| **Risk Manager** | Staged circuit breaker (warning/reduce/halt/emergency), drawdown tracking |
+| **P&L Tracker** | Real-time P&L tracking, FIFO cost basis, attribution by source, equity curves |
+| **Backtest Integration** | OCO triggers during historical replay, full P&L statistics |
+
 ---
 
 ## Architecture
@@ -123,11 +133,11 @@ Binance WebSocket
 - [ ] Implement position tracking for directional trades
 
 ### Phase 2: Risk Management
-- [ ] Implement `OCOManager` for take-profit/stop-loss
-- [ ] Implement `PositionManager` (size limits, exposure)
-- [ ] Add drawdown tracking and circuit breaker
-- [ ] Integrate OCO with backtest harness
-- [ ] Add position P&L tracking in real-time
+- [x] Implement `OCOManager` for take-profit/stop-loss (1285 LOC, 49 tests)
+- [x] Implement `PositionManager` (size limits, exposure, Kelly criterion)
+- [x] Add drawdown tracking and staged circuit breaker
+- [x] Integrate OCO with backtest harness (17 tests)
+- [x] Add position P&L tracking in real-time (56 tests)
 
 ### Phase 3: Backtesting & Validation
 - [ ] Update backtest harness for `TradingStrategy` trait
@@ -222,5 +232,8 @@ MIT
 ## Project Status
 
 **Current Version:** v0.2-dev (MARS pivot)
+
+**Phase 0 Complete:** Trend features, Kalman filter, regime detection primitives
+**Phase 2 Complete:** OCO manager, position manager, risk manager, OCO-backtest integration
 
 **Previous:** v0.1 explored pure market making but faced structural disadvantages (latency, adverse selection). v0.2 pivots to hybrid trend-following to compete on prediction accuracy rather than speed.
