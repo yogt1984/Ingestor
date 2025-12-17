@@ -42,6 +42,8 @@ pub use trading::{
     MarketMakerEngine, MMConfig, Quote,
     RiskManagedPaperTradingEngine, SimulatorConfig,
     RiskManager, RiskConfig,
+    OCOManager, OCOOrder, OCOStats, OCOTrigger, OCOError, Side, TriggerType,
+    PositionManager, PositionConfig, Position, PositionSide, PositionSizeRequest, PositionSizeResult, SizingMethod, PositionError, PortfolioStats,
     ParameterPreset, PresetStore,
 };
 
