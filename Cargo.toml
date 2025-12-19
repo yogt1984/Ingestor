@@ -27,4 +27,5 @@ num = "0.4"
 tempfile = "3.3.0"
 ratatui = "0.29"  # Upgraded from 0.26 to fix compact_str vulnerability
 crossterm = "0.28"
-clap = { version = "4", features = ["derive"] }  
+clap = { version = "4", features = ["derive"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }  

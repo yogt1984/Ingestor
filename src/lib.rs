@@ -14,6 +14,9 @@ pub mod features;
 pub mod trading;
 pub mod ui;
 
+// Framework module (persistent infrastructure)
+pub mod framework;
+
 // Analysis modules
 pub mod algorithms;
 pub mod regime;
@@ -48,3 +51,9 @@ pub use trading::{
 };
 
 pub use regime::{RegimeEngine, RegimeEngineConfig};
+
+pub use framework::{
+    ResearchState, MIDCEstimate, MIDCRegime, PersistenceStats,
+    PriceSignature, SignatureMagnitude, SignatureSpeed, SignatureDirection, SignatureConsistency,
+    ConditionalProbability, TradeableAssessment, RecommendedStrategy,
+};
