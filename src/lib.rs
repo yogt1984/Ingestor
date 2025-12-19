@@ -82,4 +82,6 @@ pub use research::{
     ResearchEngine, ResearchEngineFactory, ResearchEngineConfig,
     MIDCConfig, PersistenceConfig, ConditionalConfig, AssessmentThresholds,
     ResearchEngineStats, SignificantSignal, PricePoint, Outcome, ResearchError,
+    // MIDC Estimator (Task 1.1)
+    MIDCEstimator, MIDCEstimatorBuilder, MIDCEstimatorStats,
 };

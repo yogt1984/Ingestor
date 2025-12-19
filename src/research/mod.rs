@@ -125,6 +125,7 @@
 //! - Baltas & Kosowski (2013): "Momentum Strategies in Futures Markets"
 
 pub mod traits;
+pub mod midc_estimator;
 
 // Re-export core trait and types
 pub use traits::{
@@ -150,6 +151,9 @@ pub use traits::{
     // Error type
     ResearchError,
 };
+
+// Re-export MIDC estimator (Task 1.1)
+pub use midc_estimator::{MIDCEstimator, MIDCEstimatorBuilder, MIDCEstimatorStats};
 
 // Re-export framework types used by research module
 // These are the data structures that research produces/consumes
