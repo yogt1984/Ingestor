@@ -59,4 +59,6 @@ pub use framework::{
     ResearchStore, ResearchStoreConfig, AuditLogEntry, AuditOperation,
     ValidationResult, ValidationStageType, ValidationMetrics, ValidationThresholds,
     TradeResult, TradeDirection, ExitReason, ThresholdResult,
+    // TSMOM Framework (Moskowitz et al. 2012)
+    BarSize, TSMOMConfig, TSMOMSignal, TSMOMSignalType, TSMOMStats,
 };

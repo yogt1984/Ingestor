@@ -115,6 +115,46 @@ Binance WebSocket
 
 ---
 
+## Framework Module
+
+The `framework` module provides persistent infrastructure for research findings and validation:
+
+### Research State (Task 0.0)
+Captures all research findings at a point in time, including:
+- MIDC (Market Information Diffusion Coefficient) estimates
+- Persistence statistics for trend duration analysis
+- Conditional probability tables for price signatures
+- **TSMOM Framework**: Time-series momentum configuration, signals, and statistics
+
+### TSMOM Implementation
+
+Based on Moskowitz, Ooi, Pedersen (2012) with volatility targeting:
+
+```
+Signal Types:
+  - CumulativeReturn: m_t = Σ r_{t-i}, s_t = sign(m_t)
+  - MACrossover: s_t = sign(MA_S - MA_L)
+
+Volatility Targeting:
+  - EWMA: σ²_t = (1-λ) r²_{t-1} + λ σ²_{t-1}
+  - Position: w_t = clip(σ* / σ_t, 0, w_max)
+  - Final: pos_t = s_t × w_t
+```
+
+| Configuration | Description |
+|---------------|-------------|
+| `TSMOMConfig::default()` | 72-bar lookback, H1 bars, λ=0.97, 2x max position |
+| `TSMOMConfig::conservative()` | MA crossover, H4 bars, long-only, 1x max |
+| `TSMOMConfig::aggressive()` | 15m bars, λ=0.94, 3x max position |
+
+### Research Store (Task 0.1)
+SQLite-backed persistence layer with audit logging for all research state changes.
+
+### Validation Result (Task 0.2)
+Unified structure for validation outcomes across stages (paper trading, live simulation, etc.).
+
+---
+
 ## Development Roadmap
 
 ### Phase 0: Foundation
@@ -199,10 +239,18 @@ cargo run --release
 
 ### Momentum & Trend-Following
 
-- Jegadeesh, N. & Titman, S. (1993). Returns to Buying Winners and Selling Losers
-- Moskowitz, T., Ooi, Y.H. & Pedersen, L.H. (2012). Time Series Momentum
+- **Jegadeesh, N. & Titman, S. (1993). Returns to Buying Winners and Selling Losers**
+  *Journal of Finance. The foundational cross-sectional momentum paper.*
+
+- **Moskowitz, T., Ooi, Y.H. & Pedersen, L.H. (2012). Time Series Momentum**
+  *Journal of Financial Economics. The basis for our TSMOM implementation.*
+  - Core formula: `m_t = Σ r_{t-i}` (cumulative return over lookback)
+  - Signal: `s_t = sign(m_t)` (direction)
+  - Volatility targeting: `w_t = σ* / σ_t` (position sizing)
+
 - Asness, C., Moskowitz, T. & Pedersen, L.H. (2013). Value and Momentum Everywhere
 - Lemperiere, Y. et al. (2014). Two Centuries of Trend Following
+- Baltas, N. & Kosowski, R. (2013). Momentum Strategies in Futures Markets
 
 ### Market Making & Execution
 

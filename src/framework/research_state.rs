@@ -3,6 +3,32 @@
 //! Unified data structure that captures all research findings at a point in time.
 //! This is the core state that persists across application restarts and drives
 //! algorithm configuration.
+//!
+//! # Academic Foundation
+//!
+//! This module implements concepts from foundational academic research:
+//!
+//! ## Time-Series Momentum (TSMOM)
+//! - Moskowitz, Ooi, Pedersen (2012): "Time Series Momentum"
+//!   - An asset's own past return predicts its future return sign
+//!   - m_t = Σ r_{t-i} for i in 1..L (cumulative return over lookback)
+//!   - s_t = sign(m_t) ∈ {-1, +1} (direction signal)
+//!
+//! ## Volatility Targeting
+//! - Standard managed-futures approach to risk-stabilization
+//!   - σ²_t = (1-λ) r²_{t-1} + λ σ²_{t-1} (EWMA volatility)
+//!   - w_t = clip(σ* / σ_t, 0, w_max) (position sizing)
+//!   - pos_t = s_t × w_t (final position)
+//!
+//! ## Moving Average Crossover (Alternative Signal)
+//! - MA_S(t) = (1/S) Σ P_{t-i} for i in 0..S-1 (short MA)
+//! - MA_L(t) = (1/L) Σ P_{t-i} for i in 0..L-1 (long MA)
+//! - s_t = sign(MA_S - MA_L)
+//!
+//! References:
+//! - Jegadeesh & Titman (1993): "Returns to Buying Winners and Selling Losers"
+//! - Moskowitz, Ooi, Pedersen (2012): "Time Series Momentum"
+//! - Baltas & Kosowski (2013): "Momentum Strategies in Futures Markets"
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -508,7 +534,11 @@ impl TradeableAssessment {
 /// Recommended trading strategy
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RecommendedStrategy {
-    /// Momentum following strategy
+    /// Time-series momentum (TSMOM) - Moskowitz et al. (2012)
+    TSMOM,
+    /// Moving average crossover variant of TSMOM
+    MACrossover,
+    /// Legacy momentum following strategy
     Momentum,
     /// Market making strategy
     MarketMaking,
@@ -516,6 +546,424 @@ pub enum RecommendedStrategy {
     Hybrid,
     /// No trading recommended
     None,
+}
+
+// ============================================================================
+// TSMOM Framework - Moskowitz, Ooi, Pedersen (2012)
+// ============================================================================
+
+/// Bar size for TSMOM calculations
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum BarSize {
+    /// 15-minute bars
+    M15,
+    /// 1-hour bars
+    H1,
+    /// 4-hour bars
+    H4,
+    /// Daily bars
+    D1,
+}
+
+impl BarSize {
+    /// Get the duration in seconds
+    pub fn seconds(&self) -> u64 {
+        match self {
+            BarSize::M15 => 15 * 60,
+            BarSize::H1 => 60 * 60,
+            BarSize::H4 => 4 * 60 * 60,
+            BarSize::D1 => 24 * 60 * 60,
+        }
+    }
+
+    /// Get the number of bars per day
+    pub fn bars_per_day(&self) -> f64 {
+        86400.0 / self.seconds() as f64
+    }
+
+    /// Display name for the bar size
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            BarSize::M15 => "15m",
+            BarSize::H1 => "1h",
+            BarSize::H4 => "4h",
+            BarSize::D1 => "1d",
+        }
+    }
+}
+
+impl Default for BarSize {
+    fn default() -> Self {
+        BarSize::H1 // Crypto default: 1-hour bars
+    }
+}
+
+/// TSMOM signal type - Algorithm A vs Algorithm B
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum TSMOMSignalType {
+    /// Algorithm A: Cumulative return over lookback
+    /// m_t = Σ r_{t-i} for i in 1..L
+    /// s_t = sign(m_t)
+    CumulativeReturn,
+
+    /// Algorithm B: Moving average crossover
+    /// s_t = sign(MA_S - MA_L)
+    MACrossover,
+}
+
+impl Default for TSMOMSignalType {
+    fn default() -> Self {
+        TSMOMSignalType::CumulativeReturn
+    }
+}
+
+/// Configuration for TSMOM strategy
+///
+/// Based on Moskowitz, Ooi, Pedersen (2012) with volatility targeting
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TSMOMConfig {
+    /// Signal type (cumulative return vs MA crossover)
+    pub signal_type: TSMOMSignalType,
+
+    /// Bar size for calculations
+    pub bar_size: BarSize,
+
+    /// Momentum lookback period in bars (L)
+    /// Common values: 24, 72, 168 for hourly (1d, 3d, 7d)
+    pub lookback_bars: usize,
+
+    /// Short MA period for crossover signal (S)
+    /// Only used when signal_type = MACrossover
+    pub ma_short_bars: usize,
+
+    /// Long MA period for crossover signal (L)
+    /// Only used when signal_type = MACrossover
+    pub ma_long_bars: usize,
+
+    /// EWMA decay factor for volatility (λ)
+    /// Higher = slower decay. Typical: 0.94 - 0.99
+    pub ewma_lambda: f64,
+
+    /// Target volatility per bar period (σ*)
+    /// Position sizing: w_t = σ* / σ_t
+    pub target_volatility: f64,
+
+    /// Maximum position size (w_max)
+    /// Risk cap to prevent excessive leverage
+    pub max_position_size: f64,
+
+    /// Transaction cost per unit turnover in basis points
+    pub transaction_cost_bps: f64,
+
+    /// Minimum bars required before trading
+    pub warmup_bars: usize,
+
+    /// Long-only mode (no shorting)
+    pub long_only: bool,
+}
+
+impl Default for TSMOMConfig {
+    fn default() -> Self {
+        Self {
+            signal_type: TSMOMSignalType::CumulativeReturn,
+            bar_size: BarSize::H1,
+            lookback_bars: 72,      // 3 days in hourly bars
+            ma_short_bars: 24,      // 1 day for short MA
+            ma_long_bars: 168,      // 7 days for long MA
+            ewma_lambda: 0.97,      // Standard for hourly
+            target_volatility: 0.001, // 0.1% per bar
+            max_position_size: 2.0, // 2x max leverage
+            transaction_cost_bps: 5.0, // 5 bps round-trip
+            warmup_bars: 168,       // 7 days warmup
+            long_only: false,       // Allow shorting
+        }
+    }
+}
+
+impl TSMOMConfig {
+    /// Create a conservative configuration
+    pub fn conservative() -> Self {
+        Self {
+            signal_type: TSMOMSignalType::MACrossover,
+            bar_size: BarSize::H4,
+            lookback_bars: 42,      // 7 days in 4h bars
+            ma_short_bars: 6,       // 1 day
+            ma_long_bars: 42,       // 7 days
+            ewma_lambda: 0.98,
+            target_volatility: 0.0005, // 0.05% per bar
+            max_position_size: 1.0,
+            transaction_cost_bps: 10.0,
+            warmup_bars: 84,        // 14 days
+            long_only: true,
+        }
+    }
+
+    /// Create an aggressive configuration
+    pub fn aggressive() -> Self {
+        Self {
+            signal_type: TSMOMSignalType::CumulativeReturn,
+            bar_size: BarSize::M15,
+            lookback_bars: 96,      // 1 day in 15m bars
+            ma_short_bars: 16,      // 4 hours
+            ma_long_bars: 96,       // 1 day
+            ewma_lambda: 0.94,
+            target_volatility: 0.002, // 0.2% per bar
+            max_position_size: 3.0,
+            transaction_cost_bps: 3.0,
+            warmup_bars: 192,       // 2 days
+            long_only: false,
+        }
+    }
+
+    /// Validate the configuration
+    pub fn validate(&self) -> Result<(), String> {
+        if self.lookback_bars == 0 {
+            return Err("lookback_bars must be > 0".to_string());
+        }
+        if self.ewma_lambda <= 0.0 || self.ewma_lambda >= 1.0 {
+            return Err("ewma_lambda must be in (0, 1)".to_string());
+        }
+        if self.target_volatility <= 0.0 {
+            return Err("target_volatility must be > 0".to_string());
+        }
+        if self.max_position_size <= 0.0 {
+            return Err("max_position_size must be > 0".to_string());
+        }
+        if self.signal_type == TSMOMSignalType::MACrossover {
+            if self.ma_short_bars >= self.ma_long_bars {
+                return Err("ma_short_bars must be < ma_long_bars".to_string());
+            }
+            if self.ma_short_bars == 0 || self.ma_long_bars == 0 {
+                return Err("MA periods must be > 0".to_string());
+            }
+        }
+        Ok(())
+    }
+
+    /// Get lookback period in hours
+    pub fn lookback_hours(&self) -> f64 {
+        self.lookback_bars as f64 * self.bar_size.seconds() as f64 / 3600.0
+    }
+
+    /// Get lookback period in days
+    pub fn lookback_days(&self) -> f64 {
+        self.lookback_hours() / 24.0
+    }
+}
+
+/// Real-time TSMOM signal state
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TSMOMSignal {
+    /// Current momentum value (cumulative return or MA diff)
+    pub momentum: f64,
+
+    /// Direction signal: +1 (long), -1 (short), 0 (flat)
+    pub direction: i8,
+
+    /// Current EWMA volatility estimate
+    pub ewma_volatility: f64,
+
+    /// Volatility-scaled position size before capping
+    pub raw_position_size: f64,
+
+    /// Final position size after applying max cap
+    pub position_size: f64,
+
+    /// Number of bars processed
+    pub bars_processed: usize,
+
+    /// Is the signal valid (past warmup period)?
+    pub is_valid: bool,
+
+    /// Timestamp of last update
+    pub updated_at: DateTime<Utc>,
+
+    /// Last price used
+    pub last_price: f64,
+
+    /// Log return of last bar
+    pub last_return: f64,
+}
+
+impl Default for TSMOMSignal {
+    fn default() -> Self {
+        Self {
+            momentum: 0.0,
+            direction: 0,
+            ewma_volatility: 0.0,
+            raw_position_size: 0.0,
+            position_size: 0.0,
+            bars_processed: 0,
+            is_valid: false,
+            updated_at: Utc::now(),
+            last_price: 0.0,
+            last_return: 0.0,
+        }
+    }
+}
+
+impl TSMOMSignal {
+    /// Create a new signal with initial values
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Check if signal suggests going long
+    pub fn is_long(&self) -> bool {
+        self.is_valid && self.direction > 0
+    }
+
+    /// Check if signal suggests going short
+    pub fn is_short(&self) -> bool {
+        self.is_valid && self.direction < 0
+    }
+
+    /// Check if signal suggests being flat
+    pub fn is_flat(&self) -> bool {
+        !self.is_valid || self.direction == 0
+    }
+
+    /// Get the signed position (-1.0 to +1.0 * max_size)
+    pub fn signed_position(&self) -> f64 {
+        self.direction as f64 * self.position_size
+    }
+
+    /// Compute the direction from momentum
+    pub fn compute_direction(momentum: f64, long_only: bool) -> i8 {
+        if momentum > 0.0 {
+            1
+        } else if momentum < 0.0 && !long_only {
+            -1
+        } else {
+            0
+        }
+    }
+
+    /// Compute position size with volatility targeting
+    pub fn compute_position_size(
+        target_vol: f64,
+        current_vol: f64,
+        max_size: f64,
+    ) -> f64 {
+        if current_vol <= 0.0 || !current_vol.is_finite() {
+            return 0.0;
+        }
+        let raw = target_vol / current_vol;
+        raw.min(max_size).max(0.0)
+    }
+
+    /// Update EWMA volatility with a new return
+    /// σ²_t = (1-λ) r²_{t-1} + λ σ²_{t-1}
+    pub fn update_ewma_volatility(current_var: f64, new_return: f64, lambda: f64) -> f64 {
+        let new_var = (1.0 - lambda) * new_return * new_return + lambda * current_var;
+        new_var.sqrt()
+    }
+}
+
+/// TSMOM backtest statistics
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TSMOMStats {
+    /// Total number of bars processed
+    pub total_bars: usize,
+
+    /// Number of long signals
+    pub long_signals: usize,
+
+    /// Number of short signals
+    pub short_signals: usize,
+
+    /// Number of flat signals
+    pub flat_signals: usize,
+
+    /// Total turnover (sum of |pos_t - pos_{t-1}|)
+    pub total_turnover: f64,
+
+    /// Average position size when in market
+    pub avg_position_size: f64,
+
+    /// Average absolute momentum when signal triggered
+    pub avg_momentum_magnitude: f64,
+
+    /// Average volatility estimate
+    pub avg_volatility: f64,
+
+    /// Annualized Sharpe ratio (before costs)
+    pub sharpe_gross: f64,
+
+    /// Annualized Sharpe ratio (after costs)
+    pub sharpe_net: f64,
+
+    /// Total return (before costs)
+    pub total_return_gross: f64,
+
+    /// Total return (after costs)
+    pub total_return_net: f64,
+
+    /// Maximum drawdown
+    pub max_drawdown: f64,
+
+    /// Timestamp of stats computation
+    pub computed_at: DateTime<Utc>,
+}
+
+impl Default for TSMOMStats {
+    fn default() -> Self {
+        Self {
+            total_bars: 0,
+            long_signals: 0,
+            short_signals: 0,
+            flat_signals: 0,
+            total_turnover: 0.0,
+            avg_position_size: 0.0,
+            avg_momentum_magnitude: 0.0,
+            avg_volatility: 0.0,
+            sharpe_gross: 0.0,
+            sharpe_net: 0.0,
+            total_return_gross: 0.0,
+            total_return_net: 0.0,
+            max_drawdown: 0.0,
+            computed_at: Utc::now(),
+        }
+    }
+}
+
+impl TSMOMStats {
+    /// Get the fraction of time in long positions
+    pub fn long_fraction(&self) -> f64 {
+        if self.total_bars == 0 {
+            return 0.0;
+        }
+        self.long_signals as f64 / self.total_bars as f64
+    }
+
+    /// Get the fraction of time in short positions
+    pub fn short_fraction(&self) -> f64 {
+        if self.total_bars == 0 {
+            return 0.0;
+        }
+        self.short_signals as f64 / self.total_bars as f64
+    }
+
+    /// Get the fraction of time flat
+    pub fn flat_fraction(&self) -> f64 {
+        if self.total_bars == 0 {
+            return 0.0;
+        }
+        self.flat_signals as f64 / self.total_bars as f64
+    }
+
+    /// Average turnover per bar
+    pub fn avg_turnover_per_bar(&self) -> f64 {
+        if self.total_bars == 0 {
+            return 0.0;
+        }
+        self.total_turnover / self.total_bars as f64
+    }
+
+    /// Check if strategy is viable (positive net Sharpe)
+    pub fn is_viable(&self) -> bool {
+        self.sharpe_net > 0.0 && self.total_bars >= 100
+    }
 }
 
 /// Complete research state at a point in time
@@ -556,6 +1004,22 @@ pub struct ResearchState {
 
     /// Version of the research engine that created this state
     pub engine_version: String,
+
+    // ============================================================================
+    // TSMOM Framework Fields
+    // ============================================================================
+
+    /// TSMOM configuration used for this research
+    #[serde(default)]
+    pub tsmom_config: Option<TSMOMConfig>,
+
+    /// Current TSMOM signal state
+    #[serde(default)]
+    pub tsmom_signal: Option<TSMOMSignal>,
+
+    /// TSMOM backtest statistics
+    #[serde(default)]
+    pub tsmom_stats: Option<TSMOMStats>,
 }
 
 impl Default for ResearchState {
@@ -573,6 +1037,9 @@ impl Default for ResearchState {
             data_end: None,
             snapshots_processed: 0,
             engine_version: env!("CARGO_PKG_VERSION").to_string(),
+            tsmom_config: None,
+            tsmom_signal: None,
+            tsmom_stats: None,
         }
     }
 }
@@ -701,6 +1168,65 @@ impl ResearchState {
 
         self.snapshots_processed += other.snapshots_processed;
         self.timestamp = Utc::now();
+
+        // Merge TSMOM data (take other's if present and newer)
+        if other.tsmom_config.is_some() {
+            self.tsmom_config = other.tsmom_config.clone();
+        }
+        if let Some(ref other_signal) = other.tsmom_signal {
+            if self.tsmom_signal.is_none() || other_signal.updated_at > self.tsmom_signal.as_ref().unwrap().updated_at {
+                self.tsmom_signal = other.tsmom_signal.clone();
+            }
+        }
+        if let Some(ref other_stats) = other.tsmom_stats {
+            if self.tsmom_stats.is_none() || other_stats.computed_at > self.tsmom_stats.as_ref().unwrap().computed_at {
+                self.tsmom_stats = other.tsmom_stats.clone();
+            }
+        }
+    }
+
+    // ========================================================================
+    // TSMOM Methods
+    // ========================================================================
+
+    /// Initialize TSMOM with a configuration
+    pub fn init_tsmom(&mut self, config: TSMOMConfig) {
+        self.tsmom_config = Some(config);
+        self.tsmom_signal = Some(TSMOMSignal::default());
+        self.tsmom_stats = Some(TSMOMStats::default());
+        self.timestamp = Utc::now();
+    }
+
+    /// Update TSMOM signal
+    pub fn update_tsmom_signal(&mut self, signal: TSMOMSignal) {
+        self.tsmom_signal = Some(signal);
+        self.timestamp = Utc::now();
+    }
+
+    /// Update TSMOM stats
+    pub fn update_tsmom_stats(&mut self, stats: TSMOMStats) {
+        self.tsmom_stats = Some(stats);
+        self.timestamp = Utc::now();
+    }
+
+    /// Check if TSMOM is initialized
+    pub fn has_tsmom(&self) -> bool {
+        self.tsmom_config.is_some()
+    }
+
+    /// Check if TSMOM signal is valid and actionable
+    pub fn tsmom_actionable(&self) -> bool {
+        self.tsmom_signal.as_ref().map_or(false, |s| s.is_valid)
+    }
+
+    /// Get the current TSMOM position recommendation
+    pub fn tsmom_position(&self) -> f64 {
+        self.tsmom_signal.as_ref().map_or(0.0, |s| s.signed_position())
+    }
+
+    /// Check if TSMOM strategy is viable based on stats
+    pub fn tsmom_viable(&self) -> bool {
+        self.tsmom_stats.as_ref().map_or(false, |s| s.is_viable())
     }
 }
 
@@ -1608,5 +2134,735 @@ mod tests {
         let json = serde_json::to_string(&state).unwrap();
         let deserialized: ResearchState = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.conditional_table.len(), 90);
+    }
+
+    // ============================================================================
+    // TSMOM Framework Tests - Skeptical / Edge Case Testing
+    // ============================================================================
+    //
+    // References:
+    // - Moskowitz, Ooi, Pedersen (2012): "Time Series Momentum"
+    // - Jegadeesh & Titman (1993): "Returns to Buying Winners and Selling Losers"
+    //
+    // These tests deliberately check edge cases and pathological inputs to ensure
+    // the implementation is robust against misuse and numerical issues.
+    // ============================================================================
+
+    // ==================== BarSize Tests ====================
+
+    #[test]
+    fn test_bar_size_seconds() {
+        assert_eq!(BarSize::M15.seconds(), 15 * 60);
+        assert_eq!(BarSize::H1.seconds(), 60 * 60);
+        assert_eq!(BarSize::H4.seconds(), 4 * 60 * 60);
+        assert_eq!(BarSize::D1.seconds(), 24 * 60 * 60);
+    }
+
+    #[test]
+    fn test_bar_size_bars_per_day() {
+        assert!((BarSize::M15.bars_per_day() - 96.0).abs() < 1e-10);
+        assert!((BarSize::H1.bars_per_day() - 24.0).abs() < 1e-10);
+        assert!((BarSize::H4.bars_per_day() - 6.0).abs() < 1e-10);
+        assert!((BarSize::D1.bars_per_day() - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_bar_size_display_name() {
+        assert_eq!(BarSize::M15.display_name(), "15m");
+        assert_eq!(BarSize::H1.display_name(), "1h");
+        assert_eq!(BarSize::H4.display_name(), "4h");
+        assert_eq!(BarSize::D1.display_name(), "1d");
+    }
+
+    #[test]
+    fn test_bar_size_default() {
+        assert_eq!(BarSize::default(), BarSize::H1);
+    }
+
+    // ==================== TSMOMConfig Tests ====================
+
+    #[test]
+    fn test_tsmom_config_default() {
+        let config = TSMOMConfig::default();
+
+        assert_eq!(config.signal_type, TSMOMSignalType::CumulativeReturn);
+        assert_eq!(config.bar_size, BarSize::H1);
+        assert_eq!(config.lookback_bars, 72);
+        assert!((config.ewma_lambda - 0.97).abs() < 1e-10);
+        assert!((config.target_volatility - 0.001).abs() < 1e-10);
+        assert!((config.max_position_size - 2.0).abs() < 1e-10);
+        assert!(!config.long_only);
+    }
+
+    #[test]
+    fn test_tsmom_config_conservative() {
+        let config = TSMOMConfig::conservative();
+
+        assert_eq!(config.signal_type, TSMOMSignalType::MACrossover);
+        assert!(config.long_only);
+        assert!(config.max_position_size <= 1.0);
+        assert!(config.ewma_lambda > 0.97); // More stable volatility
+    }
+
+    #[test]
+    fn test_tsmom_config_aggressive() {
+        let config = TSMOMConfig::aggressive();
+
+        assert_eq!(config.signal_type, TSMOMSignalType::CumulativeReturn);
+        assert!(!config.long_only);
+        assert!(config.max_position_size > 2.0);
+        assert!(config.ewma_lambda < 0.97); // More responsive volatility
+    }
+
+    #[test]
+    fn test_tsmom_config_validate_ok() {
+        let config = TSMOMConfig::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_tsmom_config_validate_zero_lookback() {
+        let mut config = TSMOMConfig::default();
+        config.lookback_bars = 0;
+        assert!(config.validate().is_err());
+        assert!(config.validate().unwrap_err().contains("lookback_bars"));
+    }
+
+    #[test]
+    fn test_tsmom_config_validate_lambda_bounds() {
+        let mut config = TSMOMConfig::default();
+
+        // λ = 0 is invalid
+        config.ewma_lambda = 0.0;
+        assert!(config.validate().is_err());
+
+        // λ = 1 is invalid
+        config.ewma_lambda = 1.0;
+        assert!(config.validate().is_err());
+
+        // λ < 0 is invalid
+        config.ewma_lambda = -0.1;
+        assert!(config.validate().is_err());
+
+        // λ > 1 is invalid
+        config.ewma_lambda = 1.1;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_tsmom_config_validate_target_volatility() {
+        let mut config = TSMOMConfig::default();
+
+        config.target_volatility = 0.0;
+        assert!(config.validate().is_err());
+
+        config.target_volatility = -0.001;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_tsmom_config_validate_max_position_size() {
+        let mut config = TSMOMConfig::default();
+
+        config.max_position_size = 0.0;
+        assert!(config.validate().is_err());
+
+        config.max_position_size = -1.0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_tsmom_config_validate_ma_crossover_periods() {
+        let mut config = TSMOMConfig::default();
+        config.signal_type = TSMOMSignalType::MACrossover;
+
+        // Short >= Long is invalid
+        config.ma_short_bars = 50;
+        config.ma_long_bars = 50;
+        assert!(config.validate().is_err());
+
+        config.ma_short_bars = 100;
+        config.ma_long_bars = 50;
+        assert!(config.validate().is_err());
+
+        // Zero periods are invalid
+        config.ma_short_bars = 0;
+        config.ma_long_bars = 100;
+        assert!(config.validate().is_err());
+
+        config.ma_short_bars = 10;
+        config.ma_long_bars = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_tsmom_config_lookback_hours() {
+        let mut config = TSMOMConfig::default();
+
+        config.bar_size = BarSize::H1;
+        config.lookback_bars = 24;
+        assert!((config.lookback_hours() - 24.0).abs() < 1e-10);
+
+        config.bar_size = BarSize::H4;
+        config.lookback_bars = 6;
+        assert!((config.lookback_hours() - 24.0).abs() < 1e-10);
+
+        config.bar_size = BarSize::M15;
+        config.lookback_bars = 96;
+        assert!((config.lookback_hours() - 24.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_tsmom_config_lookback_days() {
+        let config = TSMOMConfig::default(); // 72 hourly bars = 3 days
+        assert!((config.lookback_days() - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_tsmom_config_serialization() {
+        let config = TSMOMConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: TSMOMConfig = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.signal_type, config.signal_type);
+        assert_eq!(deserialized.bar_size, config.bar_size);
+        assert_eq!(deserialized.lookback_bars, config.lookback_bars);
+        assert!((deserialized.ewma_lambda - config.ewma_lambda).abs() < 1e-10);
+    }
+
+    // ==================== TSMOMSignal Tests ====================
+
+    #[test]
+    fn test_tsmom_signal_default() {
+        let signal = TSMOMSignal::default();
+
+        assert!((signal.momentum - 0.0).abs() < 1e-10);
+        assert_eq!(signal.direction, 0);
+        assert!(!signal.is_valid);
+        assert_eq!(signal.bars_processed, 0);
+    }
+
+    #[test]
+    fn test_tsmom_signal_new() {
+        let signal = TSMOMSignal::new();
+        assert_eq!(signal.direction, 0);
+        assert!(!signal.is_valid);
+    }
+
+    #[test]
+    fn test_tsmom_signal_is_long() {
+        let mut signal = TSMOMSignal::default();
+
+        // Invalid signal - not long
+        signal.direction = 1;
+        signal.is_valid = false;
+        assert!(!signal.is_long());
+
+        // Valid long
+        signal.is_valid = true;
+        assert!(signal.is_long());
+
+        // Valid but flat
+        signal.direction = 0;
+        assert!(!signal.is_long());
+
+        // Valid but short
+        signal.direction = -1;
+        assert!(!signal.is_long());
+    }
+
+    #[test]
+    fn test_tsmom_signal_is_short() {
+        let mut signal = TSMOMSignal::default();
+
+        // Invalid signal - not short
+        signal.direction = -1;
+        signal.is_valid = false;
+        assert!(!signal.is_short());
+
+        // Valid short
+        signal.is_valid = true;
+        assert!(signal.is_short());
+
+        // Valid but long
+        signal.direction = 1;
+        assert!(!signal.is_short());
+    }
+
+    #[test]
+    fn test_tsmom_signal_is_flat() {
+        let mut signal = TSMOMSignal::default();
+
+        // Invalid is flat
+        assert!(signal.is_flat());
+
+        // Valid but direction = 0
+        signal.is_valid = true;
+        signal.direction = 0;
+        assert!(signal.is_flat());
+
+        // Valid and has direction
+        signal.direction = 1;
+        assert!(!signal.is_flat());
+    }
+
+    #[test]
+    fn test_tsmom_signal_signed_position() {
+        let mut signal = TSMOMSignal::default();
+        signal.direction = 1;
+        signal.position_size = 1.5;
+
+        assert!((signal.signed_position() - 1.5).abs() < 1e-10);
+
+        signal.direction = -1;
+        assert!((signal.signed_position() - (-1.5)).abs() < 1e-10);
+
+        signal.direction = 0;
+        assert!((signal.signed_position() - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_tsmom_signal_compute_direction() {
+        // Positive momentum -> long
+        assert_eq!(TSMOMSignal::compute_direction(0.01, false), 1);
+
+        // Negative momentum -> short (when shorting allowed)
+        assert_eq!(TSMOMSignal::compute_direction(-0.01, false), -1);
+
+        // Negative momentum -> flat (when long only)
+        assert_eq!(TSMOMSignal::compute_direction(-0.01, true), 0);
+
+        // Zero momentum -> flat
+        assert_eq!(TSMOMSignal::compute_direction(0.0, false), 0);
+    }
+
+    #[test]
+    fn test_tsmom_signal_compute_position_size() {
+        // Normal case: σ*/σ_t = 0.001/0.002 = 0.5
+        let size = TSMOMSignal::compute_position_size(0.001, 0.002, 2.0);
+        assert!((size - 0.5).abs() < 1e-10);
+
+        // Position capped at max
+        let size = TSMOMSignal::compute_position_size(0.01, 0.001, 2.0);
+        assert!((size - 2.0).abs() < 1e-10);
+
+        // Zero volatility -> 0 position (safety)
+        let size = TSMOMSignal::compute_position_size(0.001, 0.0, 2.0);
+        assert!((size - 0.0).abs() < 1e-10);
+
+        // Negative volatility -> 0 position (safety)
+        let size = TSMOMSignal::compute_position_size(0.001, -0.001, 2.0);
+        assert!((size - 0.0).abs() < 1e-10);
+
+        // NaN volatility -> 0 position (safety)
+        let size = TSMOMSignal::compute_position_size(0.001, f64::NAN, 2.0);
+        assert!((size - 0.0).abs() < 1e-10);
+
+        // Infinite volatility -> 0 position (vol too high)
+        let size = TSMOMSignal::compute_position_size(0.001, f64::INFINITY, 2.0);
+        assert!((size - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_tsmom_signal_update_ewma_volatility() {
+        // EWMA: σ²_t = (1-λ) r²_{t-1} + λ σ²_{t-1}
+        // With λ = 0.94, current_var = 0.0001, new_return = 0.01
+        // new_var = 0.06 * 0.0001 + 0.94 * 0.0001 = 0.0001 (if r=0.01)
+
+        let current_var = 0.0001; // σ = 0.01 = 1%
+        let new_return = 0.02;    // 2% return
+        let lambda = 0.94;
+
+        let new_vol = TSMOMSignal::update_ewma_volatility(current_var, new_return, lambda);
+
+        // new_var = 0.06 * 0.0004 + 0.94 * 0.0001 = 0.000024 + 0.000094 = 0.000118
+        // new_vol = sqrt(0.000118) ≈ 0.01086
+        let expected_var = (1.0 - lambda) * new_return * new_return + lambda * current_var;
+        let expected_vol = expected_var.sqrt();
+
+        assert!((new_vol - expected_vol).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_tsmom_signal_ewma_with_zero_prior() {
+        // Starting from zero variance (cold start)
+        let current_var = 0.0;
+        let new_return = 0.01;
+        let lambda = 0.94;
+
+        let new_vol = TSMOMSignal::update_ewma_volatility(current_var, new_return, lambda);
+
+        // new_var = 0.06 * 0.0001 + 0 = 0.000006
+        // new_vol = sqrt(0.000006) ≈ 0.00245
+        let expected_var = (1.0 - lambda) * new_return * new_return;
+        let expected_vol = expected_var.sqrt();
+
+        assert!((new_vol - expected_vol).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_tsmom_signal_serialization() {
+        let mut signal = TSMOMSignal::default();
+        signal.momentum = 0.05;
+        signal.direction = 1;
+        signal.ewma_volatility = 0.01;
+        signal.position_size = 1.5;
+        signal.bars_processed = 100;
+        signal.is_valid = true;
+
+        let json = serde_json::to_string(&signal).unwrap();
+        let deserialized: TSMOMSignal = serde_json::from_str(&json).unwrap();
+
+        assert!((deserialized.momentum - signal.momentum).abs() < 1e-10);
+        assert_eq!(deserialized.direction, signal.direction);
+        assert_eq!(deserialized.is_valid, signal.is_valid);
+    }
+
+    // ==================== TSMOMStats Tests ====================
+
+    #[test]
+    fn test_tsmom_stats_default() {
+        let stats = TSMOMStats::default();
+
+        assert_eq!(stats.total_bars, 0);
+        assert_eq!(stats.long_signals, 0);
+        assert_eq!(stats.short_signals, 0);
+        assert!((stats.sharpe_gross - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_tsmom_stats_fractions() {
+        let mut stats = TSMOMStats::default();
+        stats.total_bars = 100;
+        stats.long_signals = 40;
+        stats.short_signals = 30;
+        stats.flat_signals = 30;
+
+        assert!((stats.long_fraction() - 0.4).abs() < 1e-10);
+        assert!((stats.short_fraction() - 0.3).abs() < 1e-10);
+        assert!((stats.flat_fraction() - 0.3).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_tsmom_stats_fractions_empty() {
+        let stats = TSMOMStats::default();
+
+        assert!((stats.long_fraction() - 0.0).abs() < 1e-10);
+        assert!((stats.short_fraction() - 0.0).abs() < 1e-10);
+        assert!((stats.flat_fraction() - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_tsmom_stats_avg_turnover() {
+        let mut stats = TSMOMStats::default();
+        stats.total_bars = 100;
+        stats.total_turnover = 50.0;
+
+        assert!((stats.avg_turnover_per_bar() - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_tsmom_stats_avg_turnover_empty() {
+        let stats = TSMOMStats::default();
+        assert!((stats.avg_turnover_per_bar() - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_tsmom_stats_is_viable() {
+        let mut stats = TSMOMStats::default();
+
+        // Not viable: no data
+        assert!(!stats.is_viable());
+
+        // Not viable: enough data but negative Sharpe
+        stats.total_bars = 200;
+        stats.sharpe_net = -0.5;
+        assert!(!stats.is_viable());
+
+        // Viable: enough data and positive Sharpe
+        stats.sharpe_net = 0.5;
+        assert!(stats.is_viable());
+
+        // Not viable: positive Sharpe but not enough data
+        stats.total_bars = 50;
+        assert!(!stats.is_viable());
+    }
+
+    #[test]
+    fn test_tsmom_stats_serialization() {
+        let mut stats = TSMOMStats::default();
+        stats.total_bars = 1000;
+        stats.long_signals = 400;
+        stats.sharpe_gross = 1.5;
+        stats.sharpe_net = 1.2;
+        stats.max_drawdown = 0.15;
+
+        let json = serde_json::to_string(&stats).unwrap();
+        let deserialized: TSMOMStats = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.total_bars, stats.total_bars);
+        assert!((deserialized.sharpe_gross - stats.sharpe_gross).abs() < 1e-10);
+    }
+
+    // ==================== ResearchState TSMOM Integration Tests ====================
+
+    #[test]
+    fn test_research_state_init_tsmom() {
+        let mut state = ResearchState::new("BTCUSDT");
+
+        assert!(!state.has_tsmom());
+
+        state.init_tsmom(TSMOMConfig::default());
+
+        assert!(state.has_tsmom());
+        assert!(state.tsmom_config.is_some());
+        assert!(state.tsmom_signal.is_some());
+        assert!(state.tsmom_stats.is_some());
+    }
+
+    #[test]
+    fn test_research_state_tsmom_actionable() {
+        let mut state = ResearchState::new("BTCUSDT");
+
+        // No TSMOM -> not actionable
+        assert!(!state.tsmom_actionable());
+
+        // TSMOM init but signal invalid -> not actionable
+        state.init_tsmom(TSMOMConfig::default());
+        assert!(!state.tsmom_actionable());
+
+        // Signal valid -> actionable
+        let mut signal = TSMOMSignal::default();
+        signal.is_valid = true;
+        signal.direction = 1;
+        state.update_tsmom_signal(signal);
+        assert!(state.tsmom_actionable());
+    }
+
+    #[test]
+    fn test_research_state_tsmom_position() {
+        let mut state = ResearchState::new("BTCUSDT");
+
+        // No TSMOM -> 0 position
+        assert!((state.tsmom_position() - 0.0).abs() < 1e-10);
+
+        state.init_tsmom(TSMOMConfig::default());
+
+        let mut signal = TSMOMSignal::default();
+        signal.direction = 1;
+        signal.position_size = 1.5;
+        signal.is_valid = true;
+        state.update_tsmom_signal(signal);
+
+        assert!((state.tsmom_position() - 1.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_research_state_tsmom_viable() {
+        let mut state = ResearchState::new("BTCUSDT");
+
+        // No TSMOM -> not viable
+        assert!(!state.tsmom_viable());
+
+        state.init_tsmom(TSMOMConfig::default());
+
+        // Empty stats -> not viable
+        assert!(!state.tsmom_viable());
+
+        // Good stats -> viable
+        let mut stats = TSMOMStats::default();
+        stats.total_bars = 500;
+        stats.sharpe_net = 1.0;
+        state.update_tsmom_stats(stats);
+
+        assert!(state.tsmom_viable());
+    }
+
+    #[test]
+    fn test_research_state_merge_tsmom() {
+        let mut state1 = ResearchState::new("BTCUSDT");
+        let mut state2 = ResearchState::new("BTCUSDT");
+
+        // state2 has TSMOM
+        state2.init_tsmom(TSMOMConfig::aggressive());
+
+        let mut signal = TSMOMSignal::default();
+        signal.direction = -1;
+        signal.is_valid = true;
+        state2.update_tsmom_signal(signal);
+
+        state1.merge(&state2);
+
+        // state1 should now have TSMOM data
+        assert!(state1.has_tsmom());
+        assert!(state1.tsmom_actionable());
+        assert_eq!(state1.tsmom_config.unwrap().signal_type, TSMOMSignalType::CumulativeReturn);
+    }
+
+    #[test]
+    fn test_research_state_tsmom_serialization_full() {
+        let mut state = ResearchState::new("BTCUSDT");
+        state.init_tsmom(TSMOMConfig::default());
+
+        let mut signal = TSMOMSignal::default();
+        signal.momentum = 0.02;
+        signal.direction = 1;
+        signal.ewma_volatility = 0.01;
+        signal.position_size = 1.0;
+        signal.is_valid = true;
+        signal.bars_processed = 200;
+        state.update_tsmom_signal(signal);
+
+        let mut stats = TSMOMStats::default();
+        stats.total_bars = 500;
+        stats.sharpe_net = 0.8;
+        state.update_tsmom_stats(stats);
+
+        let json = serde_json::to_string(&state).unwrap();
+        let deserialized: ResearchState = serde_json::from_str(&json).unwrap();
+
+        assert!(deserialized.has_tsmom());
+        assert!(deserialized.tsmom_actionable());
+        assert!((deserialized.tsmom_position() - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_research_state_backward_compatible_deserialization() {
+        // Simulate old JSON without TSMOM fields
+        let old_json = r#"{
+            "id": "test-id",
+            "symbol": "BTCUSDT",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "midc": {
+                "kappa": 0.0,
+                "tau_half_seconds": 0.0,
+                "rho_0": 0.0,
+                "r_squared": 0.0,
+                "sample_size": 0,
+                "confidence": 0.0,
+                "computed_at": "2025-01-01T00:00:00Z"
+            },
+            "persistence": {
+                "mean_duration_seconds": 0.0,
+                "median_duration_seconds": 0.0,
+                "std_duration_seconds": 0.0,
+                "percentile_25": 0.0,
+                "percentile_75": 0.0,
+                "sample_count": 0,
+                "updated_at": "2025-01-01T00:00:00Z"
+            },
+            "conditional_table": {},
+            "entropy": 0.0,
+            "assessment": {
+                "midc_ok": false,
+                "entropy_ok": false,
+                "persistence_ok": false,
+                "signals_ok": false,
+                "is_tradeable": false,
+                "recommended_strategy": "None",
+                "position_scale": 0.0,
+                "reasoning": "test",
+                "assessed_at": "2025-01-01T00:00:00Z"
+            },
+            "data_start": null,
+            "data_end": null,
+            "snapshots_processed": 0,
+            "engine_version": "0.1.0"
+        }"#;
+
+        // Should deserialize without error, with TSMOM fields as None
+        let state: ResearchState = serde_json::from_str(old_json).unwrap();
+
+        assert_eq!(state.symbol, "BTCUSDT");
+        assert!(!state.has_tsmom());
+        assert!(state.tsmom_config.is_none());
+        assert!(state.tsmom_signal.is_none());
+        assert!(state.tsmom_stats.is_none());
+    }
+
+    // ==================== Skeptical Edge Case Tests ====================
+
+    #[test]
+    fn test_tsmom_signal_extreme_momentum() {
+        // Very large momentum should still produce valid direction
+        assert_eq!(TSMOMSignal::compute_direction(1e10, false), 1);
+        assert_eq!(TSMOMSignal::compute_direction(-1e10, false), -1);
+
+        // Very small (but non-zero) momentum
+        assert_eq!(TSMOMSignal::compute_direction(1e-100, false), 1);
+        assert_eq!(TSMOMSignal::compute_direction(-1e-100, false), -1);
+    }
+
+    #[test]
+    fn test_tsmom_position_size_very_low_vol() {
+        // Very low volatility would cause huge position - should be capped
+        let size = TSMOMSignal::compute_position_size(0.001, 1e-10, 3.0);
+        assert!((size - 3.0).abs() < 1e-10); // Capped at max
+    }
+
+    #[test]
+    fn test_tsmom_position_size_very_high_vol() {
+        // Very high volatility -> tiny position
+        let size = TSMOMSignal::compute_position_size(0.001, 10.0, 3.0);
+        assert!(size < 0.001); // Very small position
+    }
+
+    #[test]
+    fn test_tsmom_ewma_stability_with_outlier() {
+        // Simulate an outlier return
+        let current_var = 0.0001; // Normal volatility
+        let outlier_return = 0.5;  // 50% return (extreme outlier)
+        let lambda = 0.94;
+
+        let new_vol = TSMOMSignal::update_ewma_volatility(current_var, outlier_return, lambda);
+
+        // With λ = 0.94, the outlier only gets 6% weight
+        // new_var = 0.06 * 0.25 + 0.94 * 0.0001 = 0.015 + 0.000094 ≈ 0.015
+        // new_vol ≈ 0.122
+        assert!(new_vol < 0.15); // Should be dampened by EWMA
+        assert!(new_vol > 0.1);  // But still significantly elevated
+    }
+
+    #[test]
+    fn test_tsmom_config_edge_lambda_values() {
+        let mut config = TSMOMConfig::default();
+
+        // Lambda very close to 0 (very reactive) - valid but extreme
+        config.ewma_lambda = 0.01;
+        assert!(config.validate().is_ok());
+
+        // Lambda very close to 1 (very slow) - valid but extreme
+        config.ewma_lambda = 0.9999;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_tsmom_stats_extreme_sharpe() {
+        let mut stats = TSMOMStats::default();
+        stats.total_bars = 1000;
+
+        // Extremely high Sharpe (suspiciously good)
+        stats.sharpe_net = 10.0;
+        assert!(stats.is_viable()); // Still technically viable
+
+        // Extremely negative Sharpe
+        stats.sharpe_net = -10.0;
+        assert!(!stats.is_viable());
+    }
+
+    #[test]
+    fn test_recommended_strategy_includes_tsmom() {
+        // Verify TSMOM and MACrossover are valid strategies
+        let tsmom = RecommendedStrategy::TSMOM;
+        let ma = RecommendedStrategy::MACrossover;
+
+        // Serialization roundtrip
+        let json = serde_json::to_string(&tsmom).unwrap();
+        let deserialized: RecommendedStrategy = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, RecommendedStrategy::TSMOM);
+
+        let json = serde_json::to_string(&ma).unwrap();
+        let deserialized: RecommendedStrategy = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, RecommendedStrategy::MACrossover);
     }
 }

@@ -16,6 +16,8 @@ pub use research_state::{
     ConditionalProbability, MIDCEstimate, MIDCRegime, PersistenceStats, PriceSignature,
     RecommendedStrategy, ResearchState, SignatureConsistency, SignatureDirection,
     SignatureMagnitude, SignatureSpeed, TradeableAssessment,
+    // TSMOM Framework (Moskowitz et al. 2012)
+    BarSize, TSMOMConfig, TSMOMSignal, TSMOMSignalType, TSMOMStats,
 };
 
 pub use research_store::{
