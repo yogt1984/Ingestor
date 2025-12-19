@@ -17,6 +17,9 @@ pub mod ui;
 // Framework module (persistent infrastructure)
 pub mod framework;
 
+// Research module (continuous research engine - Task 1.0)
+pub mod research;
+
 // Analysis modules
 pub mod algorithms;
 pub mod regime;
@@ -72,4 +75,11 @@ pub use framework::{
     ConfigStore, ConfigStoreConfig, ConfigAuditEntry, ConfigAuditOperation,
     ConfigQuery, ConfigSortField, ConfigDiff, ConfigDifference, ConfigSummary,
     ConfigStoreStats,
+};
+
+// Research module re-exports (Task 1.0)
+pub use research::{
+    ResearchEngine, ResearchEngineFactory, ResearchEngineConfig,
+    MIDCConfig, PersistenceConfig, ConditionalConfig, AssessmentThresholds,
+    ResearchEngineStats, SignificantSignal, PricePoint, Outcome, ResearchError,
 };
