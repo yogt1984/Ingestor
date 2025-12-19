@@ -68,4 +68,8 @@ pub use framework::{
     AlgorithmConfig, AlgorithmConfigBuilder, ConfigError, ConfigPreset,
     EntryParams, ExitParams as AlgoExitParams, MarketMakingParams, PositionParams, RegimeFilters,
     ConfigSizingMethod, StrategyType,
+    // Config Store (Task 0.5)
+    ConfigStore, ConfigStoreConfig, ConfigAuditEntry, ConfigAuditOperation,
+    ConfigQuery, ConfigSortField, ConfigDiff, ConfigDifference, ConfigSummary,
+    ConfigStoreStats,
 };

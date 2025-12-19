@@ -1030,7 +1030,10 @@ impl AlgorithmConfig {
         hasher.update(format!("{:?}", self.exit).as_bytes());
         hasher.update(format!("{:?}", self.position).as_bytes());
         hasher.update(format!("{:?}", self.regime_filters).as_bytes());
-        hasher.update(self.created_at.timestamp().to_le_bytes());
+        // Use nanosecond timestamp for uniqueness in rapid succession
+        hasher.update(self.created_at.timestamp_nanos_opt().unwrap_or(0).to_le_bytes());
+        // Also include version to ensure unique IDs per version
+        hasher.update(self.version.to_le_bytes());
         let result = hasher.finalize();
         format!("cfg_{}", hex::encode(&result[..8]))
     }

@@ -7,9 +7,10 @@
 //! - ValidationResult: Unified validation outcomes (Task 0.2)
 //! - ResultsStore: Persistence layer for validation results (Task 0.3)
 //! - AlgorithmConfig: Parameterized algorithm configuration (Task 0.4)
-//! - Persistence stores for all state (Tasks 0.3, 0.5)
+//! - ConfigStore: Persistence layer for algorithm configs (Task 0.5)
 
 pub mod algorithm_config;
+pub mod config_store;
 pub mod research_state;
 pub mod research_store;
 pub mod results_store;
@@ -41,4 +42,10 @@ pub use algorithm_config::{
     AlgorithmConfig, AlgorithmConfigBuilder, ConfigError, ConfigPreset,
     EntryParams, ExitParams, MarketMakingParams, PositionParams, RegimeFilters,
     ConfigSizingMethod, StrategyType,
+};
+
+pub use config_store::{
+    ConfigStore, ConfigStoreConfig, ConfigAuditEntry, ConfigAuditOperation,
+    ConfigQuery, ConfigSortField, ConfigDiff, ConfigDifference, ConfigSummary,
+    ConfigStoreStats,
 };
