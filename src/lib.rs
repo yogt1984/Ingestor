@@ -61,4 +61,7 @@ pub use framework::{
     TradeResult, TradeDirection, ExitReason, ThresholdResult,
     // TSMOM Framework (Moskowitz et al. 2012)
     BarSize, TSMOMConfig, TSMOMSignal, TSMOMSignalType, TSMOMStats,
+    // Results Store (Task 0.3)
+    ResultsStore, ResultsStoreConfig, ResultsQuery, ResultsAuditEntry, ResultsAuditOperation,
+    AggregatedMetrics, SortField,
 };
