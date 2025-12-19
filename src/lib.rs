@@ -64,4 +64,8 @@ pub use framework::{
     // Results Store (Task 0.3)
     ResultsStore, ResultsStoreConfig, ResultsQuery, ResultsAuditEntry, ResultsAuditOperation,
     AggregatedMetrics, SortField,
+    // Algorithm Config (Task 0.4)
+    AlgorithmConfig, AlgorithmConfigBuilder, ConfigError, ConfigPreset,
+    EntryParams, ExitParams as AlgoExitParams, MarketMakingParams, PositionParams, RegimeFilters,
+    ConfigSizingMethod, StrategyType,
 };

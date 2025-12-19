@@ -9,6 +9,7 @@
 //! - AlgorithmConfig: Parameterized algorithm configuration (Task 0.4)
 //! - Persistence stores for all state (Tasks 0.3, 0.5)
 
+pub mod algorithm_config;
 pub mod research_state;
 pub mod research_store;
 pub mod results_store;
@@ -34,4 +35,10 @@ pub use results_store::{
 pub use validation_result::{
     ExitReason, ThresholdResult, TradeDirection, TradeResult, ValidationMetrics,
     ValidationResult, ValidationStageType, ValidationThresholds,
+};
+
+pub use algorithm_config::{
+    AlgorithmConfig, AlgorithmConfigBuilder, ConfigError, ConfigPreset,
+    EntryParams, ExitParams, MarketMakingParams, PositionParams, RegimeFilters,
+    ConfigSizingMethod, StrategyType,
 };
