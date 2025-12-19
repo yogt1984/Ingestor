@@ -10,6 +10,7 @@
 
 pub mod research_state;
 pub mod research_store;
+pub mod validation_result;
 
 pub use research_state::{
     ConditionalProbability, MIDCEstimate, MIDCRegime, PersistenceStats, PriceSignature,
@@ -19,4 +20,9 @@ pub use research_state::{
 
 pub use research_store::{
     AuditLogEntry, AuditOperation, ResearchStore, ResearchStoreConfig,
+};
+
+pub use validation_result::{
+    ExitReason, ThresholdResult, TradeDirection, TradeResult, ValidationMetrics,
+    ValidationResult, ValidationStageType, ValidationThresholds,
 };
