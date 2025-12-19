@@ -56,4 +56,5 @@ pub use framework::{
     ResearchState, MIDCEstimate, MIDCRegime, PersistenceStats,
     PriceSignature, SignatureMagnitude, SignatureSpeed, SignatureDirection, SignatureConsistency,
     ConditionalProbability, TradeableAssessment, RecommendedStrategy,
+    ResearchStore, ResearchStoreConfig, AuditLogEntry, AuditOperation,
 };
