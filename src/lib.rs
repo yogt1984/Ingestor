@@ -57,4 +57,6 @@ pub use framework::{
     PriceSignature, SignatureMagnitude, SignatureSpeed, SignatureDirection, SignatureConsistency,
     ConditionalProbability, TradeableAssessment, RecommendedStrategy,
     ResearchStore, ResearchStoreConfig, AuditLogEntry, AuditOperation,
+    ValidationResult, ValidationStageType, ValidationMetrics, ValidationThresholds,
+    TradeResult, TradeDirection, ExitReason, ThresholdResult,
 };
