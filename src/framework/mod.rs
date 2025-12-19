@@ -1,0 +1,16 @@
+//! Framework Module
+//!
+//! Core persistent infrastructure for the MARS trading system.
+//! This module provides:
+//! - ResearchState: Unified research findings
+//! - ValidationResult: Unified validation outcomes (Task 0.2)
+//! - AlgorithmConfig: Parameterized algorithm configuration (Task 0.4)
+//! - Persistence stores for all state (Tasks 0.1, 0.3, 0.5)
+
+pub mod research_state;
+
+pub use research_state::{
+    ConditionalProbability, MIDCEstimate, MIDCRegime, PersistenceStats, PriceSignature,
+    RecommendedStrategy, ResearchState, SignatureConsistency, SignatureDirection,
+    SignatureMagnitude, SignatureSpeed, TradeableAssessment,
+};
