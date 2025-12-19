@@ -8,6 +8,53 @@
 //! - ResultsStore: Persistence layer for validation results (Task 0.3)
 //! - AlgorithmConfig: Parameterized algorithm configuration (Task 0.4)
 //! - ConfigStore: Persistence layer for algorithm configs (Task 0.5)
+//! - Integration Tests: Cross-store interaction tests (Task 0.6)
+//!
+//! # Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────────────┐
+//! │                     FRAMEWORK PERSISTENCE LAYER                      │
+//! ├─────────────────────────────────────────────────────────────────────┤
+//! │                                                                     │
+//! │  ResearchStore ─────────────────────────────────────────────────┐   │
+//! │  └── Persists ResearchState (MIDC, signatures, assessments)     │   │
+//! │                           │                                     │   │
+//! │                           ▼ source_research_id                  │   │
+//! │  ConfigStore ──────────────────────────────────────────────────┤   │
+//! │  └── Persists AlgorithmConfig (params derived from research)   │   │
+//! │                           │                                     │   │
+//! │                           ▼ config_id                           │   │
+//! │  ResultsStore ─────────────────────────────────────────────────┘   │
+//! │  └── Persists ValidationResult (metrics, trades, thresholds)        │
+//! │                                                                     │
+//! └─────────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Usage Example
+//!
+//! ```rust,ignore
+//! use ingestor::framework::{
+//!     ResearchState, ResearchStore, ResearchStoreConfig,
+//!     AlgorithmConfig, ConfigStore, ConfigStoreConfig,
+//!     ValidationResult, ResultsStore, ResultsStoreConfig,
+//! };
+//!
+//! // 1. Save research findings
+//! let mut research_store = ResearchStore::new(ResearchStoreConfig::default())?;
+//! let state = ResearchState::new("BTCUSDT");
+//! research_store.save(&state)?;
+//!
+//! // 2. Generate and save algorithm config
+//! let mut config_store = ConfigStore::new(ConfigStoreConfig::default())?;
+//! let config = AlgorithmConfig::from_research(&state);
+//! config_store.save(&config)?;
+//!
+//! // 3. Save validation results
+//! let mut results_store = ResultsStore::new(ResultsStoreConfig::default())?;
+//! let result = ValidationResult::new(ValidationStageType::Backtest, &config.id);
+//! results_store.save(&result)?;
+//! ```
 
 pub mod algorithm_config;
 pub mod config_store;
@@ -15,6 +62,9 @@ pub mod research_state;
 pub mod research_store;
 pub mod results_store;
 pub mod validation_result;
+
+#[cfg(test)]
+mod integration_tests;
 
 pub use research_state::{
     ConditionalProbability, MIDCEstimate, MIDCRegime, PersistenceStats, PriceSignature,
