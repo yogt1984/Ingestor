@@ -91,4 +91,6 @@ pub use research::{
     SignatureConfig, PriceSignatureBuilder, SignatureWithMetrics, PriceSignatureBuilderStats,
     // Conditional Model (Task 1.4)
     ConditionalModel, ConditionalModelConfig, ConditionalModelStats, ConditionalModelBuilder,
+    // Research Engine (Task 1.5)
+    DefaultResearchEngine, DefaultResearchEngineFactory,
 };
