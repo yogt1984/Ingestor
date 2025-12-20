@@ -84,4 +84,7 @@ pub use research::{
     ResearchEngineStats, SignificantSignal, PricePoint, Outcome, ResearchError,
     // MIDC Estimator (Task 1.1)
     MIDCEstimator, MIDCEstimatorBuilder, MIDCEstimatorStats,
+    // Persistence Analyzer (Task 1.2)
+    PersistenceAnalyzer, PersistenceAnalyzerBuilder, PersistenceAnalyzerStats,
+    TrendDirection, CompletedTrend,
 };
