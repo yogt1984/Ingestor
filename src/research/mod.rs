@@ -128,6 +128,7 @@ pub mod traits;
 pub mod midc_estimator;
 pub mod persistence_analyzer;
 pub mod price_signature;
+pub mod conditional_model;
 
 // Re-export core trait and types
 pub use traits::{
@@ -166,6 +167,11 @@ pub use persistence_analyzer::{
 // Re-export Price signature builder (Task 1.3)
 pub use price_signature::{
     SignatureConfig, PriceSignatureBuilder, SignatureWithMetrics, PriceSignatureBuilderStats,
+};
+
+// Re-export Conditional model (Task 1.4)
+pub use conditional_model::{
+    ConditionalModel, ConditionalModelConfig, ConditionalModelStats, ConditionalModelBuilder,
 };
 
 // Re-export framework types used by research module
