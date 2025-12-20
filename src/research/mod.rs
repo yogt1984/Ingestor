@@ -129,6 +129,7 @@ pub mod midc_estimator;
 pub mod persistence_analyzer;
 pub mod price_signature;
 pub mod conditional_model;
+pub mod engine;
 
 // Re-export core trait and types
 pub use traits::{
@@ -173,6 +174,9 @@ pub use price_signature::{
 pub use conditional_model::{
     ConditionalModel, ConditionalModelConfig, ConditionalModelStats, ConditionalModelBuilder,
 };
+
+// Re-export Research Engine (Task 1.5)
+pub use engine::{DefaultResearchEngine, DefaultResearchEngineFactory};
 
 // Re-export framework types used by research module
 // These are the data structures that research produces/consumes

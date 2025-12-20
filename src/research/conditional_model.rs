@@ -674,6 +674,45 @@ impl ConditionalModel {
             .collect()
     }
 
+    /// Get all probabilities as a vector of (signature, probability) pairs
+    pub fn get_all_probabilities(&self) -> Vec<(PriceSignature, ConditionalProbability)> {
+        self.stats
+            .keys()
+            .map(|sig| (*sig, self.get_probability(sig)))
+            .collect()
+    }
+
+    /// Import a probability for a specific signature (for state restoration)
+    ///
+    /// This creates synthetic stats to represent the imported probability.
+    /// Note: This is a simplified import that may not preserve all statistics.
+    pub fn import_probability(&mut self, signature: &PriceSignature, prob: ConditionalProbability) {
+        // Create synthetic stats based on the probability
+        let sample_count = prob.sample_count;
+        if sample_count == 0 {
+            return;
+        }
+
+        let continuations = (prob.p_continuation * sample_count as f64).round() as usize;
+        let reversals = sample_count.saturating_sub(continuations);
+
+        let stats = SignatureStats {
+            continuations,
+            reversals,
+            neutrals: 0,
+            magnitude_sum: prob.expected_magnitude_bps * sample_count as f64,
+            magnitude_sum_sq: (prob.expected_magnitude_bps.powi(2) + prob.std_magnitude_bps.powi(2))
+                * sample_count as f64,
+            magnitude_count: sample_count,
+            first_observation: Utc::now(),
+            last_observation: Utc::now(),
+        };
+
+        self.stats.insert(*signature, stats);
+        self.total_outcomes += sample_count;
+        self.updated_at = Utc::now();
+    }
+
     /// Import from HashMap (for deserialization from external format)
     pub fn import_from_counts(
         counts: HashMap<String, (usize, usize, usize, f64, f64)>,
