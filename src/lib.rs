@@ -87,4 +87,6 @@ pub use research::{
     // Persistence Analyzer (Task 1.2)
     PersistenceAnalyzer, PersistenceAnalyzerBuilder, PersistenceAnalyzerStats,
     TrendDirection, CompletedTrend,
+    // Price Signature Builder (Task 1.3)
+    SignatureConfig, PriceSignatureBuilder, SignatureWithMetrics, PriceSignatureBuilderStats,
 };
