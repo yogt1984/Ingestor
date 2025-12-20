@@ -130,6 +130,7 @@ pub mod persistence_analyzer;
 pub mod price_signature;
 pub mod conditional_model;
 pub mod engine;
+pub mod live_integration;
 
 // Re-export core trait and types
 pub use traits::{
@@ -177,6 +178,12 @@ pub use conditional_model::{
 
 // Re-export Research Engine (Task 1.5)
 pub use engine::{DefaultResearchEngine, DefaultResearchEngineFactory};
+
+// Re-export Live Integration (Task 1.8)
+pub use live_integration::{
+    LiveResearchConfig, LiveResearchRunner, LiveResearchState,
+    AssessmentChange, RunnerStats,
+};
 
 // Re-export framework types used by research module
 // These are the data structures that research produces/consumes

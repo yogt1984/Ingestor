@@ -93,4 +93,7 @@ pub use research::{
     ConditionalModel, ConditionalModelConfig, ConditionalModelStats, ConditionalModelBuilder,
     // Research Engine (Task 1.5)
     DefaultResearchEngine, DefaultResearchEngineFactory,
+    // Live Integration (Task 1.8)
+    LiveResearchConfig, LiveResearchRunner, LiveResearchState,
+    AssessmentChange, RunnerStats,
 };
