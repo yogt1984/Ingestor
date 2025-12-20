@@ -89,4 +89,6 @@ pub use research::{
     TrendDirection, CompletedTrend,
     // Price Signature Builder (Task 1.3)
     SignatureConfig, PriceSignatureBuilder, SignatureWithMetrics, PriceSignatureBuilderStats,
+    // Conditional Model (Task 1.4)
+    ConditionalModel, ConditionalModelConfig, ConditionalModelStats, ConditionalModelBuilder,
 };
