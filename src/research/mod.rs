@@ -126,6 +126,7 @@
 
 pub mod traits;
 pub mod midc_estimator;
+pub mod persistence_analyzer;
 
 // Re-export core trait and types
 pub use traits::{
@@ -154,6 +155,12 @@ pub use traits::{
 
 // Re-export MIDC estimator (Task 1.1)
 pub use midc_estimator::{MIDCEstimator, MIDCEstimatorBuilder, MIDCEstimatorStats};
+
+// Re-export Persistence analyzer (Task 1.2)
+pub use persistence_analyzer::{
+    PersistenceAnalyzer, PersistenceAnalyzerBuilder, PersistenceAnalyzerStats,
+    TrendDirection, CompletedTrend,
+};
 
 // Re-export framework types used by research module
 // These are the data structures that research produces/consumes
