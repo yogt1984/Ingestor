@@ -127,6 +127,7 @@
 pub mod traits;
 pub mod midc_estimator;
 pub mod persistence_analyzer;
+pub mod price_signature;
 
 // Re-export core trait and types
 pub use traits::{
@@ -160,6 +161,11 @@ pub use midc_estimator::{MIDCEstimator, MIDCEstimatorBuilder, MIDCEstimatorStats
 pub use persistence_analyzer::{
     PersistenceAnalyzer, PersistenceAnalyzerBuilder, PersistenceAnalyzerStats,
     TrendDirection, CompletedTrend,
+};
+
+// Re-export Price signature builder (Task 1.3)
+pub use price_signature::{
+    SignatureConfig, PriceSignatureBuilder, SignatureWithMetrics, PriceSignatureBuilderStats,
 };
 
 // Re-export framework types used by research module
