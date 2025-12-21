@@ -39,6 +39,9 @@ pub mod regime;
 pub mod backtest;
 pub mod forward_testing;
 
+// Validation Pipeline (Task 2.0)
+pub mod validation;
+
 // Re-export commonly used types for convenience
 pub use data::{
     ConcurrentOrderBook, OrderBook, OrderBookEngine, OrderBookFeatures, OrderBookEngineConfig,
@@ -88,6 +91,13 @@ pub use core::{
     ConfigStore, ConfigStoreConfig, ConfigAuditEntry, ConfigAuditOperation,
     ConfigQuery, ConfigSortField, ConfigDiff, ConfigDifference, ConfigSummary,
     ConfigStoreStats,
+};
+
+// Validation Pipeline re-exports (Task 2.0)
+pub use validation::{
+    ValidationStage, ValidationStageFactory, StageContext, StageError,
+    ValidationPipeline, PipelineConfig, PipelineResult, PipelineStatus,
+    StageConfig, StageOutcome, StopCondition, PipelineBuilder,
 };
 
 // Edge Detection module re-exports (was: research, Task 1.0)
