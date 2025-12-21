@@ -26,8 +26,8 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use ingestor::research::{ConditionalModel, ConditionalModelConfig};
-//! use ingestor::framework::PriceSignature;
+//! use ingestor::edge_detection::{ConditionalModel, ConditionalModelConfig};
+//! use ingestor::core::PriceSignature;
 //!
 //! let config = ConditionalModelConfig::default();
 //! let mut model = ConditionalModel::new(config);
@@ -52,11 +52,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::framework::{
+use crate::core::{
     ConditionalProbability, PriceSignature, SignatureConsistency, SignatureDirection,
     SignatureMagnitude, SignatureSpeed,
 };
-use crate::research::traits::{Outcome, SignificantSignal};
+use crate::edge_detection::traits::{Outcome, SignificantSignal};
 
 // ============================================================================
 // Configuration

@@ -34,7 +34,7 @@
 //! # Example Usage
 //!
 //! ```rust,ignore
-//! use ingestor::research::{
+//! use ingestor::edge_detection::{
 //!     LiveResearchRunner, LiveResearchConfig,
 //!     DefaultResearchEngineFactory, ResearchEngineConfig,
 //! };
@@ -63,8 +63,8 @@
 //! ```
 
 use crate::features::FeaturesSnapshot;
-use crate::framework::TradeableAssessment;
-use crate::research::{ResearchEngine, ResearchError};
+use crate::core::TradeableAssessment;
+use crate::edge_detection::{ResearchEngine, ResearchError};
 
 use chrono::{DateTime, Duration, Utc};
 use crossbeam::channel::{Receiver, Sender, TryRecvError};
@@ -819,8 +819,8 @@ fn parse_timestamp(ts: &str) -> Option<DateTime<Utc>> {
 mod tests {
     use super::*;
     use crate::features::FeaturesSnapshot;
-    use crate::framework::{ResearchState, AlgorithmConfig};
-    use crate::research::{ResearchEngineConfig, ResearchEngineStats};
+    use crate::core::{ResearchState, AlgorithmConfig};
+    use crate::edge_detection::{ResearchEngineConfig, ResearchEngineStats};
     use rust_decimal::Decimal;
 
     // ==================== Mock Research Engine ====================

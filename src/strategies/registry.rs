@@ -11,7 +11,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use crate::algorithms::registry::AlgorithmRegistry;
+//! use crate::strategies::registry::AlgorithmRegistry;
 //!
 //! // List all available algorithms
 //! for info in AlgorithmRegistry::list() {
@@ -31,7 +31,7 @@ use super::{
     FixedSpreadAlgorithm, FixedSpreadConfig, MLModelWeights, MLSpreadSkewAlgorithm,
     MLSpreadSkewConfig, MarketMakingAlgorithm, ParameterDefinition, RegimeParams,
 };
-use crate::trading::market_maker::AvellanedaStoikovConfig;
+use crate::execution::market_maker::AvellanedaStoikovConfig;
 
 // ============================================================================
 // Algorithm Info

@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::Path;
 
-use crate::trading::market_maker::{Fill, MMQuotes, MMState, PnLTracker};
+use crate::execution::market_maker::{Fill, MMQuotes, MMState, PnLTracker};
 
 // ============================================================================
 // Algorithm Type Enumeration

@@ -39,7 +39,7 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use anyhow::Result;
 
-use crate::algorithms::{
+use crate::strategies::{
     MLSpreadSkewAlgorithm, MLSpreadSkewConfig, MLModelWeights,
     SpreadWeights, SkewWeights, TrainingInfo, MarketMakingAlgorithm,
 };
@@ -47,8 +47,8 @@ use crate::backtest::{
     BacktestEngine, BacktestConfig, BacktestResults,
     ReplayEvent, ReplayConfig, FillSimulatorConfig,
 };
-use crate::trading::market_maker::MMConfig;
-use crate::trading::mm_simulator::SimulatorConfig;
+use crate::execution::market_maker::MMConfig;
+use crate::execution::mm_simulator::SimulatorConfig;
 
 // ============================================================================
 // Configuration

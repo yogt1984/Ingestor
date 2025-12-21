@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-use crate::algorithms::{AlgorithmType, MLModelWeights};
-use crate::trading::market_maker::{MMConfig, RegimeThresholds, RegimeParams};
+use crate::strategies::{AlgorithmType, MLModelWeights};
+use crate::execution::market_maker::{MMConfig, RegimeThresholds, RegimeParams};
 
 /// A saved parameter preset with metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,8 +161,8 @@ impl ParameterPreset {
     }
 
     /// Create the appropriate algorithm from this preset
-    pub fn create_algorithm(&self) -> Box<dyn crate::algorithms::MarketMakingAlgorithm> {
-        use crate::algorithms::{
+    pub fn create_algorithm(&self) -> Box<dyn crate::strategies::MarketMakingAlgorithm> {
+        use crate::strategies::{
             AvellanedaStoikovAlgorithm, MLSpreadSkewAlgorithm, MLSpreadSkewConfig,
             FixedSpreadAlgorithm, FixedSpreadConfig,
         };
@@ -340,14 +340,14 @@ impl PresetStore {
 
         // ML algorithm with trained weights from walk-forward optimization (Dec 6, 2025)
         let trained_weights = MLModelWeights {
-            spread: crate::algorithms::SpreadWeights {
+            spread: crate::strategies::SpreadWeights {
                 intercept: 1.0,
                 w_entropy: -2.0,      // Widen spread in low entropy (trending) markets
                 w_volatility: 200.0,  // Widen spread in high volatility
                 w_imbalance: 1.0,
                 w_interaction: -100.0,
             },
-            skew: crate::algorithms::SkewWeights {
+            skew: crate::strategies::SkewWeights {
                 intercept: 0.5,
                 w_entropy: -0.2,
                 w_volatility: 50.0,
@@ -355,7 +355,7 @@ impl PresetStore {
                 w_inventory: -1.0,    // Skew against inventory
             },
             version: "walk-forward-v1".to_string(),
-            training_info: Some(crate::algorithms::TrainingInfo {
+            training_info: Some(crate::strategies::TrainingInfo {
                 trained_on: "2025-12-06T16:29:04Z".to_string(),
                 num_samples: 101254,
                 train_sharpe: -1.49,

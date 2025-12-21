@@ -47,10 +47,10 @@ use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 
 use ingestor::backtest::replay::{ParquetReplay, ReplayConfig};
-use ingestor::framework::{
+use ingestor::core::{
     ResearchState, ResearchStore, ResearchStoreConfig, TradeableAssessment,
 };
-use ingestor::research::{
+use ingestor::edge_detection::{
     DefaultResearchEngine, ResearchEngine, ResearchEngineConfig, SignificantSignal,
 };
 

@@ -1,7 +1,7 @@
 //! Tests for the mm_simulator module
 
-use ingestor::trading::market_maker::{MarketMakerEngine, MMConfig};
-use ingestor::trading::mm_simulator::{PaperTradingEngine, SimulatorConfig};
+use ingestor::execution::market_maker::{MarketMakerEngine, MMConfig};
+use ingestor::execution::mm_simulator::{PaperTradingEngine, SimulatorConfig};
 use rust_decimal_macros::dec;
 
 #[test]

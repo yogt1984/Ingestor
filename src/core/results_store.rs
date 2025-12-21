@@ -1166,7 +1166,7 @@ mod walkdir {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::framework::validation_result::*;
+    use crate::core::validation_result::*;
     use tempfile::TempDir;
 
     // ==================== Helper Functions ====================

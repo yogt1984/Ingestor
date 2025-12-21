@@ -67,7 +67,7 @@ use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::backtest::session_runner::{SessionResult, SessionState};
-use crate::trading::presets::ParameterPreset;
+use crate::execution::presets::ParameterPreset;
 
 // ============================================================================
 // Configuration

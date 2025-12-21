@@ -21,7 +21,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use crate::algorithms::{MLSpreadSkewAlgorithm, MLModelWeights, Configurable, Trainable};
+//! use crate::strategies::{MLSpreadSkewAlgorithm, MLModelWeights, Configurable, Trainable};
 //!
 //! // Create with default weights (baseline from A-S optimization)
 //! let algo = MLSpreadSkewAlgorithm::with_defaults();
@@ -42,11 +42,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 
-use crate::algorithms::traits::{
+use crate::strategies::traits::{
     AlgorithmError, AlgorithmType, Configurable, MarketInput, MarketMakingAlgorithm,
     ParameterDefinition, Trainable, TrainingData, TrainingResult,
 };
-use crate::trading::market_maker::{Fill, MMQuotes, MMState, PnLTracker, Quote, QuoteSide, MarketRegime, RegimeThresholds};
+use crate::execution::market_maker::{Fill, MMQuotes, MMState, PnLTracker, Quote, QuoteSide, MarketRegime, RegimeThresholds};
 
 // ============================================================================
 // Model Weights

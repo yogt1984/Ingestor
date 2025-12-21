@@ -22,12 +22,12 @@ use ratatui::{
 };
 
 use crate::features::feature_fusion::FeaturesSnapshot;
-use crate::trading::market_maker::{MarketMakerEngine, MMConfig, MarketRegime};
-use crate::trading::mm_simulator::{PaperTradingEngine, PaperTradingState, GenericPaperTradingEngine, RiskManagedPaperTradingEngine, RiskManagedState, SimulatorConfig};
-use crate::trading::risk_manager::{RiskAction, RiskConfig};
+use crate::execution::market_maker::{MarketMakerEngine, MMConfig, MarketRegime};
+use crate::execution::mm_simulator::{PaperTradingEngine, PaperTradingState, GenericPaperTradingEngine, RiskManagedPaperTradingEngine, RiskManagedState, SimulatorConfig};
+use crate::execution::risk_manager::{RiskAction, RiskConfig};
 use crate::forward_testing::{ForwardTestSession, ForwardTestConfig};
-use crate::trading::presets::{PresetStore, ParameterPreset};
-use crate::algorithms::AlgorithmType;
+use crate::execution::presets::{PresetStore, ParameterPreset};
+use crate::strategies::AlgorithmType;
 
 type Term = Terminal<CrosstermBackend<io::Stdout>>;
 
@@ -799,7 +799,7 @@ fn main_loop(
                     let volatility = snap.realized_volatility_100.unwrap_or(0.001);
 
                     // Compute entropy score from tick entropies using algorithms module
-                    let entropy_score = crate::algorithms::compute_entropy_score(
+                    let entropy_score = crate::strategies::compute_entropy_score(
                         snap.tick_entropy_1s,
                         snap.tick_entropy_5s,
                         snap.tick_entropy_10s,
@@ -808,7 +808,7 @@ fn main_loop(
                     // Compute flow imbalance from aggressor ratios using algorithms module
                     let buy_vol = snap.aggr_ratio_100.unwrap_or(Decimal::new(5, 1)); // 0.5 default
                     let sell_vol = Decimal::ONE - buy_vol;
-                    let flow_imbalance = crate::algorithms::compute_flow_imbalance(buy_vol, sell_vol);
+                    let flow_imbalance = crate::strategies::compute_flow_imbalance(buy_vol, sell_vol);
 
                     let timestamp_ms = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)

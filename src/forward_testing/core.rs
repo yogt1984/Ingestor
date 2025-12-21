@@ -78,9 +78,9 @@ use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
 
-use crate::algorithms::AlgorithmType;
-use crate::trading::market_maker::{Fill, QuoteSide, MMState};
-use crate::trading::presets::ParameterPreset;
+use crate::strategies::AlgorithmType;
+use crate::execution::market_maker::{Fill, QuoteSide, MMState};
+use crate::execution::presets::ParameterPreset;
 
 /// Configuration for forward testing session
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1217,7 +1217,7 @@ pub fn list_sessions(dir: &std::path::Path) -> Result<Vec<SessionSummary>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algorithms::AlgorithmType;
+    use crate::strategies::AlgorithmType;
 
     #[test]
     fn test_session_creation() {

@@ -2,12 +2,14 @@
 
 mod data;
 mod features;
-mod trading;
+mod execution;
 mod ui;
-mod algorithms;
+mod strategies;
 mod regime;
 mod backtest;
 mod forward_testing;
+mod core;
+mod edge_detection;
 
 use crossbeam::channel;
 use std::sync::Arc;

@@ -38,8 +38,8 @@ use anyhow::Result;
 
 use crate::backtest::{BacktestEngine, BacktestConfig, FillSimulatorConfig};
 use crate::backtest::replay::ReplayConfig;
-use crate::trading::market_maker::{MMConfig, RegimeParams};
-use crate::trading::mm_simulator::SimulatorConfig;
+use crate::execution::market_maker::{MMConfig, RegimeParams};
+use crate::execution::mm_simulator::SimulatorConfig;
 
 /// Configuration for parameter sweep
 #[derive(Debug, Clone, Serialize, Deserialize)]

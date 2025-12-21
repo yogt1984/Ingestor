@@ -23,7 +23,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use ingestor::research::{MIDCEstimator, MIDCConfig, PricePoint};
+//! use ingestor::edge_detection::{MIDCEstimator, MIDCConfig, PricePoint};
 //!
 //! let config = MIDCConfig::default();
 //! let mut estimator = MIDCEstimator::new(config);
@@ -38,8 +38,8 @@
 //! println!("MIDC κ = {}, τ_half = {} seconds", estimate.kappa, estimate.tau_half_seconds);
 //! ```
 
-use crate::framework::{MIDCEstimate, MIDCRegime};
-use crate::research::{MIDCConfig, PricePoint, ResearchError};
+use crate::core::{MIDCEstimate, MIDCRegime};
+use crate::edge_detection::{MIDCConfig, PricePoint, ResearchError};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;

@@ -38,8 +38,8 @@ use anyhow::Result;
 
 use crate::backtest::{BacktestEngine, BacktestConfig, FillSimulatorConfig};
 use crate::backtest::replay::ReplayConfig;
-use crate::trading::market_maker::{MMConfig, RegimeParams, RegimeThresholds};
-use crate::trading::mm_simulator::SimulatorConfig;
+use crate::execution::market_maker::{MMConfig, RegimeParams, RegimeThresholds};
+use crate::execution::mm_simulator::SimulatorConfig;
 
 /// Configuration for grid search
 #[derive(Debug, Clone, Serialize, Deserialize)]

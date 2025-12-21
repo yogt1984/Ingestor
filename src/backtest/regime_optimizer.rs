@@ -31,8 +31,8 @@ use crate::backtest::{
     BacktestEngine, BacktestConfig, BacktestResults,
     ReplayEvent, ReplayConfig, FillSimulatorConfig,
 };
-use crate::trading::market_maker::{MMConfig, RegimeParams, RegimeConfig, RegimeThresholds, MarketRegime};
-use crate::trading::mm_simulator::SimulatorConfig;
+use crate::execution::market_maker::{MMConfig, RegimeParams, RegimeConfig, RegimeThresholds, MarketRegime};
+use crate::execution::mm_simulator::SimulatorConfig;
 
 /// Configuration for regime-specific optimization
 #[derive(Debug, Clone, Serialize, Deserialize)]

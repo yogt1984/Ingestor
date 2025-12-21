@@ -12,7 +12,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::framework::{
+    use crate::core::{
         // Research State and Store
         ResearchState, ResearchStore, ResearchStoreConfig,
         MIDCEstimate, MIDCRegime, PersistenceStats,
