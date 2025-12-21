@@ -45,15 +45,15 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 
-use crate::algorithms::{AlgorithmType, AvellanedaStoikovAlgorithm};
+use crate::strategies::{AlgorithmType, AvellanedaStoikovAlgorithm};
 use crate::backtest::replay::ReplayEvent;
 use crate::forward_testing::{
     ForwardTestConfig, ForwardTestSession, SessionMetrics, SessionSummary,
 };
-use crate::trading::market_maker::{MMConfig, Fill};
-use crate::trading::mm_simulator::{RiskManagedPaperTradingEngine, SimulatorConfig};
-use crate::trading::presets::{ParameterPreset, PresetStore};
-use crate::trading::risk_manager::RiskConfig;
+use crate::execution::market_maker::{MMConfig, Fill};
+use crate::execution::mm_simulator::{RiskManagedPaperTradingEngine, SimulatorConfig};
+use crate::execution::presets::{ParameterPreset, PresetStore};
+use crate::execution::risk_manager::RiskConfig;
 
 /// Configuration for session runner
 #[derive(Debug, Clone, Serialize, Deserialize)]

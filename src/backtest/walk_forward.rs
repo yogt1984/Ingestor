@@ -32,7 +32,7 @@ use anyhow::Result;
 
 use crate::backtest::{BacktestEngine, BacktestConfig, BacktestResults, PerformanceMetrics};
 use crate::backtest::replay::ReplayConfig;
-use crate::trading::market_maker::MMConfig;
+use crate::execution::market_maker::MMConfig;
 
 /// Walk-forward validation configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -281,12 +281,12 @@ impl WalkForwardEngine {
         fill_prob: f64,
     ) -> Result<BacktestResults> {
         use crate::backtest::FillSimulatorConfig;
-        use crate::trading::mm_simulator::SimulatorConfig;
+        use crate::execution::mm_simulator::SimulatorConfig;
 
         let mm_config = MMConfig {
             max_inventory: Decimal::from_f64_retain(0.1).unwrap_or(dec!(0.1)),
             quote_size: Decimal::from_f64_retain(0.001).unwrap_or(dec!(0.001)),
-            regime_params: crate::trading::market_maker::RegimeParams::uniform(spread, skew),
+            regime_params: crate::execution::market_maker::RegimeParams::uniform(spread, skew),
             ..Default::default()
         };
 

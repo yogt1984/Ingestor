@@ -1018,7 +1018,7 @@ These can be used for entry signal generation.
 
 ```rust
 use ingestor::backtest::{BacktestEngine, BacktestConfig, OCOConfig};
-use ingestor::trading::{Side};
+use ingestor::execution::{Side};
 use rust_decimal_macros::dec;
 
 #[test]

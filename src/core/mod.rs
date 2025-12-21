@@ -34,7 +34,7 @@
 //! # Usage Example
 //!
 //! ```rust,ignore
-//! use ingestor::framework::{
+//! use ingestor::core::{
 //!     ResearchState, ResearchStore, ResearchStoreConfig,
 //!     AlgorithmConfig, ConfigStore, ConfigStoreConfig,
 //!     ValidationResult, ResultsStore, ResultsStoreConfig,

@@ -57,7 +57,7 @@ use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
-use crate::trading::market_maker::{Fill, QuoteSide, MMState};
+use crate::execution::market_maker::{Fill, QuoteSide, MMState};
 
 // ============================================================================
 // Circuit Breaker Types
@@ -1421,7 +1421,7 @@ impl RiskManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::trading::market_maker::PnLTracker;
+    use crate::execution::market_maker::PnLTracker;
 
     fn create_mm_state(inventory: Decimal, total_pnl: Decimal) -> MMState {
         MMState {

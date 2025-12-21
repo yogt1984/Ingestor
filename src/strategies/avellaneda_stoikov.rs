@@ -19,11 +19,11 @@ use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::algorithms::traits::{
+use crate::strategies::traits::{
     AlgorithmConfig, AlgorithmError, AlgorithmType, Configurable, MarketInput,
     MarketMakingAlgorithm, ParameterDefinition,
 };
-use crate::trading::market_maker::{
+use crate::execution::market_maker::{
     AvellanedaStoikovConfig, AvellanedaStoikovMM, Fill, MMQuotes, MMState, PnLTracker,
     RegimeParams, RegimeThresholds, MarketRegime,
 };
@@ -108,8 +108,8 @@ impl AlgorithmConfig for AvellanedaStoikovAlgorithmConfig {
 /// # Usage
 ///
 /// ```ignore
-/// use crate::algorithms::{AvellanedaStoikovAlgorithm, MarketMakingAlgorithm, MarketInput};
-/// use crate::trading::market_maker::AvellanedaStoikovConfig;
+/// use crate::strategies::{AvellanedaStoikovAlgorithm, MarketMakingAlgorithm, MarketInput};
+/// use crate::execution::market_maker::AvellanedaStoikovConfig;
 ///
 /// let config = AvellanedaStoikovConfig::with_uniform_params(2.0, 0.5);
 /// let mut algo = AvellanedaStoikovAlgorithm::new(config);
@@ -517,7 +517,7 @@ impl Configurable for AvellanedaStoikovAlgorithm {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algorithms::ParameterType;
+    use crate::strategies::ParameterType;
     use rust_decimal_macros::dec;
 
     fn create_test_input(entropy: f64) -> MarketInput {
@@ -589,7 +589,7 @@ mod tests {
         let mut algo = AvellanedaStoikovAlgorithm::with_uniform_params(2.0, 0.5);
 
         let fill = Fill {
-            side: crate::trading::market_maker::QuoteSide::Bid,
+            side: crate::execution::market_maker::QuoteSide::Bid,
             price: dec!(50000),
             size: dec!(0.01),
             timestamp_ms: 1000,
@@ -607,7 +607,7 @@ mod tests {
 
         // Process a fill
         let fill = Fill {
-            side: crate::trading::market_maker::QuoteSide::Bid,
+            side: crate::execution::market_maker::QuoteSide::Bid,
             price: dec!(50000),
             size: dec!(0.01),
             timestamp_ms: 1000,

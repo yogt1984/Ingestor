@@ -1373,14 +1373,14 @@ fn validate_fraction(name: &str, value: f64) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::framework::research_state::{
+    use crate::core::research_state::{
         BarSize, ConditionalProbability, PriceSignature, SignatureConsistency,
         SignatureDirection, SignatureMagnitude, SignatureSpeed,
     };
 
     // Helper to create test ResearchState
     fn create_test_research() -> ResearchState {
-        use crate::framework::research_state::{MIDCEstimate, PersistenceStats, TradeableAssessment};
+        use crate::core::research_state::{MIDCEstimate, PersistenceStats, TradeableAssessment};
         use std::collections::HashMap;
 
         let mut research = ResearchState::new("BTCUSDT");
@@ -2191,7 +2191,7 @@ mod tests {
 
     #[test]
     fn test_config_from_research_strategy_type_momentum() {
-        use crate::framework::research_state::TradeableAssessment;
+        use crate::core::research_state::TradeableAssessment;
         let mut research = create_test_research();
         research.assessment = TradeableAssessment {
             midc_ok: true,
@@ -2210,7 +2210,7 @@ mod tests {
 
     #[test]
     fn test_config_from_research_strategy_type_mm() {
-        use crate::framework::research_state::TradeableAssessment;
+        use crate::core::research_state::TradeableAssessment;
         let mut research = create_test_research();
         research.assessment = TradeableAssessment {
             midc_ok: true,
@@ -2634,7 +2634,7 @@ mod tests {
 
     #[test]
     fn test_research_with_default_midc() {
-        use crate::framework::research_state::MIDCEstimate;
+        use crate::core::research_state::MIDCEstimate;
         let mut research = ResearchState::new("BTCUSDT");
         research.midc = MIDCEstimate::default(); // Default (invalid) MIDC
         research.entropy = 0.5;
@@ -2645,7 +2645,7 @@ mod tests {
 
     #[test]
     fn test_research_with_default_assessment() {
-        use crate::framework::research_state::TradeableAssessment;
+        use crate::core::research_state::TradeableAssessment;
         let mut research = ResearchState::new("BTCUSDT");
         research.assessment = TradeableAssessment::default();
 
@@ -2656,7 +2656,7 @@ mod tests {
 
     #[test]
     fn test_research_with_default_persistence() {
-        use crate::framework::research_state::PersistenceStats;
+        use crate::core::research_state::PersistenceStats;
         let mut research = ResearchState::new("BTCUSDT");
         research.persistence = PersistenceStats::default();
 
@@ -2675,7 +2675,7 @@ mod tests {
 
     #[test]
     fn test_regime_filter_passes_default_midc() {
-        use crate::framework::research_state::MIDCEstimate;
+        use crate::core::research_state::MIDCEstimate;
         let filters = RegimeFilters::default();
         let mut research = ResearchState::new("BTCUSDT");
         research.midc = MIDCEstimate::default(); // Default (invalid) MIDC
@@ -2690,7 +2690,7 @@ mod tests {
 
     #[test]
     fn test_regime_filter_fails_required_regime_unknown() {
-        use crate::framework::research_state::MIDCEstimate;
+        use crate::core::research_state::MIDCEstimate;
         let mut filters = RegimeFilters::default();
         filters.required_regime = Some(MIDCRegime::SlowDiffusion);
 
@@ -2715,7 +2715,7 @@ mod tests {
 
     #[test]
     fn test_derive_exit_params_based_on_tau_half() {
-        use crate::framework::research_state::MIDCEstimate;
+        use crate::core::research_state::MIDCEstimate;
         let mut research = create_test_research();
 
         // Low tau_half (high kappa = 0.07 -> tau_half ~ 10s)
@@ -2756,7 +2756,7 @@ mod tests {
 
     #[test]
     fn test_position_params_with_signal_scaling() {
-        use crate::framework::research_state::TradeableAssessment;
+        use crate::core::research_state::TradeableAssessment;
         let mut research = create_test_research();
         research.assessment = TradeableAssessment {
             midc_ok: true,

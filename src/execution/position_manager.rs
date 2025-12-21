@@ -14,7 +14,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use ingestor::trading::position_manager::{PositionManager, PositionConfig, PositionSizeRequest};
+//! use ingestor::execution::position_manager::{PositionManager, PositionConfig, PositionSizeRequest};
 //! use rust_decimal_macros::dec;
 //!
 //! let config = PositionConfig {

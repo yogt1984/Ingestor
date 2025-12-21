@@ -188,7 +188,7 @@ The gap is **NOT** in the algorithm implementations—it's in wiring the selecti
 
 ### Parsing Algorithm from CLI
 ```rust
-use ingestor::algorithms::{AlgorithmType, create_algorithm};
+use ingestor::strategies::{AlgorithmType, create_algorithm};
 
 let algo_type = AlgorithmType::from_str("avellaneda-stoikov")?;  // or "ml-spread-skew"
 let algo = create_algorithm(algo_type, dec!(0.1), dec!(0.001), None)?;
@@ -196,7 +196,7 @@ let algo = create_algorithm(algo_type, dec!(0.1), dec!(0.001), None)?;
 
 ### Creating ML Algorithm with Weights
 ```rust
-use ingestor::algorithms::{MLModelWeights, create_ml_algorithm};
+use ingestor::strategies::{MLModelWeights, create_ml_algorithm};
 
 let weights = MLModelWeights::load_from_file("./data/models/btc.json")?;
 let algo = create_ml_algorithm(dec!(0.1), dec!(0.001), weights)?;

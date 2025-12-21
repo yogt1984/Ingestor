@@ -1,6 +1,6 @@
 //! Tests for the presets module
 
-use ingestor::trading::presets::{ParameterPreset, PresetStore};
+use ingestor::execution::presets::{ParameterPreset, PresetStore};
 
 #[test]
 fn test_preset_creation() {

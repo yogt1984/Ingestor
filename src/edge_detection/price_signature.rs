@@ -10,7 +10,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use ingestor::research::{PriceSignatureBuilder, SignatureConfig, PricePoint};
+//! use ingestor::edge_detection::{PriceSignatureBuilder, SignatureConfig, PricePoint};
 //!
 //! let config = SignatureConfig::default();
 //! let builder = PriceSignatureBuilder::new(config);
@@ -26,10 +26,10 @@
 //! }
 //! ```
 
-use crate::framework::{
+use crate::core::{
     PriceSignature, SignatureConsistency, SignatureDirection, SignatureMagnitude, SignatureSpeed,
 };
-use crate::research::PricePoint;
+use crate::edge_detection::PricePoint;
 use serde::{Deserialize, Serialize};
 
 // ============================================================================

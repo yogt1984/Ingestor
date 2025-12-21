@@ -44,7 +44,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use ingestor::research::{
+//! use ingestor::edge_detection::{
 //!     DefaultResearchEngine, ResearchEngineConfig, ResearchEngine,
 //!     ResearchStore, ResearchStoreConfig,
 //! };
@@ -79,11 +79,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
 use crate::features::FeaturesSnapshot;
-use crate::framework::{
+use crate::core::{
     AlgorithmConfig, ConditionalProbability, MIDCEstimate, PersistenceStats, PriceSignature,
     ResearchState, ResearchStore, TradeableAssessment,
 };
-use crate::research::{
+use crate::edge_detection::{
     ConditionalModel, ConditionalModelConfig, MIDCConfig, MIDCEstimator, Outcome,
     PersistenceAnalyzer, PersistenceConfig, PricePoint, PriceSignatureBuilder,
     ResearchEngine, ResearchEngineConfig, ResearchEngineFactory, ResearchEngineStats,
@@ -321,7 +321,7 @@ impl DefaultResearchEngine {
 
         let predicted_up = matches!(
             signature.direction,
-            crate::framework::SignatureDirection::Up
+            crate::core::SignatureDirection::Up
         );
 
         let pending = PendingOutcome {
@@ -633,7 +633,7 @@ impl ResearchEngineFactory for DefaultResearchEngineFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::framework::{
+    use crate::core::{
         SignatureConsistency, SignatureDirection, SignatureMagnitude, SignatureSpeed,
     };
     use rust_decimal_macros::dec;
@@ -651,7 +651,7 @@ mod tests {
 
     fn create_temp_store() -> (ResearchStore, TempDir) {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let store_config = crate::framework::ResearchStoreConfig::with_path(temp_dir.path());
+        let store_config = crate::core::ResearchStoreConfig::with_path(temp_dir.path());
         let store = ResearchStore::new(store_config).expect("Failed to create store");
         (store, temp_dir)
     }
@@ -1285,7 +1285,7 @@ mod tests {
         let config = ResearchEngineConfig::new("BTCUSDT")
             .with_min_samples(5)
             .without_auto_checkpoint()
-            .with_conditional_config(crate::research::ConditionalConfig {
+            .with_conditional_config(crate::edge_detection::ConditionalConfig {
                 outcome_window_seconds: 60.0, // 60 second window
                 ..Default::default()
             });
@@ -1308,7 +1308,7 @@ mod tests {
         let config = ResearchEngineConfig::new("BTCUSDT")
             .with_min_samples(5)
             .without_auto_checkpoint()
-            .with_assessment_thresholds(crate::research::AssessmentThresholds {
+            .with_assessment_thresholds(crate::edge_detection::AssessmentThresholds {
                 max_kappa: 0.1,
                 ..Default::default()
             });
@@ -1326,7 +1326,7 @@ mod tests {
         let config = ResearchEngineConfig::new("BTCUSDT")
             .with_min_samples(5)
             .without_auto_checkpoint()
-            .with_assessment_thresholds(crate::research::AssessmentThresholds {
+            .with_assessment_thresholds(crate::edge_detection::AssessmentThresholds {
                 max_entropy: 0.6,
                 ..Default::default()
             });
@@ -1348,7 +1348,7 @@ mod tests {
         let store_path = temp_dir.path().to_path_buf();
 
         let config1 = create_test_config();
-        let store_config1 = crate::framework::ResearchStoreConfig::with_path(&store_path);
+        let store_config1 = crate::core::ResearchStoreConfig::with_path(&store_path);
         let store1 = ResearchStore::new(store_config1).unwrap();
 
         let mut engine1 = DefaultResearchEngine::new(config1, Some(store1)).unwrap();
@@ -1365,7 +1365,7 @@ mod tests {
 
         // Now load using a new store pointing to the same path
         let config2 = create_test_config();
-        let store_config2 = crate::framework::ResearchStoreConfig::with_path(&store_path);
+        let store_config2 = crate::core::ResearchStoreConfig::with_path(&store_path);
         let store2 = ResearchStore::new(store_config2).unwrap();
         let engine2 = DefaultResearchEngine::load_or_init(config2, store2).unwrap();
 

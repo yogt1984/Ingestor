@@ -22,7 +22,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use ingestor::research::{PersistenceAnalyzer, PersistenceConfig, PricePoint};
+//! use ingestor::edge_detection::{PersistenceAnalyzer, PersistenceConfig, PricePoint};
 //!
 //! let config = PersistenceConfig::default();
 //! let mut analyzer = PersistenceAnalyzer::new(config);
@@ -37,8 +37,8 @@
 //! println!("Mean trend duration: {:.2}s", stats.mean_duration_seconds);
 //! ```
 
-use crate::framework::{MIDCRegime, PersistenceStats};
-use crate::research::{PersistenceConfig, PricePoint, ResearchError};
+use crate::core::{MIDCRegime, PersistenceStats};
+use crate::edge_detection::{PersistenceConfig, PricePoint, ResearchError};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};

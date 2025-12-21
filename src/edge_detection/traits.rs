@@ -28,9 +28,9 @@
 //! # Example Implementation
 //!
 //! ```rust,ignore
-//! use ingestor::research::{ResearchEngine, ResearchEngineConfig, ResearchError};
+//! use ingestor::edge_detection::{ResearchEngine, ResearchEngineConfig, ResearchError};
 //! use ingestor::features::FeaturesSnapshot;
-//! use ingestor::framework::{ResearchState, TradeableAssessment, AlgorithmConfig};
+//! use ingestor::core::{ResearchState, TradeableAssessment, AlgorithmConfig};
 //!
 //! struct MyResearchEngine {
 //!     state: ResearchState,
@@ -67,7 +67,7 @@
 //! ```
 
 use crate::features::FeaturesSnapshot;
-use crate::framework::{
+use crate::core::{
     AlgorithmConfig, ResearchState, ResearchStore, TradeableAssessment,
     MIDCEstimate, PersistenceStats, ConditionalProbability,
 };

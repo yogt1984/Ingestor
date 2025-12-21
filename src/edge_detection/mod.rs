@@ -66,7 +66,7 @@
 //! # Usage Example
 //!
 //! ```rust,ignore
-//! use ingestor::research::{
+//! use ingestor::edge_detection::{
 //!     ResearchEngine, ResearchEngineConfig,
 //!     MIDCConfig, PersistenceConfig, ConditionalConfig,
 //! };
@@ -187,7 +187,7 @@ pub use live_integration::{
 
 // Re-export framework types used by research module
 // These are the data structures that research produces/consumes
-pub use crate::framework::{
+pub use crate::core::{
     // State types (produced by research)
     ResearchState,
     MIDCEstimate,

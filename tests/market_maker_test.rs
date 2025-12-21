@@ -1,6 +1,6 @@
 //! Tests for the market_maker module
 
-use ingestor::trading::market_maker::{
+use ingestor::execution::market_maker::{
     MarketMakerEngine, MMConfig, MMState, Quote, QuoteSide, Fill, MarketRegime, RegimeThresholds,
     PnLTracker, RegimeParams, AvellanedaStoikovConfig, AvellanedaStoikovMM,
 };
@@ -406,19 +406,19 @@ fn test_regime_params_for_regime() {
 #[test]
 fn test_avellaneda_stoikov_with_regime_params() {
     let regime_params = RegimeParams {
-        high_entropy: ingestor::trading::market_maker::RegimeConfig {
+        high_entropy: ingestor::execution::market_maker::RegimeConfig {
             spread_bps: 0.5,
             skew_factor: 0.2,
             size_mult: 1.0,
             should_quote: true,
         },
-        medium_entropy: ingestor::trading::market_maker::RegimeConfig {
+        medium_entropy: ingestor::execution::market_maker::RegimeConfig {
             spread_bps: 1.5,
             skew_factor: 0.4,
             size_mult: 0.8,
             should_quote: true,
         },
-        low_entropy: ingestor::trading::market_maker::RegimeConfig {
+        low_entropy: ingestor::execution::market_maker::RegimeConfig {
             spread_bps: 3.0,
             skew_factor: 0.8,
             size_mult: 0.5,

@@ -10,9 +10,9 @@ use rust_decimal::prelude::*;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 
-use crate::algorithms::{AlgorithmType, MarketInput, MarketMakingAlgorithm};
-use crate::trading::market_maker::{Quote, QuoteSide, Fill, MarketMakerEngine, MMQuotes};
-use crate::trading::risk_manager::{RiskManager, RiskConfig, RiskAction, RiskState, HaltReason};
+use crate::strategies::{AlgorithmType, MarketInput, MarketMakingAlgorithm};
+use crate::execution::market_maker::{Quote, QuoteSide, Fill, MarketMakerEngine, MMQuotes};
+use crate::execution::risk_manager::{RiskManager, RiskConfig, RiskAction, RiskState, HaltReason};
 use crate::data::tradeslog::Trade;
 
 /// Configuration for the simulator
@@ -295,7 +295,7 @@ impl GenericPaperTradingEngine {
 
     /// Create from a MarketMakerEngine (backwards compatibility)
     pub fn from_mm_engine(mm: MarketMakerEngine, sim_config: SimulatorConfig) -> Self {
-        use crate::algorithms::AvellanedaStoikovAlgorithm;
+        use crate::strategies::AvellanedaStoikovAlgorithm;
         let config = mm.config().clone();
         let algorithm = Box::new(AvellanedaStoikovAlgorithm::new(config));
         Self::new(algorithm, sim_config)
@@ -410,7 +410,7 @@ impl GenericPaperTradingEngine {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PaperTradingState {
-    pub mm_state: crate::trading::market_maker::MMState,
+    pub mm_state: crate::execution::market_maker::MMState,
     pub sim_stats: SimulatorStats,
     pub last_quotes: Option<MMQuotes>,
     #[serde(default)]
@@ -427,7 +427,7 @@ pub struct RiskManagedState {
     /// Current risk state
     pub risk_state: RiskState,
     /// Risk statistics
-    pub risk_stats: crate::trading::risk_manager::RiskStats,
+    pub risk_stats: crate::execution::risk_manager::RiskStats,
     /// Number of quotes blocked by risk manager
     pub quotes_blocked: u64,
     /// Number of fills blocked (would-be fills that were prevented)
@@ -537,7 +537,7 @@ impl RiskManagedPaperTradingEngine {
     }
 
     /// Get risk statistics
-    pub fn risk_stats(&self) -> &crate::trading::risk_manager::RiskStats {
+    pub fn risk_stats(&self) -> &crate::execution::risk_manager::RiskStats {
         self.risk_manager.stats()
     }
 
@@ -771,7 +771,7 @@ impl RiskManagedPaperTradingEngine {
 
     /// Create empty quotes (used when halted)
     fn create_empty_quotes(&self, best_bid: Decimal, best_ask: Decimal, entropy: f64) -> MMQuotes {
-        use crate::trading::market_maker::{MarketRegime, RegimeThresholds};
+        use crate::execution::market_maker::{MarketRegime, RegimeThresholds};
         let mid = (best_bid + best_ask) / dec!(2);
         MMQuotes {
             bid: None,
@@ -787,7 +787,7 @@ impl RiskManagedPaperTradingEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::trading::market_maker::MMConfig;
+    use crate::execution::market_maker::MMConfig;
 
     #[test]
     fn test_simulator_basic() {
@@ -808,7 +808,7 @@ mod tests {
                 side: QuoteSide::Ask,
                 timestamp_ms: 0,
             }),
-            regime: crate::trading::market_maker::MarketRegime::HighEntropy,
+            regime: crate::execution::market_maker::MarketRegime::HighEntropy,
             fair_value: dec!(50005),
             half_spread: dec!(5),
             skew: dec!(0),
@@ -873,7 +873,7 @@ mod tests {
     // === Risk Managed Paper Trading Engine Tests ===
 
     fn create_risk_managed_engine(risk_config: RiskConfig) -> RiskManagedPaperTradingEngine {
-        use crate::algorithms::AvellanedaStoikovAlgorithm;
+        use crate::strategies::AvellanedaStoikovAlgorithm;
         let mm_config = MMConfig::default();
         let algorithm = Box::new(AvellanedaStoikovAlgorithm::new(mm_config));
         let sim_config = SimulatorConfig::default();
@@ -1158,7 +1158,7 @@ mod tests {
     #[test]
     fn test_risk_managed_engine_with_conservative_config() {
         let engine = RiskManagedPaperTradingEngine::with_conservative_risk(
-            Box::new(crate::algorithms::AvellanedaStoikovAlgorithm::new(MMConfig::default())),
+            Box::new(crate::strategies::AvellanedaStoikovAlgorithm::new(MMConfig::default())),
             SimulatorConfig::default(),
         );
 
@@ -1220,7 +1220,7 @@ mod tests {
                 side: QuoteSide::Ask,
                 timestamp_ms: 0,
             }),
-            regime: crate::trading::market_maker::MarketRegime::HighEntropy,
+            regime: crate::execution::market_maker::MarketRegime::HighEntropy,
             fair_value: dec!(50005),
             half_spread: dec!(5),
             skew: dec!(0),

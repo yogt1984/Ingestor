@@ -3,25 +3,38 @@
 //! This library provides:
 //! - **Data Layer**: Order book and trades log ingestion, feed management, persistence
 //! - **Features**: Entropy, illiquidity, volatility, toxicity, trend features, signal processing
-//! - **Trading**: Market making engine, paper trading simulator, risk management
+//! - **Execution**: Market making engine, paper trading simulator, risk management
 //! - **Backtesting**: Replay, harness, walk-forward validation
 //! - **Forward Testing**: A/B testing, drift detection, regime monitoring
-//! - **Algorithms**: Fixed spread, Avellaneda-Stoikov, ML-based spread/skew
+//! - **Strategies**: Fixed spread, Avellaneda-Stoikov, ML-based spread/skew
+//!
+//! ## Module Organization (v0.2)
+//!
+//! - `core/` - Persistent infrastructure: stores, configs, validation
+//! - `edge_detection/` - Signal research: MIDC, persistence, conditional probability
+//! - `execution/` - Order execution: market maker, simulator, risk
+//! - `strategies/` - Trading strategies: MM algorithms, momentum
+//! - `features/` - Feature extraction: entropy, volatility, toxicity
+//! - `data/` - Data layer: orderbook, trades, persistence
+//! - `regime/` - Regime detection
+//! - `backtest/` - Backtesting infrastructure
 
 // Core modules
 pub mod data;
 pub mod features;
-pub mod trading;
 pub mod ui;
 
-// Framework module (persistent infrastructure)
-pub mod framework;
+// Execution module (order execution, risk management)
+pub mod execution;
 
-// Research module (continuous research engine - Task 1.0)
-pub mod research;
+// Core module (persistent infrastructure - was: framework)
+pub mod core;
 
-// Analysis modules
-pub mod algorithms;
+// Edge Detection module (signal research - was: research)
+pub mod edge_detection;
+
+// Strategy modules (was: algorithms)
+pub mod strategies;
 pub mod regime;
 pub mod backtest;
 pub mod forward_testing;
@@ -44,7 +57,7 @@ pub use features::{
     KalmanFilter, KalmanConfig, KalmanState, MultiSymbolKalman,
 };
 
-pub use trading::{
+pub use execution::{
     MarketMakerEngine, MMConfig, Quote,
     RiskManagedPaperTradingEngine, SimulatorConfig,
     RiskManager, RiskConfig,
@@ -55,7 +68,7 @@ pub use trading::{
 
 pub use regime::{RegimeEngine, RegimeEngineConfig};
 
-pub use framework::{
+pub use core::{
     ResearchState, MIDCEstimate, MIDCRegime, PersistenceStats,
     PriceSignature, SignatureMagnitude, SignatureSpeed, SignatureDirection, SignatureConsistency,
     ConditionalProbability, TradeableAssessment, RecommendedStrategy,
@@ -77,8 +90,8 @@ pub use framework::{
     ConfigStoreStats,
 };
 
-// Research module re-exports (Task 1.0)
-pub use research::{
+// Edge Detection module re-exports (was: research, Task 1.0)
+pub use edge_detection::{
     ResearchEngine, ResearchEngineFactory, ResearchEngineConfig,
     MIDCConfig, PersistenceConfig, ConditionalConfig, AssessmentThresholds,
     ResearchEngineStats, SignificantSignal, PricePoint, Outcome, ResearchError,

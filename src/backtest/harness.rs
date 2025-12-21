@@ -13,7 +13,7 @@
 //! The backtest engine supports any algorithm implementing `MarketMakingAlgorithm`:
 //!
 //! ```ignore
-//! use crate::algorithms::{MarketMakingAlgorithm, AvellanedaStoikovAlgorithm};
+//! use crate::strategies::{MarketMakingAlgorithm, AvellanedaStoikovAlgorithm};
 //!
 //! // Create with default A-S algorithm
 //! let engine = BacktestEngine::new(config);
@@ -31,13 +31,13 @@ use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
 
-use crate::algorithms::{
+use crate::strategies::{
     MarketMakingAlgorithm, MarketInput, AvellanedaStoikovAlgorithm,
     compute_entropy_score, compute_flow_imbalance,
 };
-use crate::trading::market_maker::{MMConfig, Fill, QuoteSide};
-use crate::trading::mm_simulator::SimulatorConfig;
-use crate::trading::oco_manager::{OCOManager, OCOOrder, OCOStats, OCOTrigger, Side as OCOSide, TriggerType};
+use crate::execution::market_maker::{MMConfig, Fill, QuoteSide};
+use crate::execution::mm_simulator::SimulatorConfig;
+use crate::execution::oco_manager::{OCOManager, OCOOrder, OCOStats, OCOTrigger, Side as OCOSide, TriggerType};
 
 use super::replay::{ParquetReplay, ReplayConfig, ReplayEvent};
 use super::fill_simulator::{FillSimulator, FillSimulatorConfig, MarketState};
@@ -714,7 +714,7 @@ impl BacktestEngine {
     fn simulate_fills_naive(
         &self,
         current_mid: Decimal,
-        quotes: &crate::trading::market_maker::MMQuotes,
+        quotes: &crate::execution::market_maker::MMQuotes,
         timestamp_ms: u64,
     ) -> Vec<Fill> {
         let mut fills = Vec::new();
@@ -1041,7 +1041,7 @@ pub fn backtest_naive_fills(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algorithms::AlgorithmType;
+    use crate::strategies::AlgorithmType;
 
     #[test]
     fn test_backtest_config_default() {

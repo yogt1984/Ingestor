@@ -65,7 +65,7 @@ let paper_trading = PaperTradingEngine::new(
 
 **Import algorithm factories** (at top of tui.rs):
 ```rust
-use ingestor::algorithms::{
+use ingestor::strategies::{
     create_algorithm, create_ml_algorithm,
     AlgorithmType, MLModelWeights,
 };
@@ -377,7 +377,7 @@ pub fn menu_description(&self) -> String {
 4. **Integration in main.rs**:
    ```rust
    // At top of main
-   use ingestor::algorithms::*;
+   use ingestor::strategies::*;
    
    // Parse CLI args
    let args = parse_args();  // CLI argument parsing

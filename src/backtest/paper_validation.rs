@@ -36,8 +36,8 @@ use serde::{Deserialize, Serialize};
 use crate::forward_testing::{
     SessionSummary, SessionMetrics, load_session_summary, list_sessions,
 };
-use crate::trading::presets::{ParameterPreset, PresetStore};
-use crate::algorithms::AlgorithmType;
+use crate::execution::presets::{ParameterPreset, PresetStore};
+use crate::strategies::AlgorithmType;
 
 /// Configuration for validation
 #[derive(Debug, Clone, Serialize, Deserialize)]

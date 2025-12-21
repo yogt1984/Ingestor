@@ -39,11 +39,11 @@ use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::algorithms::traits::{
+use crate::strategies::traits::{
     AlgorithmConfig, AlgorithmError, AlgorithmType, Configurable, MarketInput,
     MarketMakingAlgorithm, ParameterDefinition,
 };
-use crate::trading::market_maker::{Fill, MMQuotes, MMState, MarketRegime, PnLTracker, Quote, QuoteSide};
+use crate::execution::market_maker::{Fill, MMQuotes, MMState, MarketRegime, PnLTracker, Quote, QuoteSide};
 
 // ============================================================================
 // Configuration
@@ -125,7 +125,7 @@ impl AlgorithmConfig for FixedSpreadConfig {
 /// # Example
 ///
 /// ```ignore
-/// use crate::algorithms::FixedSpreadAlgorithm;
+/// use crate::strategies::FixedSpreadAlgorithm;
 /// use rust_decimal_macros::dec;
 ///
 /// let mut algo = FixedSpreadAlgorithm::new(FixedSpreadConfig {
@@ -569,7 +569,7 @@ impl Configurable for FixedSpreadAlgorithm {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algorithms::ParameterType;
+    use crate::strategies::ParameterType;
 
     fn create_test_input(entropy: f64) -> MarketInput {
         MarketInput {

@@ -55,9 +55,9 @@ use ingestor::backtest::session_runner::{SessionRunner, SessionRunnerConfig, Sim
 use ingestor::backtest::validation_campaign::{
     ValidationCampaign, CampaignConfig, CampaignReport, ValidationGates, ValidationVerdict,
 };
-use ingestor::trading::market_maker::{MMConfig, RegimeParams, RegimeConfig};
-use ingestor::trading::mm_simulator::SimulatorConfig;
-use ingestor::algorithms::{
+use ingestor::execution::market_maker::{MMConfig, RegimeParams, RegimeConfig};
+use ingestor::execution::mm_simulator::SimulatorConfig;
+use ingestor::strategies::{
     AlgorithmType, MLModelWeights,
     AlgorithmRegistry, BacktestAlgorithmParams,
 };
@@ -679,7 +679,7 @@ fn main() -> Result<()> {
 
 /// Show available algorithms and their parameters using AlgorithmRegistry
 fn show_algorithms(algo: Option<String>, json_output: bool) -> Result<()> {
-    use ingestor::algorithms::registry::AlgorithmRegistry;
+    use ingestor::strategies::registry::AlgorithmRegistry;
 
     if json_output {
         // Use registry's JSON output
@@ -1487,7 +1487,7 @@ fn run_regime_search(
     fill_probs_str: &str,
     output: Option<PathBuf>,
 ) -> Result<()> {
-    use ingestor::trading::market_maker::RegimeThresholds;
+    use ingestor::execution::market_maker::RegimeThresholds;
 
     // Parse parameters
     let high_spreads: Vec<f64> = high_spreads_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
@@ -3334,7 +3334,7 @@ fn print_campaign_report(report: &CampaignReport) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ingestor::algorithms::{AlgorithmType, AlgorithmRegistry, MLModelWeights};
+    use ingestor::strategies::{AlgorithmType, AlgorithmRegistry, MLModelWeights};
 
     // ========================================================================
     // parse_algorithm_type() tests - PARANOID

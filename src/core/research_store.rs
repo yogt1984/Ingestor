@@ -746,7 +746,7 @@ mod walkdir {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::framework::research_state::*;
+    use crate::core::research_state::*;
     use chrono::Datelike;
     use tempfile::TempDir;
 

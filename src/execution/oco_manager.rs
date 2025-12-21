@@ -13,7 +13,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use ingestor::trading::oco_manager::{OCOManager, OCOOrder, Side};
+//! use ingestor::execution::oco_manager::{OCOManager, OCOOrder, Side};
 //! use rust_decimal_macros::dec;
 //!
 //! let mut manager = OCOManager::new();

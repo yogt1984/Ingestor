@@ -16,7 +16,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use ingestor::trading::pnl_tracker::{RealTimePnLTracker, TrackerConfig};
+//! use ingestor::execution::pnl_tracker::{RealTimePnLTracker, TrackerConfig};
 //! use rust_decimal_macros::dec;
 //!
 //! let config = TrackerConfig::default();
