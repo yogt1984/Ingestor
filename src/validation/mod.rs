@@ -51,6 +51,7 @@
 pub mod traits;
 pub mod pipeline;
 pub mod backtest_stage;
+pub mod forward_stage;
 
 // Re-export main types
 pub use traits::{
@@ -62,4 +63,8 @@ pub use pipeline::{
 };
 pub use backtest_stage::{
     BacktestStage, BacktestStageConfig, BacktestStageFactory,
+};
+pub use forward_stage::{
+    ForwardStage, ForwardStageConfig, ForwardStageFactory,
+    WindowResult, ForwardAggregateMetrics,
 };
