@@ -25,6 +25,8 @@
 //! - [`ValidationStage`]: Trait for individual validation stages
 //! - [`ValidationPipeline`]: Orchestrates stages with stop conditions
 //! - [`BacktestStage`]: Historical replay validation (Task 2.1)
+//! - [`ForwardStage`]: Walk-forward validation (Task 2.2)
+//! - [`OOSStage`]: Out-of-sample holdout validation (Task 2.3)
 //! - [`StageConfig`]: Configuration for individual stages
 //! - [`PipelineConfig`]: Configuration for the entire pipeline
 //! - [`PipelineResult`]: Final result containing all stage results
@@ -52,6 +54,7 @@ pub mod traits;
 pub mod pipeline;
 pub mod backtest_stage;
 pub mod forward_stage;
+pub mod oos_stage;
 
 // Re-export main types
 pub use traits::{
@@ -67,4 +70,7 @@ pub use backtest_stage::{
 pub use forward_stage::{
     ForwardStage, ForwardStageConfig, ForwardStageFactory,
     WindowResult, ForwardAggregateMetrics,
+};
+pub use oos_stage::{
+    OOSStage, OOSStageConfig, OOSStageFactory, OOSMetrics,
 };
