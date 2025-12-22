@@ -24,6 +24,7 @@
 //!
 //! - [`ValidationStage`]: Trait for individual validation stages
 //! - [`ValidationPipeline`]: Orchestrates stages with stop conditions
+//! - [`BacktestStage`]: Historical replay validation (Task 2.1)
 //! - [`StageConfig`]: Configuration for individual stages
 //! - [`PipelineConfig`]: Configuration for the entire pipeline
 //! - [`PipelineResult`]: Final result containing all stage results
@@ -32,20 +33,24 @@
 //!
 //! ```ignore
 //! use ingestor::validation::{
-//!     ValidationPipeline, PipelineConfig, StageConfig,
+//!     ValidationPipeline, PipelineConfig, BacktestStage, BacktestStageConfig,
 //! };
 //! use ingestor::core::{AlgorithmConfig, ValidationThresholds};
+//!
+//! // Create a backtest stage
+//! let stage = BacktestStage::new(BacktestStageConfig::default());
 //!
 //! // Create pipeline with configuration
 //! let config = PipelineConfig::default();
 //! let pipeline = ValidationPipeline::new(config);
 //!
-//! // Run validation (implementations would be provided)
+//! // Run validation
 //! // let result = pipeline.run(&algorithm_config, stages).await;
 //! ```
 
 pub mod traits;
 pub mod pipeline;
+pub mod backtest_stage;
 
 // Re-export main types
 pub use traits::{
@@ -54,4 +59,7 @@ pub use traits::{
 pub use pipeline::{
     ValidationPipeline, PipelineConfig, PipelineResult, PipelineStatus,
     StageConfig, StageOutcome, StopCondition, PipelineBuilder,
+};
+pub use backtest_stage::{
+    BacktestStage, BacktestStageConfig, BacktestStageFactory,
 };

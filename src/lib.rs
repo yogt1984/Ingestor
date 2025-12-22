@@ -93,11 +93,13 @@ pub use core::{
     ConfigStoreStats,
 };
 
-// Validation Pipeline re-exports (Task 2.0)
+// Validation Pipeline re-exports (Task 2.0, 2.1)
 pub use validation::{
     ValidationStage, ValidationStageFactory, StageContext, StageError,
     ValidationPipeline, PipelineConfig, PipelineResult, PipelineStatus,
     StageConfig, StageOutcome, StopCondition, PipelineBuilder,
+    // BacktestStage (Task 2.1)
+    BacktestStage, BacktestStageConfig, BacktestStageFactory,
 };
 
 // Edge Detection module re-exports (was: research, Task 1.0)
