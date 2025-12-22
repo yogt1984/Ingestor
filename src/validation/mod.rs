@@ -55,6 +55,7 @@ pub mod pipeline;
 pub mod backtest_stage;
 pub mod forward_stage;
 pub mod oos_stage;
+pub mod paper_stage;
 
 // Re-export main types
 pub use traits::{
@@ -73,4 +74,8 @@ pub use forward_stage::{
 };
 pub use oos_stage::{
     OOSStage, OOSStageConfig, OOSStageFactory, OOSMetrics,
+};
+pub use paper_stage::{
+    PaperStage, PaperStageConfig, PaperStageFactory, PaperMetrics,
+    PnLSample, SimulatedTrade, ShutdownHandle,
 };
