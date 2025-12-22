@@ -93,7 +93,7 @@ pub use core::{
     ConfigStoreStats,
 };
 
-// Validation Pipeline re-exports (Task 2.0, 2.1, 2.2)
+// Validation Pipeline re-exports (Task 2.0, 2.1, 2.2, 2.3)
 pub use validation::{
     ValidationStage, ValidationStageFactory, StageContext, StageError,
     ValidationPipeline, PipelineConfig, PipelineResult, PipelineStatus,
@@ -103,6 +103,8 @@ pub use validation::{
     // ForwardStage (Task 2.2)
     ForwardStage, ForwardStageConfig, ForwardStageFactory,
     WindowResult, ForwardAggregateMetrics,
+    // OOSStage (Task 2.3)
+    OOSStage, OOSStageConfig, OOSStageFactory, OOSMetrics,
 };
 
 // Edge Detection module re-exports (was: research, Task 1.0)
