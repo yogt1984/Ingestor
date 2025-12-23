@@ -57,6 +57,7 @@ pub mod forward_stage;
 pub mod oos_stage;
 pub mod paper_stage;
 pub mod live_stage;
+pub mod pipeline_runner;
 
 // Re-export main types
 pub use traits::{
@@ -84,4 +85,8 @@ pub use live_stage::{
     LiveStage, LiveStageConfig, LiveStageFactory, LiveMetrics,
     LiveTrade, LivePnLSample, OCOBracket, OCOStatus, KillSwitch,
     CircuitBreakerState, CircuitBreakerTrigger, AuditLogEntry,
+};
+pub use pipeline_runner::{
+    PipelineRunner, PipelineRunnerFactory, RunnerConfig, RunnerError,
+    StageTypeConfig, StageExecutionResult,
 };
