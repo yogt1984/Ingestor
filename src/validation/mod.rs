@@ -56,6 +56,7 @@ pub mod backtest_stage;
 pub mod forward_stage;
 pub mod oos_stage;
 pub mod paper_stage;
+pub mod live_stage;
 
 // Re-export main types
 pub use traits::{
@@ -78,4 +79,9 @@ pub use oos_stage::{
 pub use paper_stage::{
     PaperStage, PaperStageConfig, PaperStageFactory, PaperMetrics,
     PnLSample, SimulatedTrade, ShutdownHandle,
+};
+pub use live_stage::{
+    LiveStage, LiveStageConfig, LiveStageFactory, LiveMetrics,
+    LiveTrade, LivePnLSample, OCOBracket, OCOStatus, KillSwitch,
+    CircuitBreakerState, CircuitBreakerTrigger, AuditLogEntry,
 };
