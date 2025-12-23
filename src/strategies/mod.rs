@@ -28,6 +28,7 @@
 //! ```
 
 pub mod traits;
+pub mod trading_algorithm;
 pub mod avellaneda_stoikov;
 pub mod ml_spread_skew;
 pub mod fixed_spread;
@@ -66,6 +67,13 @@ pub use fixed_spread::{
     param_names as fixed_spread_param_names,
 };
 pub use registry::{AlgorithmRegistry, AlgorithmInfo, BacktestAlgorithmParams};
+
+// TradingAlgorithm trait and types (Task 3.0)
+pub use trading_algorithm::{
+    TradingAlgorithm, TradingAlgorithmFactory, TradingAlgorithmError,
+    TradingDecision, TradingAction, TradingInput,
+    PositionDirection, AlgorithmState,
+};
 
 // Re-export common types from market_maker for convenience
 pub use crate::execution::market_maker::{
