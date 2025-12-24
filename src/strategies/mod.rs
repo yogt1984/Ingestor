@@ -32,6 +32,7 @@ pub mod trading_algorithm;
 pub mod avellaneda_stoikov;
 pub mod ml_spread_skew;
 pub mod fixed_spread;
+pub mod momentum;
 pub mod registry;
 
 pub use traits::{
@@ -65,6 +66,12 @@ pub use fixed_spread::{
     FixedSpreadAlgorithm,
     FixedSpreadConfig,
     param_names as fixed_spread_param_names,
+};
+pub use momentum::{
+    MomentumAlgorithm,
+    MomentumAlgorithmFactory,
+    MomentumConfig,
+    MomentumSignal,
 };
 pub use registry::{AlgorithmRegistry, AlgorithmInfo, BacktestAlgorithmParams};
 
