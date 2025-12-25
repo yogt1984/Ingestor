@@ -499,6 +499,609 @@ impl AlgorithmRegistry {
 // Tests
 // ============================================================================
 
+// ============================================================================
+// Active Algorithm Instance Registry (Task 3.4)
+// ============================================================================
+
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use chrono::{DateTime, Utc};
+
+use super::TradingAlgorithm;
+use crate::core::AlgorithmConfig;
+
+/// Lifecycle state of an algorithm instance
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AlgorithmLifecycleState {
+    /// Algorithm has been created but not started
+    Created,
+    /// Algorithm is actively running
+    Running,
+    /// Algorithm has been paused
+    Paused,
+    /// Algorithm has been stopped (terminal state)
+    Stopped,
+    /// Algorithm encountered an error
+    Failed,
+}
+
+impl AlgorithmLifecycleState {
+    /// Returns true if the algorithm is in a terminal state
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, AlgorithmLifecycleState::Stopped | AlgorithmLifecycleState::Failed)
+    }
+
+    /// Returns true if the algorithm can be started
+    pub fn can_start(&self) -> bool {
+        matches!(self, AlgorithmLifecycleState::Created | AlgorithmLifecycleState::Paused)
+    }
+
+    /// Returns true if the algorithm can be paused
+    pub fn can_pause(&self) -> bool {
+        matches!(self, AlgorithmLifecycleState::Running)
+    }
+
+    /// Returns true if the algorithm can be stopped
+    pub fn can_stop(&self) -> bool {
+        !self.is_terminal()
+    }
+}
+
+impl std::fmt::Display for AlgorithmLifecycleState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AlgorithmLifecycleState::Created => write!(f, "Created"),
+            AlgorithmLifecycleState::Running => write!(f, "Running"),
+            AlgorithmLifecycleState::Paused => write!(f, "Paused"),
+            AlgorithmLifecycleState::Stopped => write!(f, "Stopped"),
+            AlgorithmLifecycleState::Failed => write!(f, "Failed"),
+        }
+    }
+}
+
+impl Default for AlgorithmLifecycleState {
+    fn default() -> Self {
+        AlgorithmLifecycleState::Created
+    }
+}
+
+/// Metadata about a registered algorithm instance
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlgorithmInstanceInfo {
+    /// Unique instance ID
+    pub instance_id: String,
+    /// Config ID this instance was created from
+    pub config_id: String,
+    /// Algorithm name
+    pub name: String,
+    /// Current lifecycle state
+    pub state: AlgorithmLifecycleState,
+    /// When the instance was created
+    pub created_at: DateTime<Utc>,
+    /// When the state was last updated
+    pub updated_at: DateTime<Utc>,
+    /// When the instance was started (if started)
+    pub started_at: Option<DateTime<Utc>>,
+    /// When the instance was stopped (if stopped)
+    pub stopped_at: Option<DateTime<Utc>>,
+    /// Error message if failed
+    pub error_message: Option<String>,
+}
+
+impl AlgorithmInstanceInfo {
+    /// Create new instance info
+    pub fn new(instance_id: impl Into<String>, config_id: impl Into<String>, name: impl Into<String>) -> Self {
+        let now = Utc::now();
+        Self {
+            instance_id: instance_id.into(),
+            config_id: config_id.into(),
+            name: name.into(),
+            state: AlgorithmLifecycleState::Created,
+            created_at: now,
+            updated_at: now,
+            started_at: None,
+            stopped_at: None,
+            error_message: None,
+        }
+    }
+
+    /// Calculate running duration if applicable
+    pub fn running_duration(&self) -> Option<chrono::Duration> {
+        match self.state {
+            AlgorithmLifecycleState::Running => {
+                self.started_at.map(|start| Utc::now() - start)
+            }
+            AlgorithmLifecycleState::Stopped | AlgorithmLifecycleState::Paused => {
+                match (self.started_at, self.stopped_at) {
+                    (Some(start), Some(stop)) => Some(stop - start),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Error type for active registry operations
+#[derive(Debug, Clone)]
+pub enum ActiveRegistryError {
+    /// Algorithm with this ID already exists
+    AlreadyExists(String),
+    /// Algorithm not found
+    NotFound(String),
+    /// Invalid state transition
+    InvalidStateTransition {
+        config_id: String,
+        from: AlgorithmLifecycleState,
+        to: AlgorithmLifecycleState,
+    },
+    /// Lock acquisition failed
+    LockError(String),
+    /// Internal error
+    Internal(String),
+}
+
+impl std::fmt::Display for ActiveRegistryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ActiveRegistryError::AlreadyExists(id) => {
+                write!(f, "Algorithm with config_id '{}' already registered", id)
+            }
+            ActiveRegistryError::NotFound(id) => {
+                write!(f, "Algorithm with config_id '{}' not found", id)
+            }
+            ActiveRegistryError::InvalidStateTransition { config_id, from, to } => {
+                write!(
+                    f,
+                    "Invalid state transition for '{}': {} -> {}",
+                    config_id, from, to
+                )
+            }
+            ActiveRegistryError::LockError(msg) => write!(f, "Lock error: {}", msg),
+            ActiveRegistryError::Internal(msg) => write!(f, "Internal error: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for ActiveRegistryError {}
+
+/// Entry in the active registry containing algorithm and metadata
+struct RegistryEntry {
+    algorithm: Box<dyn TradingAlgorithm>,
+    info: AlgorithmInstanceInfo,
+}
+
+/// Registry for tracking active algorithm instances.
+///
+/// This registry provides:
+/// - Registration and unregistration of algorithm instances
+/// - Lifecycle tracking (created, running, stopped)
+/// - Linking algorithms to their source config
+/// - Support for multiple concurrent algorithms
+///
+/// # Thread Safety
+///
+/// The registry uses `RwLock` internally for thread-safe access.
+/// Multiple readers can access the registry concurrently, but
+/// writes are exclusive.
+///
+/// # Example
+///
+/// ```ignore
+/// let registry = ActiveAlgorithmRegistry::new();
+///
+/// // Register an algorithm
+/// registry.register(&config, algorithm)?;
+///
+/// // Start the algorithm
+/// registry.start(&config.id)?;
+///
+/// // Get a reference to the algorithm
+/// if let Some(algo) = registry.get(&config.id) {
+///     println!("Algorithm state: {:?}", algo.state());
+/// }
+///
+/// // Stop the algorithm
+/// registry.stop(&config.id)?;
+/// ```
+pub struct ActiveAlgorithmRegistry {
+    /// Map of config_id -> (algorithm, info)
+    entries: RwLock<HashMap<String, RegistryEntry>>,
+    /// Maximum number of concurrent algorithms allowed
+    max_algorithms: usize,
+}
+
+impl Default for ActiveAlgorithmRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ActiveAlgorithmRegistry {
+    /// Create a new empty registry with default capacity
+    pub fn new() -> Self {
+        Self {
+            entries: RwLock::new(HashMap::new()),
+            max_algorithms: 100,
+        }
+    }
+
+    /// Create a new registry with specified max capacity
+    pub fn with_capacity(max_algorithms: usize) -> Self {
+        Self {
+            entries: RwLock::new(HashMap::new()),
+            max_algorithms,
+        }
+    }
+
+    /// Register a new algorithm instance.
+    ///
+    /// # Arguments
+    /// * `config` - The algorithm configuration
+    /// * `algorithm` - The algorithm instance to register
+    ///
+    /// # Returns
+    /// Ok(instance_id) if successful, Err if registration fails
+    pub fn register(
+        &self,
+        config: &AlgorithmConfig,
+        algorithm: Box<dyn TradingAlgorithm>,
+    ) -> Result<String, ActiveRegistryError> {
+        let mut entries = self.entries.write()
+            .map_err(|e| ActiveRegistryError::LockError(e.to_string()))?;
+
+        let config_id = config.id.clone();
+
+        // Check if already exists
+        if entries.contains_key(&config_id) {
+            return Err(ActiveRegistryError::AlreadyExists(config_id));
+        }
+
+        // Check capacity
+        if entries.len() >= self.max_algorithms {
+            return Err(ActiveRegistryError::Internal(format!(
+                "Maximum algorithm capacity ({}) reached",
+                self.max_algorithms
+            )));
+        }
+
+        let instance_id = algorithm.instance_id().to_string();
+        let info = AlgorithmInstanceInfo::new(
+            &instance_id,
+            &config_id,
+            algorithm.name(),
+        );
+
+        entries.insert(config_id.clone(), RegistryEntry { algorithm, info });
+
+        Ok(instance_id)
+    }
+
+    /// Unregister an algorithm by config ID.
+    ///
+    /// The algorithm must be in a stopped or failed state.
+    ///
+    /// # Returns
+    /// Ok(()) if successful, Err if unregistration fails
+    pub fn unregister(&self, config_id: &str) -> Result<(), ActiveRegistryError> {
+        let mut entries = self.entries.write()
+            .map_err(|e| ActiveRegistryError::LockError(e.to_string()))?;
+
+        let entry = entries.get(config_id)
+            .ok_or_else(|| ActiveRegistryError::NotFound(config_id.to_string()))?;
+
+        // Can only unregister stopped or failed algorithms
+        if !entry.info.state.is_terminal() {
+            return Err(ActiveRegistryError::InvalidStateTransition {
+                config_id: config_id.to_string(),
+                from: entry.info.state,
+                to: AlgorithmLifecycleState::Stopped,
+            });
+        }
+
+        entries.remove(config_id);
+        Ok(())
+    }
+
+    /// Get an immutable reference to an algorithm by config ID.
+    ///
+    /// # Returns
+    /// Some(&dyn TradingAlgorithm) if found, None otherwise
+    pub fn get(&self, config_id: &str) -> Option<impl std::ops::Deref<Target = dyn TradingAlgorithm + 'static> + '_> {
+        let entries = self.entries.read().ok()?;
+
+        if !entries.contains_key(config_id) {
+            return None;
+        }
+
+        Some(AlgorithmGuard {
+            guard: entries,
+            config_id: config_id.to_string(),
+        })
+    }
+
+    /// Get a mutable reference to an algorithm by config ID.
+    ///
+    /// # Returns
+    /// Some(&mut dyn TradingAlgorithm) if found, None otherwise
+    pub fn get_mut(&self, config_id: &str) -> Option<impl std::ops::DerefMut<Target = dyn TradingAlgorithm + 'static> + '_> {
+        let entries = self.entries.write().ok()?;
+
+        if !entries.contains_key(config_id) {
+            return None;
+        }
+
+        Some(AlgorithmGuardMut {
+            guard: entries,
+            config_id: config_id.to_string(),
+        })
+    }
+
+    /// Get info about an algorithm instance
+    pub fn get_info(&self, config_id: &str) -> Option<AlgorithmInstanceInfo> {
+        let entries = self.entries.read().ok()?;
+        entries.get(config_id).map(|e| e.info.clone())
+    }
+
+    /// Check if an algorithm is registered
+    pub fn contains(&self, config_id: &str) -> bool {
+        self.entries.read()
+            .map(|e| e.contains_key(config_id))
+            .unwrap_or(false)
+    }
+
+    /// Start an algorithm
+    pub fn start(&self, config_id: &str) -> Result<(), ActiveRegistryError> {
+        let mut entries = self.entries.write()
+            .map_err(|e| ActiveRegistryError::LockError(e.to_string()))?;
+
+        let entry = entries.get_mut(config_id)
+            .ok_or_else(|| ActiveRegistryError::NotFound(config_id.to_string()))?;
+
+        if !entry.info.state.can_start() {
+            return Err(ActiveRegistryError::InvalidStateTransition {
+                config_id: config_id.to_string(),
+                from: entry.info.state,
+                to: AlgorithmLifecycleState::Running,
+            });
+        }
+
+        entry.info.state = AlgorithmLifecycleState::Running;
+        entry.info.started_at = Some(Utc::now());
+        entry.info.updated_at = Utc::now();
+
+        Ok(())
+    }
+
+    /// Pause a running algorithm
+    pub fn pause(&self, config_id: &str) -> Result<(), ActiveRegistryError> {
+        let mut entries = self.entries.write()
+            .map_err(|e| ActiveRegistryError::LockError(e.to_string()))?;
+
+        let entry = entries.get_mut(config_id)
+            .ok_or_else(|| ActiveRegistryError::NotFound(config_id.to_string()))?;
+
+        if !entry.info.state.can_pause() {
+            return Err(ActiveRegistryError::InvalidStateTransition {
+                config_id: config_id.to_string(),
+                from: entry.info.state,
+                to: AlgorithmLifecycleState::Paused,
+            });
+        }
+
+        entry.info.state = AlgorithmLifecycleState::Paused;
+        entry.info.updated_at = Utc::now();
+
+        Ok(())
+    }
+
+    /// Stop an algorithm
+    pub fn stop(&self, config_id: &str) -> Result<(), ActiveRegistryError> {
+        let mut entries = self.entries.write()
+            .map_err(|e| ActiveRegistryError::LockError(e.to_string()))?;
+
+        let entry = entries.get_mut(config_id)
+            .ok_or_else(|| ActiveRegistryError::NotFound(config_id.to_string()))?;
+
+        if !entry.info.state.can_stop() {
+            return Err(ActiveRegistryError::InvalidStateTransition {
+                config_id: config_id.to_string(),
+                from: entry.info.state,
+                to: AlgorithmLifecycleState::Stopped,
+            });
+        }
+
+        entry.info.state = AlgorithmLifecycleState::Stopped;
+        entry.info.stopped_at = Some(Utc::now());
+        entry.info.updated_at = Utc::now();
+
+        Ok(())
+    }
+
+    /// Mark an algorithm as failed
+    pub fn fail(&self, config_id: &str, error_message: impl Into<String>) -> Result<(), ActiveRegistryError> {
+        let mut entries = self.entries.write()
+            .map_err(|e| ActiveRegistryError::LockError(e.to_string()))?;
+
+        let entry = entries.get_mut(config_id)
+            .ok_or_else(|| ActiveRegistryError::NotFound(config_id.to_string()))?;
+
+        if entry.info.state.is_terminal() {
+            return Err(ActiveRegistryError::InvalidStateTransition {
+                config_id: config_id.to_string(),
+                from: entry.info.state,
+                to: AlgorithmLifecycleState::Failed,
+            });
+        }
+
+        entry.info.state = AlgorithmLifecycleState::Failed;
+        entry.info.stopped_at = Some(Utc::now());
+        entry.info.error_message = Some(error_message.into());
+        entry.info.updated_at = Utc::now();
+
+        Ok(())
+    }
+
+    /// Get the number of registered algorithms
+    pub fn len(&self) -> usize {
+        self.entries.read().map(|e| e.len()).unwrap_or(0)
+    }
+
+    /// Check if the registry is empty
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Get all config IDs
+    pub fn config_ids(&self) -> Vec<String> {
+        self.entries.read()
+            .map(|e| e.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Get all algorithm instance infos
+    pub fn list_all(&self) -> Vec<AlgorithmInstanceInfo> {
+        self.entries.read()
+            .map(|e| e.values().map(|entry| entry.info.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Get algorithms filtered by state
+    pub fn list_by_state(&self, state: AlgorithmLifecycleState) -> Vec<AlgorithmInstanceInfo> {
+        self.entries.read()
+            .map(|e| {
+                e.values()
+                    .filter(|entry| entry.info.state == state)
+                    .map(|entry| entry.info.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get count of algorithms by state
+    pub fn count_by_state(&self, state: AlgorithmLifecycleState) -> usize {
+        self.entries.read()
+            .map(|e| e.values().filter(|entry| entry.info.state == state).count())
+            .unwrap_or(0)
+    }
+
+    /// Get running algorithms count
+    pub fn running_count(&self) -> usize {
+        self.count_by_state(AlgorithmLifecycleState::Running)
+    }
+
+    /// Clear all stopped/failed algorithms from the registry
+    pub fn clear_terminal(&self) -> usize {
+        let mut entries = match self.entries.write() {
+            Ok(e) => e,
+            Err(_) => return 0,
+        };
+
+        let initial_len = entries.len();
+        entries.retain(|_, entry| !entry.info.state.is_terminal());
+        initial_len - entries.len()
+    }
+
+    /// Stop all running algorithms
+    pub fn stop_all(&self) -> Vec<String> {
+        let mut stopped = Vec::new();
+        let mut entries = match self.entries.write() {
+            Ok(e) => e,
+            Err(_) => return stopped,
+        };
+
+        let now = Utc::now();
+        for (config_id, entry) in entries.iter_mut() {
+            if entry.info.state.can_stop() {
+                entry.info.state = AlgorithmLifecycleState::Stopped;
+                entry.info.stopped_at = Some(now);
+                entry.info.updated_at = now;
+                stopped.push(config_id.clone());
+            }
+        }
+
+        stopped
+    }
+
+    /// Format registry status for display
+    pub fn format_status(&self) -> String {
+        let mut output = String::new();
+        output.push_str("Active Algorithm Registry Status\n");
+        output.push_str(&"=".repeat(50));
+        output.push('\n');
+
+        let infos = self.list_all();
+        if infos.is_empty() {
+            output.push_str("  No algorithms registered\n");
+            return output;
+        }
+
+        for info in infos {
+            output.push_str(&format!(
+                "\n{} ({})\n",
+                info.name,
+                info.config_id
+            ));
+            output.push_str(&"-".repeat(40));
+            output.push('\n');
+            output.push_str(&format!("  Instance: {}\n", info.instance_id));
+            output.push_str(&format!("  State:    {}\n", info.state));
+            output.push_str(&format!("  Created:  {}\n", info.created_at.format("%Y-%m-%d %H:%M:%S")));
+            if let Some(started) = info.started_at {
+                output.push_str(&format!("  Started:  {}\n", started.format("%Y-%m-%d %H:%M:%S")));
+            }
+            if let Some(stopped) = info.stopped_at {
+                output.push_str(&format!("  Stopped:  {}\n", stopped.format("%Y-%m-%d %H:%M:%S")));
+            }
+            if let Some(duration) = info.running_duration() {
+                output.push_str(&format!("  Duration: {}s\n", duration.num_seconds()));
+            }
+            if let Some(ref err) = info.error_message {
+                output.push_str(&format!("  Error:    {}\n", err));
+            }
+        }
+
+        output.push_str(&format!("\nTotal: {} algorithms\n", self.len()));
+        output.push_str(&format!("Running: {}\n", self.running_count()));
+
+        output
+    }
+}
+
+/// RAII guard for immutable algorithm access
+struct AlgorithmGuard<'a> {
+    guard: RwLockReadGuard<'a, HashMap<String, RegistryEntry>>,
+    config_id: String,
+}
+
+impl<'a> std::ops::Deref for AlgorithmGuard<'a> {
+    type Target = dyn TradingAlgorithm + 'static;
+
+    fn deref(&self) -> &Self::Target {
+        // Safety: We checked the key exists before creating the guard
+        self.guard.get(&self.config_id).unwrap().algorithm.as_ref()
+    }
+}
+
+/// RAII guard for mutable algorithm access
+struct AlgorithmGuardMut<'a> {
+    guard: RwLockWriteGuard<'a, HashMap<String, RegistryEntry>>,
+    config_id: String,
+}
+
+impl<'a> std::ops::Deref for AlgorithmGuardMut<'a> {
+    type Target = dyn TradingAlgorithm + 'static;
+
+    fn deref(&self) -> &Self::Target {
+        self.guard.get(&self.config_id).unwrap().algorithm.as_ref()
+    }
+}
+
+impl<'a> std::ops::DerefMut for AlgorithmGuardMut<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.guard.get_mut(&self.config_id).unwrap().algorithm.as_mut()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1582,5 +2185,800 @@ mod tests {
 
         assert_eq!(backtest_algo.algorithm_type(), default_algo.algorithm_type());
         assert_eq!(backtest_algo.name(), default_algo.name());
+    }
+
+    // ========================================================================
+    // Task 3.4: ActiveAlgorithmRegistry Skeptical Tests
+    // ========================================================================
+
+    // For testing we need to create a mock TradingAlgorithm
+    // We'll use MomentumAlgorithm via the factory
+    use super::super::{MomentumAlgorithmFactory, TradingAlgorithmFactory};
+    use crate::core::StrategyType;
+
+    fn create_test_config(name: &str) -> AlgorithmConfig {
+        // Create a test config with Momentum strategy type (compatible with MomentumAlgorithmFactory)
+        let mut config = AlgorithmConfig::new(name, StrategyType::Momentum, "BTCUSDT");
+        config.id = name.to_string(); // Use name as ID for easy tracking in tests
+        config
+    }
+
+    fn create_test_algorithm(config: &AlgorithmConfig) -> Box<dyn TradingAlgorithm> {
+        MomentumAlgorithmFactory::create(config.clone()).unwrap()
+    }
+
+    // ========================================================================
+    // AlgorithmLifecycleState Tests
+    // ========================================================================
+
+    #[test]
+    fn test_lifecycle_state_is_terminal() {
+        assert!(!AlgorithmLifecycleState::Created.is_terminal());
+        assert!(!AlgorithmLifecycleState::Running.is_terminal());
+        assert!(!AlgorithmLifecycleState::Paused.is_terminal());
+        assert!(AlgorithmLifecycleState::Stopped.is_terminal());
+        assert!(AlgorithmLifecycleState::Failed.is_terminal());
+    }
+
+    #[test]
+    fn test_lifecycle_state_can_start() {
+        assert!(AlgorithmLifecycleState::Created.can_start());
+        assert!(!AlgorithmLifecycleState::Running.can_start());
+        assert!(AlgorithmLifecycleState::Paused.can_start());
+        assert!(!AlgorithmLifecycleState::Stopped.can_start());
+        assert!(!AlgorithmLifecycleState::Failed.can_start());
+    }
+
+    #[test]
+    fn test_lifecycle_state_can_pause() {
+        assert!(!AlgorithmLifecycleState::Created.can_pause());
+        assert!(AlgorithmLifecycleState::Running.can_pause());
+        assert!(!AlgorithmLifecycleState::Paused.can_pause());
+        assert!(!AlgorithmLifecycleState::Stopped.can_pause());
+        assert!(!AlgorithmLifecycleState::Failed.can_pause());
+    }
+
+    #[test]
+    fn test_lifecycle_state_can_stop() {
+        assert!(AlgorithmLifecycleState::Created.can_stop());
+        assert!(AlgorithmLifecycleState::Running.can_stop());
+        assert!(AlgorithmLifecycleState::Paused.can_stop());
+        assert!(!AlgorithmLifecycleState::Stopped.can_stop());
+        assert!(!AlgorithmLifecycleState::Failed.can_stop());
+    }
+
+    #[test]
+    fn test_lifecycle_state_display() {
+        assert_eq!(format!("{}", AlgorithmLifecycleState::Created), "Created");
+        assert_eq!(format!("{}", AlgorithmLifecycleState::Running), "Running");
+        assert_eq!(format!("{}", AlgorithmLifecycleState::Paused), "Paused");
+        assert_eq!(format!("{}", AlgorithmLifecycleState::Stopped), "Stopped");
+        assert_eq!(format!("{}", AlgorithmLifecycleState::Failed), "Failed");
+    }
+
+    #[test]
+    fn test_lifecycle_state_default() {
+        assert_eq!(AlgorithmLifecycleState::default(), AlgorithmLifecycleState::Created);
+    }
+
+    #[test]
+    fn test_lifecycle_state_serde() {
+        let state = AlgorithmLifecycleState::Running;
+        let json = serde_json::to_string(&state).unwrap();
+        let parsed: AlgorithmLifecycleState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state, parsed);
+    }
+
+    // ========================================================================
+    // AlgorithmInstanceInfo Tests
+    // ========================================================================
+
+    #[test]
+    fn test_instance_info_new() {
+        let info = AlgorithmInstanceInfo::new("inst-1", "config-1", "Test Algorithm");
+
+        assert_eq!(info.instance_id, "inst-1");
+        assert_eq!(info.config_id, "config-1");
+        assert_eq!(info.name, "Test Algorithm");
+        assert_eq!(info.state, AlgorithmLifecycleState::Created);
+        assert!(info.started_at.is_none());
+        assert!(info.stopped_at.is_none());
+        assert!(info.error_message.is_none());
+    }
+
+    #[test]
+    fn test_instance_info_running_duration_not_started() {
+        let info = AlgorithmInstanceInfo::new("inst-1", "config-1", "Test");
+        assert!(info.running_duration().is_none());
+    }
+
+    #[test]
+    fn test_instance_info_serde() {
+        let info = AlgorithmInstanceInfo::new("inst-1", "config-1", "Test");
+        let json = serde_json::to_string(&info).unwrap();
+        let parsed: AlgorithmInstanceInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(info.instance_id, parsed.instance_id);
+        assert_eq!(info.config_id, parsed.config_id);
+        assert_eq!(info.name, parsed.name);
+        assert_eq!(info.state, parsed.state);
+    }
+
+    // ========================================================================
+    // ActiveRegistryError Tests
+    // ========================================================================
+
+    #[test]
+    fn test_active_registry_error_display() {
+        let err = ActiveRegistryError::AlreadyExists("config-1".to_string());
+        assert!(format!("{}", err).contains("already registered"));
+
+        let err = ActiveRegistryError::NotFound("config-1".to_string());
+        assert!(format!("{}", err).contains("not found"));
+
+        let err = ActiveRegistryError::InvalidStateTransition {
+            config_id: "config-1".to_string(),
+            from: AlgorithmLifecycleState::Running,
+            to: AlgorithmLifecycleState::Created,
+        };
+        assert!(format!("{}", err).contains("Invalid state transition"));
+
+        let err = ActiveRegistryError::LockError("test".to_string());
+        assert!(format!("{}", err).contains("Lock error"));
+
+        let err = ActiveRegistryError::Internal("test".to_string());
+        assert!(format!("{}", err).contains("Internal error"));
+    }
+
+    // ========================================================================
+    // ActiveAlgorithmRegistry Tests - Basic Operations
+    // ========================================================================
+
+    #[test]
+    fn test_active_registry_new() {
+        let registry = ActiveAlgorithmRegistry::new();
+        assert!(registry.is_empty());
+        assert_eq!(registry.len(), 0);
+    }
+
+    #[test]
+    fn test_active_registry_with_capacity() {
+        let registry = ActiveAlgorithmRegistry::with_capacity(10);
+        assert!(registry.is_empty());
+    }
+
+    #[test]
+    fn test_active_registry_default() {
+        let registry = ActiveAlgorithmRegistry::default();
+        assert!(registry.is_empty());
+    }
+
+    #[test]
+    fn test_active_registry_register() {
+        let registry = ActiveAlgorithmRegistry::new();
+        let config = create_test_config("config-1");
+        let algo = create_test_algorithm(&config);
+
+        let result = registry.register(&config, algo);
+        assert!(result.is_ok());
+
+        assert_eq!(registry.len(), 1);
+        assert!(registry.contains("config-1"));
+    }
+
+    #[test]
+    fn test_active_registry_register_duplicate() {
+        let registry = ActiveAlgorithmRegistry::new();
+        let config = create_test_config("config-1");
+        let algo1 = create_test_algorithm(&config);
+        let algo2 = create_test_algorithm(&config);
+
+        let result1 = registry.register(&config, algo1);
+        assert!(result1.is_ok());
+
+        let result2 = registry.register(&config, algo2);
+        assert!(matches!(result2, Err(ActiveRegistryError::AlreadyExists(_))));
+    }
+
+    #[test]
+    fn test_active_registry_register_capacity_limit() {
+        let registry = ActiveAlgorithmRegistry::with_capacity(2);
+
+        let config1 = create_test_config("config-1");
+        let algo1 = create_test_algorithm(&config1);
+        registry.register(&config1, algo1).unwrap();
+
+        let config2 = create_test_config("config-2");
+        let algo2 = create_test_algorithm(&config2);
+        registry.register(&config2, algo2).unwrap();
+
+        let config3 = create_test_config("config-3");
+        let algo3 = create_test_algorithm(&config3);
+        let result = registry.register(&config3, algo3);
+        assert!(matches!(result, Err(ActiveRegistryError::Internal(_))));
+    }
+
+    // ========================================================================
+    // ActiveAlgorithmRegistry Tests - Lifecycle Operations
+    // ========================================================================
+
+    #[test]
+    fn test_active_registry_start() {
+        let registry = ActiveAlgorithmRegistry::new();
+        let config = create_test_config("config-1");
+        let algo = create_test_algorithm(&config);
+        registry.register(&config, algo).unwrap();
+
+        let result = registry.start("config-1");
+        assert!(result.is_ok());
+
+        let info = registry.get_info("config-1").unwrap();
+        assert_eq!(info.state, AlgorithmLifecycleState::Running);
+        assert!(info.started_at.is_some());
+    }
+
+    #[test]
+    fn test_active_registry_start_not_found() {
+        let registry = ActiveAlgorithmRegistry::new();
+        let result = registry.start("nonexistent");
+        assert!(matches!(result, Err(ActiveRegistryError::NotFound(_))));
+    }
+
+    #[test]
+    fn test_active_registry_start_invalid_state() {
+        let registry = ActiveAlgorithmRegistry::new();
+        let config = create_test_config("config-1");
+        let algo = create_test_algorithm(&config);
+        registry.register(&config, algo).unwrap();
+        registry.start("config-1").unwrap();
+
+        // Try to start already running
+        let result = registry.start("config-1");
+        assert!(matches!(result, Err(ActiveRegistryError::InvalidStateTransition { .. })));
+    }
+
+    #[test]
+    fn test_active_registry_pause() {
+        let registry = ActiveAlgorithmRegistry::new();
+        let config = create_test_config("config-1");
+        let algo = create_test_algorithm(&config);
+        registry.register(&config, algo).unwrap();
+        registry.start("config-1").unwrap();
+
+        let result = registry.pause("config-1");
+        assert!(result.is_ok());
+
+        let info = registry.get_info("config-1").unwrap();
+        assert_eq!(info.state, AlgorithmLifecycleState::Paused);
+    }
+
+    #[test]
+    fn test_active_registry_pause_not_running() {
+        let registry = ActiveAlgorithmRegistry::new();
+        let config = create_test_config("config-1");
+        let algo = create_test_algorithm(&config);
+        registry.register(&config, algo).unwrap();
+
+        // Try to pause from Created state
+        let result = registry.pause("config-1");
+        assert!(matches!(result, Err(ActiveRegistryError::InvalidStateTransition { .. })));
+    }
+
+    #[test]
+    fn test_active_registry_stop() {
+        let registry = ActiveAlgorithmRegistry::new();
+        let config = create_test_config("config-1");
+        let algo = create_test_algorithm(&config);
+        registry.register(&config, algo).unwrap();
+        registry.start("config-1").unwrap();
+
+        let result = registry.stop("config-1");
+        assert!(result.is_ok());
+
+        let info = registry.get_info("config-1").unwrap();
+        assert_eq!(info.state, AlgorithmLifecycleState::Stopped);
+        assert!(info.stopped_at.is_some());
+    }
+
+    #[test]
+    fn test_active_registry_stop_from_created() {
+        let registry = ActiveAlgorithmRegistry::new();
+        let config = create_test_config("config-1");
+        let algo = create_test_algorithm(&config);
+        registry.register(&config, algo).unwrap();
+
+        // Should be able to stop from Created state
+        let result = registry.stop("config-1");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_active_registry_stop_already_stopped() {
+        let registry = ActiveAlgorithmRegistry::new();
+        let config = create_test_config("config-1");
+        let algo = create_test_algorithm(&config);
+        registry.register(&config, algo).unwrap();
+        registry.stop("config-1").unwrap();
+
+        // Try to stop again
+        let result = registry.stop("config-1");
+        assert!(matches!(result, Err(ActiveRegistryError::InvalidStateTransition { .. })));
+    }
+
+    #[test]
+    fn test_active_registry_fail() {
+        let registry = ActiveAlgorithmRegistry::new();
+        let config = create_test_config("config-1");
+        let algo = create_test_algorithm(&config);
+        registry.register(&config, algo).unwrap();
+        registry.start("config-1").unwrap();
+
+        let result = registry.fail("config-1", "Test error message");
+        assert!(result.is_ok());
+
+        let info = registry.get_info("config-1").unwrap();
+        assert_eq!(info.state, AlgorithmLifecycleState::Failed);
+        assert_eq!(info.error_message, Some("Test error message".to_string()));
+        assert!(info.stopped_at.is_some());
+    }
+
+    #[test]
+    fn test_active_registry_fail_already_terminal() {
+        let registry = ActiveAlgorithmRegistry::new();
+        let config = create_test_config("config-1");
+        let algo = create_test_algorithm(&config);
+        registry.register(&config, algo).unwrap();
+        registry.stop("config-1").unwrap();
+
+        // Try to fail from Stopped state
+        let result = registry.fail("config-1", "Error");
+        assert!(matches!(result, Err(ActiveRegistryError::InvalidStateTransition { .. })));
+    }
+
+    // ========================================================================
+    // ActiveAlgorithmRegistry Tests - Unregister Operations
+    // ========================================================================
+
+    #[test]
+    fn test_active_registry_unregister_stopped() {
+        let registry = ActiveAlgorithmRegistry::new();
+        let config = create_test_config("config-1");
+        let algo = create_test_algorithm(&config);
+        registry.register(&config, algo).unwrap();
+        registry.stop("config-1").unwrap();
+
+        let result = registry.unregister("config-1");
+        assert!(result.is_ok());
+        assert!(!registry.contains("config-1"));
+    }
+
+    #[test]
+    fn test_active_registry_unregister_failed() {
+        let registry = ActiveAlgorithmRegistry::new();
+        let config = create_test_config("config-1");
+        let algo = create_test_algorithm(&config);
+        registry.register(&config, algo).unwrap();
+        registry.fail("config-1", "Error").unwrap();
+
+        let result = registry.unregister("config-1");
+        assert!(result.is_ok());
+        assert!(!registry.contains("config-1"));
+    }
+
+    #[test]
+    fn test_active_registry_unregister_not_terminal() {
+        let registry = ActiveAlgorithmRegistry::new();
+        let config = create_test_config("config-1");
+        let algo = create_test_algorithm(&config);
+        registry.register(&config, algo).unwrap();
+        registry.start("config-1").unwrap();
+
+        // Cannot unregister running algorithm
+        let result = registry.unregister("config-1");
+        assert!(matches!(result, Err(ActiveRegistryError::InvalidStateTransition { .. })));
+    }
+
+    #[test]
+    fn test_active_registry_unregister_not_found() {
+        let registry = ActiveAlgorithmRegistry::new();
+        let result = registry.unregister("nonexistent");
+        assert!(matches!(result, Err(ActiveRegistryError::NotFound(_))));
+    }
+
+    // ========================================================================
+    // ActiveAlgorithmRegistry Tests - Query Operations
+    // ========================================================================
+
+    #[test]
+    fn test_active_registry_get_info() {
+        let registry = ActiveAlgorithmRegistry::new();
+        let config = create_test_config("config-1");
+        let algo = create_test_algorithm(&config);
+        registry.register(&config, algo).unwrap();
+
+        let info = registry.get_info("config-1");
+        assert!(info.is_some());
+        let info = info.unwrap();
+        assert_eq!(info.config_id, "config-1");
+    }
+
+    #[test]
+    fn test_active_registry_get_info_not_found() {
+        let registry = ActiveAlgorithmRegistry::new();
+        let info = registry.get_info("nonexistent");
+        assert!(info.is_none());
+    }
+
+    #[test]
+    fn test_active_registry_contains() {
+        let registry = ActiveAlgorithmRegistry::new();
+        let config = create_test_config("config-1");
+        let algo = create_test_algorithm(&config);
+
+        assert!(!registry.contains("config-1"));
+        registry.register(&config, algo).unwrap();
+        assert!(registry.contains("config-1"));
+    }
+
+    #[test]
+    fn test_active_registry_config_ids() {
+        let registry = ActiveAlgorithmRegistry::new();
+
+        let config1 = create_test_config("config-1");
+        let algo1 = create_test_algorithm(&config1);
+        registry.register(&config1, algo1).unwrap();
+
+        let config2 = create_test_config("config-2");
+        let algo2 = create_test_algorithm(&config2);
+        registry.register(&config2, algo2).unwrap();
+
+        let ids = registry.config_ids();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&"config-1".to_string()));
+        assert!(ids.contains(&"config-2".to_string()));
+    }
+
+    #[test]
+    fn test_active_registry_list_all() {
+        let registry = ActiveAlgorithmRegistry::new();
+
+        let config1 = create_test_config("config-1");
+        let algo1 = create_test_algorithm(&config1);
+        registry.register(&config1, algo1).unwrap();
+
+        let config2 = create_test_config("config-2");
+        let algo2 = create_test_algorithm(&config2);
+        registry.register(&config2, algo2).unwrap();
+
+        let infos = registry.list_all();
+        assert_eq!(infos.len(), 2);
+    }
+
+    #[test]
+    fn test_active_registry_list_by_state() {
+        let registry = ActiveAlgorithmRegistry::new();
+
+        let config1 = create_test_config("config-1");
+        let algo1 = create_test_algorithm(&config1);
+        registry.register(&config1, algo1).unwrap();
+        registry.start("config-1").unwrap();
+
+        let config2 = create_test_config("config-2");
+        let algo2 = create_test_algorithm(&config2);
+        registry.register(&config2, algo2).unwrap();
+
+        let running = registry.list_by_state(AlgorithmLifecycleState::Running);
+        assert_eq!(running.len(), 1);
+        assert_eq!(running[0].config_id, "config-1");
+
+        let created = registry.list_by_state(AlgorithmLifecycleState::Created);
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0].config_id, "config-2");
+    }
+
+    #[test]
+    fn test_active_registry_count_by_state() {
+        let registry = ActiveAlgorithmRegistry::new();
+
+        let config1 = create_test_config("config-1");
+        let algo1 = create_test_algorithm(&config1);
+        registry.register(&config1, algo1).unwrap();
+        registry.start("config-1").unwrap();
+
+        let config2 = create_test_config("config-2");
+        let algo2 = create_test_algorithm(&config2);
+        registry.register(&config2, algo2).unwrap();
+        registry.start("config-2").unwrap();
+
+        let config3 = create_test_config("config-3");
+        let algo3 = create_test_algorithm(&config3);
+        registry.register(&config3, algo3).unwrap();
+
+        assert_eq!(registry.count_by_state(AlgorithmLifecycleState::Running), 2);
+        assert_eq!(registry.count_by_state(AlgorithmLifecycleState::Created), 1);
+        assert_eq!(registry.count_by_state(AlgorithmLifecycleState::Stopped), 0);
+    }
+
+    #[test]
+    fn test_active_registry_running_count() {
+        let registry = ActiveAlgorithmRegistry::new();
+
+        assert_eq!(registry.running_count(), 0);
+
+        let config = create_test_config("config-1");
+        let algo = create_test_algorithm(&config);
+        registry.register(&config, algo).unwrap();
+        registry.start("config-1").unwrap();
+
+        assert_eq!(registry.running_count(), 1);
+    }
+
+    // ========================================================================
+    // ActiveAlgorithmRegistry Tests - Batch Operations
+    // ========================================================================
+
+    #[test]
+    fn test_active_registry_clear_terminal() {
+        let registry = ActiveAlgorithmRegistry::new();
+
+        // Register and stop one
+        let config1 = create_test_config("config-1");
+        let algo1 = create_test_algorithm(&config1);
+        registry.register(&config1, algo1).unwrap();
+        registry.stop("config-1").unwrap();
+
+        // Register and fail one
+        let config2 = create_test_config("config-2");
+        let algo2 = create_test_algorithm(&config2);
+        registry.register(&config2, algo2).unwrap();
+        registry.fail("config-2", "Error").unwrap();
+
+        // Register and keep running
+        let config3 = create_test_config("config-3");
+        let algo3 = create_test_algorithm(&config3);
+        registry.register(&config3, algo3).unwrap();
+        registry.start("config-3").unwrap();
+
+        assert_eq!(registry.len(), 3);
+
+        let cleared = registry.clear_terminal();
+        assert_eq!(cleared, 2);
+        assert_eq!(registry.len(), 1);
+        assert!(registry.contains("config-3"));
+    }
+
+    #[test]
+    fn test_active_registry_stop_all() {
+        let registry = ActiveAlgorithmRegistry::new();
+
+        let config1 = create_test_config("config-1");
+        let algo1 = create_test_algorithm(&config1);
+        registry.register(&config1, algo1).unwrap();
+        registry.start("config-1").unwrap();
+
+        let config2 = create_test_config("config-2");
+        let algo2 = create_test_algorithm(&config2);
+        registry.register(&config2, algo2).unwrap();
+        registry.start("config-2").unwrap();
+
+        let config3 = create_test_config("config-3");
+        let algo3 = create_test_algorithm(&config3);
+        registry.register(&config3, algo3).unwrap();
+        // Leave in Created state
+
+        let stopped = registry.stop_all();
+        assert_eq!(stopped.len(), 3);
+
+        assert_eq!(registry.count_by_state(AlgorithmLifecycleState::Stopped), 3);
+        assert_eq!(registry.running_count(), 0);
+    }
+
+    #[test]
+    fn test_active_registry_stop_all_idempotent() {
+        let registry = ActiveAlgorithmRegistry::new();
+
+        let config = create_test_config("config-1");
+        let algo = create_test_algorithm(&config);
+        registry.register(&config, algo).unwrap();
+        registry.start("config-1").unwrap();
+
+        let stopped1 = registry.stop_all();
+        assert_eq!(stopped1.len(), 1);
+
+        // Second call should return empty since already stopped
+        let stopped2 = registry.stop_all();
+        assert_eq!(stopped2.len(), 0);
+    }
+
+    // ========================================================================
+    // ActiveAlgorithmRegistry Tests - Format/Display
+    // ========================================================================
+
+    #[test]
+    fn test_active_registry_format_status_empty() {
+        let registry = ActiveAlgorithmRegistry::new();
+        let status = registry.format_status();
+        assert!(status.contains("Active Algorithm Registry Status"));
+        assert!(status.contains("No algorithms registered"));
+    }
+
+    #[test]
+    fn test_active_registry_format_status_with_algorithms() {
+        let registry = ActiveAlgorithmRegistry::new();
+
+        let config = create_test_config("config-1");
+        let algo = create_test_algorithm(&config);
+        registry.register(&config, algo).unwrap();
+        registry.start("config-1").unwrap();
+
+        let status = registry.format_status();
+        assert!(status.contains("Active Algorithm Registry Status"));
+        assert!(status.contains("config-1"));
+        assert!(status.contains("Running"));
+        assert!(status.contains("Total: 1"));
+    }
+
+    // ========================================================================
+    // ActiveAlgorithmRegistry Tests - Full Lifecycle
+    // ========================================================================
+
+    #[test]
+    fn test_active_registry_full_lifecycle() {
+        let registry = ActiveAlgorithmRegistry::new();
+
+        // Register
+        let config = create_test_config("config-1");
+        let algo = create_test_algorithm(&config);
+        registry.register(&config, algo).unwrap();
+
+        let info = registry.get_info("config-1").unwrap();
+        assert_eq!(info.state, AlgorithmLifecycleState::Created);
+
+        // Start
+        registry.start("config-1").unwrap();
+        let info = registry.get_info("config-1").unwrap();
+        assert_eq!(info.state, AlgorithmLifecycleState::Running);
+        assert!(info.started_at.is_some());
+
+        // Pause
+        registry.pause("config-1").unwrap();
+        let info = registry.get_info("config-1").unwrap();
+        assert_eq!(info.state, AlgorithmLifecycleState::Paused);
+
+        // Resume
+        registry.start("config-1").unwrap();
+        let info = registry.get_info("config-1").unwrap();
+        assert_eq!(info.state, AlgorithmLifecycleState::Running);
+
+        // Stop
+        registry.stop("config-1").unwrap();
+        let info = registry.get_info("config-1").unwrap();
+        assert_eq!(info.state, AlgorithmLifecycleState::Stopped);
+        assert!(info.stopped_at.is_some());
+
+        // Unregister
+        registry.unregister("config-1").unwrap();
+        assert!(!registry.contains("config-1"));
+    }
+
+    // ========================================================================
+    // ActiveAlgorithmRegistry Tests - Thread Safety
+    // ========================================================================
+
+    #[test]
+    fn test_active_registry_concurrent_reads() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let registry = Arc::new(ActiveAlgorithmRegistry::new());
+
+        let config = create_test_config("config-1");
+        let algo = create_test_algorithm(&config);
+        registry.register(&config, algo).unwrap();
+        registry.start("config-1").unwrap();
+
+        let handles: Vec<_> = (0..4).map(|_| {
+            let reg = Arc::clone(&registry);
+            thread::spawn(move || {
+                for _ in 0..100 {
+                    let _ = reg.get_info("config-1");
+                    let _ = reg.contains("config-1");
+                    let _ = reg.len();
+                    let _ = reg.config_ids();
+                }
+            })
+        }).collect();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn test_active_registry_concurrent_register() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let registry = Arc::new(ActiveAlgorithmRegistry::new());
+
+        let handles: Vec<_> = (0..4).map(|i| {
+            let reg = Arc::clone(&registry);
+            thread::spawn(move || {
+                let config = create_test_config(&format!("config-{}", i));
+                let algo = create_test_algorithm(&config);
+                reg.register(&config, algo).unwrap();
+            })
+        }).collect();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        assert_eq!(registry.len(), 4);
+    }
+
+    // ========================================================================
+    // ActiveAlgorithmRegistry Tests - Edge Cases
+    // ========================================================================
+
+    #[test]
+    fn test_active_registry_get_algorithm_access() {
+        let registry = ActiveAlgorithmRegistry::new();
+
+        let config = create_test_config("config-1");
+        let algo = create_test_algorithm(&config);
+        registry.register(&config, algo).unwrap();
+
+        // Get immutable reference
+        let guard = registry.get("config-1");
+        assert!(guard.is_some());
+        let algo_ref = guard.unwrap();
+        assert_eq!(algo_ref.strategy_type(), StrategyType::Momentum);
+    }
+
+    #[test]
+    fn test_active_registry_get_not_found() {
+        let registry = ActiveAlgorithmRegistry::new();
+        let guard = registry.get("nonexistent");
+        assert!(guard.is_none());
+    }
+
+    #[test]
+    fn test_active_registry_empty_operations() {
+        let registry = ActiveAlgorithmRegistry::new();
+
+        // All operations on empty registry should work gracefully
+        assert_eq!(registry.len(), 0);
+        assert!(registry.is_empty());
+        assert!(registry.config_ids().is_empty());
+        assert!(registry.list_all().is_empty());
+        assert_eq!(registry.running_count(), 0);
+        assert_eq!(registry.clear_terminal(), 0);
+        assert!(registry.stop_all().is_empty());
+    }
+
+    #[test]
+    fn test_active_registry_multiple_algorithms() {
+        let registry = ActiveAlgorithmRegistry::new();
+
+        // Register 10 algorithms
+        for i in 0..10 {
+            let config = create_test_config(&format!("config-{}", i));
+            let algo = create_test_algorithm(&config);
+            registry.register(&config, algo).unwrap();
+        }
+
+        assert_eq!(registry.len(), 10);
+
+        // Start half of them
+        for i in 0..5 {
+            registry.start(&format!("config-{}", i)).unwrap();
+        }
+
+        assert_eq!(registry.running_count(), 5);
+        assert_eq!(registry.count_by_state(AlgorithmLifecycleState::Created), 5);
+
+        // Stop all
+        let stopped = registry.stop_all();
+        assert_eq!(stopped.len(), 10);
     }
 }
