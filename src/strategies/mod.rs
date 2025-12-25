@@ -35,6 +35,7 @@ pub mod fixed_spread;
 pub mod momentum;
 pub mod market_making_trading;
 pub mod registry;
+pub mod factory;
 
 pub use traits::{
     MarketMakingAlgorithm,
@@ -80,6 +81,7 @@ pub use market_making_trading::{
     MMTradingConfig,
 };
 pub use registry::{AlgorithmRegistry, AlgorithmInfo, BacktestAlgorithmParams};
+pub use factory::{AlgorithmFactory, AlgorithmFactoryError, AlgorithmPreview};
 
 // TradingAlgorithm trait and types (Task 3.0)
 pub use trading_algorithm::{
