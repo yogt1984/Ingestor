@@ -80,7 +80,11 @@ pub use market_making_trading::{
     MarketMakingTradingAlgorithmFactory,
     MMTradingConfig,
 };
-pub use registry::{AlgorithmRegistry, AlgorithmInfo, BacktestAlgorithmParams};
+pub use registry::{
+    AlgorithmRegistry, AlgorithmInfo, BacktestAlgorithmParams,
+    // Task 3.4: Active Algorithm Registry
+    ActiveAlgorithmRegistry, AlgorithmLifecycleState, AlgorithmInstanceInfo, ActiveRegistryError,
+};
 pub use factory::{AlgorithmFactory, AlgorithmFactoryError, AlgorithmPreview};
 
 // TradingAlgorithm trait and types (Task 3.0)
