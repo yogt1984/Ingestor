@@ -28,6 +28,7 @@ use crate::execution::risk_manager::{RiskAction, RiskConfig};
 use crate::forward_testing::{ForwardTestSession, ForwardTestConfig};
 use crate::execution::presets::{PresetStore, ParameterPreset};
 use crate::strategies::AlgorithmType;
+use crate::ui::screens::{ResearchScreen, draw_research_screen};
 
 type Term = Terminal<CrosstermBackend<io::Stdout>>;
 
@@ -51,6 +52,7 @@ enum AppMode {
     GridSearch,      // Grid search parameter optimization (CLI parity)
     Sweep,           // Parameter sensitivity sweep (CLI parity)
     OOSValidation,   // Out-of-sample validation (CLI parity)
+    Research,        // Research Dashboard (Task 4.1)
 }
 
 /// Settings for the application
@@ -566,6 +568,10 @@ fn main_loop(
     let mut selected_preset_idx: usize = 0;
     let mut active_preset: Option<ParameterPreset> = None;
 
+    // Research dashboard screen (Task 4.1)
+    let mut research_screen = ResearchScreen::new("./data/research")
+        .with_symbol(&symbol);
+
     loop {
         // Handle input
         if event::poll(Duration::from_millis(50))? {
@@ -611,6 +617,10 @@ fn main_loop(
                         KeyCode::Char('o') => {
                             mode = AppMode::OOSValidation;
                             scroll_offset = 0;
+                        }
+                        KeyCode::Char('r') => {
+                            mode = AppMode::Research;
+                            let _ = research_screen.refresh();
                         }
                         KeyCode::Char('p') => {
                             settings.persist_features = !settings.persist_features;
@@ -755,6 +765,12 @@ fn main_loop(
                             scroll_offset = scroll_offset.saturating_add(1);
                         }
                         _ => {}
+                    },
+                    AppMode::Research => {
+                        // Pass key events to research screen and check if it wants to exit
+                        if research_screen.handle_key(key.code) {
+                            mode = AppMode::Menu;
+                        }
                     },
                 }
             }
@@ -945,6 +961,13 @@ fn main_loop(
             AppMode::OOSValidation => {
                 terminal.draw(|f| draw_oos_validation_screen(f, &mut scroll_offset))?;
             }
+            AppMode::Research => {
+                // Auto-refresh if needed
+                if research_screen.needs_refresh() {
+                    let _ = research_screen.refresh();
+                }
+                terminal.draw(|f| draw_research_screen(f, &research_screen.state))?;
+            }
         }
     }
 }
@@ -1054,6 +1077,13 @@ fn draw_menu(f: &mut ratatui::Frame, symbol: &str, settings: &TuiSettings, prese
             Span::styled("  [o] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             Span::raw("OOS Validation"),
             Span::styled(" - out-of-sample overfitting detection (20% holdout)", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  RESEARCH", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from(vec![
+            Span::styled("  [r] ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+            Span::raw("Research Dashboard"),
+            Span::styled(" - MIDC, persistence stats, conditional signals", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(""),
         Line::from(Span::styled("  INFO", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
