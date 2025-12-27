@@ -1,15 +1,19 @@
-//! Main Menu Screen (Task 4.0)
+//! Main Menu Screen (Task TUI-0.1)
 //!
-//! Implements the restructured 6-item main menu for the TUI.
+//! Implements the workflow-driven 5-item main menu for the TUI.
 //!
-//! Menu Structure:
-//! - [1] LIVE DATA - Real-time market data streaming
-//! - [2] RESEARCH - Research engine status and controls
-//! - [3] VALIDATION - Validation pipeline controls
-//! - [4] ALGORITHMS - Active algorithms dashboard
-//! - [5] BACKTEST - Quick backtest access
-//! - [6] SETTINGS - Configuration
+//! Menu Structure (per TUI_REQUIREMENTS_V0.1.md):
+//! - [1] RESEARCH - Discover edges in market data
+//! - [2] ALGORITHMS - Configure and manage strategies
+//! - [3] VALIDATE - Test before risking capital
+//! - [4] TRADE - Paper and live execution
+//! - [5] DATA - Monitor streams and quality
 //! - [Q] Quit
+//!
+//! Design Philosophy:
+//! - Workflow-driven: Research -> Configure -> Validate -> Trade
+//! - Algorithm-agnostic: Same UX for Momentum, Market Making, Hybrid
+//! - 3 clicks max: Any function reachable in ≤3 keystrokes
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -20,34 +24,36 @@ use ratatui::{
 };
 
 /// Main menu item identifiers
+///
+/// Per TUI_REQUIREMENTS_V0.1.md, this is a workflow-driven 5-item menu:
+/// Research -> Configure -> Validate -> Trade
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MainMenuItem {
-    /// [1] Live data streaming
-    LiveData,
-    /// [2] Research dashboard
+    /// [1] Research - Discover edges in market data
     Research,
-    /// [3] Validation pipeline
-    Validation,
-    /// [4] Active algorithms
+    /// [2] Algorithms - Configure and manage strategies
     Algorithms,
-    /// [5] Backtest
-    Backtest,
-    /// [6] Settings
-    Settings,
-    /// [Q] Quit
+    /// [3] Validate - Test before risking capital
+    Validate,
+    /// [4] Trade - Paper and live execution
+    Trade,
+    /// [5] Data - Monitor streams and quality
+    Data,
+    /// [Q] Quit - Exit the application
     Quit,
 }
 
 impl MainMenuItem {
     /// Get the key binding for this menu item
+    ///
+    /// Keys follow workflow order: 1-5 for main items, Q for quit
     pub fn key(&self) -> char {
         match self {
-            MainMenuItem::LiveData => '1',
-            MainMenuItem::Research => '2',
-            MainMenuItem::Validation => '3',
-            MainMenuItem::Algorithms => '4',
-            MainMenuItem::Backtest => '5',
-            MainMenuItem::Settings => '6',
+            MainMenuItem::Research => '1',
+            MainMenuItem::Algorithms => '2',
+            MainMenuItem::Validate => '3',
+            MainMenuItem::Trade => '4',
+            MainMenuItem::Data => '5',
             MainMenuItem::Quit => 'q',
         }
     }
@@ -55,12 +61,11 @@ impl MainMenuItem {
     /// Get the display label for this menu item
     pub fn label(&self) -> &'static str {
         match self {
-            MainMenuItem::LiveData => "LIVE DATA",
             MainMenuItem::Research => "RESEARCH",
-            MainMenuItem::Validation => "VALIDATION",
             MainMenuItem::Algorithms => "ALGORITHMS",
-            MainMenuItem::Backtest => "BACKTEST",
-            MainMenuItem::Settings => "SETTINGS",
+            MainMenuItem::Validate => "VALIDATE",
+            MainMenuItem::Trade => "TRADE",
+            MainMenuItem::Data => "DATA",
             MainMenuItem::Quit => "Quit",
         }
     }
@@ -68,65 +73,72 @@ impl MainMenuItem {
     /// Get the description for this menu item
     pub fn description(&self) -> &'static str {
         match self {
-            MainMenuItem::LiveData => "Real-time market data streaming",
-            MainMenuItem::Research => "Research engine status and controls",
-            MainMenuItem::Validation => "Validation pipeline controls",
-            MainMenuItem::Algorithms => "Active algorithms dashboard",
-            MainMenuItem::Backtest => "Quick backtest access",
-            MainMenuItem::Settings => "Configuration",
+            MainMenuItem::Research => "Discover edges in market data",
+            MainMenuItem::Algorithms => "Configure and manage strategies",
+            MainMenuItem::Validate => "Test before risking capital",
+            MainMenuItem::Trade => "Paper and live execution",
+            MainMenuItem::Data => "Monitor streams and quality",
             MainMenuItem::Quit => "Exit the application",
         }
     }
 
     /// Get the color for this menu item
+    ///
+    /// Colors are semantically chosen:
+    /// - Cyan: Research (discovery/exploration)
+    /// - Magenta: Algorithms (configuration)
+    /// - Yellow: Validate (caution/testing)
+    /// - Green: Trade (go/live)
+    /// - Blue: Data (information)
+    /// - Red: Quit (stop/exit)
     pub fn color(&self) -> Color {
         match self {
-            MainMenuItem::LiveData => Color::Green,
             MainMenuItem::Research => Color::Cyan,
-            MainMenuItem::Validation => Color::Yellow,
             MainMenuItem::Algorithms => Color::Magenta,
-            MainMenuItem::Backtest => Color::Blue,
-            MainMenuItem::Settings => Color::White,
+            MainMenuItem::Validate => Color::Yellow,
+            MainMenuItem::Trade => Color::Green,
+            MainMenuItem::Data => Color::Blue,
             MainMenuItem::Quit => Color::Red,
         }
     }
 
     /// Try to parse a key press into a menu item
+    ///
+    /// Maps keys 1-5 to menu items, q/Q to quit
     pub fn from_key(key: char) -> Option<MainMenuItem> {
         match key {
-            '1' => Some(MainMenuItem::LiveData),
-            '2' => Some(MainMenuItem::Research),
-            '3' => Some(MainMenuItem::Validation),
-            '4' => Some(MainMenuItem::Algorithms),
-            '5' => Some(MainMenuItem::Backtest),
-            '6' => Some(MainMenuItem::Settings),
+            '1' => Some(MainMenuItem::Research),
+            '2' => Some(MainMenuItem::Algorithms),
+            '3' => Some(MainMenuItem::Validate),
+            '4' => Some(MainMenuItem::Trade),
+            '5' => Some(MainMenuItem::Data),
             'q' | 'Q' => Some(MainMenuItem::Quit),
             _ => None,
         }
     }
 
     /// Get all menu items in display order
+    ///
+    /// Order follows workflow: Research → Algorithms → Validate → Trade → Data → Quit
     pub fn all() -> &'static [MainMenuItem] {
         &[
-            MainMenuItem::LiveData,
             MainMenuItem::Research,
-            MainMenuItem::Validation,
             MainMenuItem::Algorithms,
-            MainMenuItem::Backtest,
-            MainMenuItem::Settings,
+            MainMenuItem::Validate,
+            MainMenuItem::Trade,
+            MainMenuItem::Data,
             MainMenuItem::Quit,
         ]
     }
 
-    /// Get menu items excluding quit
+    /// Get menu items excluding quit (5 main workflow items)
     pub fn all_except_quit() -> &'static [MainMenuItem] {
         &[
-            MainMenuItem::LiveData,
             MainMenuItem::Research,
-            MainMenuItem::Validation,
             MainMenuItem::Algorithms,
-            MainMenuItem::Backtest,
-            MainMenuItem::Settings,
+            MainMenuItem::Validate,
+            MainMenuItem::Trade,
+            MainMenuItem::Data,
         ]
     }
 }
@@ -307,7 +319,7 @@ pub fn draw_main_menu(f: &mut Frame, state: &MainMenuState) {
 }
 
 // ============================================================================
-// Tests
+// Tests - Per TUI_REQUIREMENTS_V0.1.md Task TUI-0.1
 // ============================================================================
 
 #[cfg(test)]
@@ -315,7 +327,7 @@ mod tests {
     use super::*;
 
     // ========================================================================
-    // MainMenuItem Tests
+    // MainMenuItem Enum Tests
     // ========================================================================
 
     #[test]
@@ -334,29 +346,29 @@ mod tests {
 
     #[test]
     fn test_menu_item_keys_are_correct() {
-        assert_eq!(MainMenuItem::LiveData.key(), '1');
-        assert_eq!(MainMenuItem::Research.key(), '2');
-        assert_eq!(MainMenuItem::Validation.key(), '3');
-        assert_eq!(MainMenuItem::Algorithms.key(), '4');
-        assert_eq!(MainMenuItem::Backtest.key(), '5');
-        assert_eq!(MainMenuItem::Settings.key(), '6');
+        // Per TUI_REQUIREMENTS_V0.1.md: 1-5 for main items, q for quit
+        assert_eq!(MainMenuItem::Research.key(), '1');
+        assert_eq!(MainMenuItem::Algorithms.key(), '2');
+        assert_eq!(MainMenuItem::Validate.key(), '3');
+        assert_eq!(MainMenuItem::Trade.key(), '4');
+        assert_eq!(MainMenuItem::Data.key(), '5');
         assert_eq!(MainMenuItem::Quit.key(), 'q');
     }
 
     #[test]
     fn test_menu_item_from_key_valid() {
-        assert_eq!(MainMenuItem::from_key('1'), Some(MainMenuItem::LiveData));
-        assert_eq!(MainMenuItem::from_key('2'), Some(MainMenuItem::Research));
-        assert_eq!(MainMenuItem::from_key('3'), Some(MainMenuItem::Validation));
-        assert_eq!(MainMenuItem::from_key('4'), Some(MainMenuItem::Algorithms));
-        assert_eq!(MainMenuItem::from_key('5'), Some(MainMenuItem::Backtest));
-        assert_eq!(MainMenuItem::from_key('6'), Some(MainMenuItem::Settings));
+        assert_eq!(MainMenuItem::from_key('1'), Some(MainMenuItem::Research));
+        assert_eq!(MainMenuItem::from_key('2'), Some(MainMenuItem::Algorithms));
+        assert_eq!(MainMenuItem::from_key('3'), Some(MainMenuItem::Validate));
+        assert_eq!(MainMenuItem::from_key('4'), Some(MainMenuItem::Trade));
+        assert_eq!(MainMenuItem::from_key('5'), Some(MainMenuItem::Data));
         assert_eq!(MainMenuItem::from_key('q'), Some(MainMenuItem::Quit));
         assert_eq!(MainMenuItem::from_key('Q'), Some(MainMenuItem::Quit));
     }
 
     #[test]
     fn test_menu_item_from_key_invalid() {
+        assert_eq!(MainMenuItem::from_key('6'), None); // No longer valid
         assert_eq!(MainMenuItem::from_key('7'), None);
         assert_eq!(MainMenuItem::from_key('0'), None);
         assert_eq!(MainMenuItem::from_key('a'), None);
@@ -388,15 +400,17 @@ mod tests {
 
     #[test]
     fn test_menu_item_all_count() {
-        assert_eq!(MainMenuItem::all().len(), 7, "Should have 7 menu items total");
+        // Per TUI_REQUIREMENTS_V0.1.md: 5 main items + Quit = 6 total
+        assert_eq!(MainMenuItem::all().len(), 6, "Should have 6 menu items total");
     }
 
     #[test]
     fn test_menu_item_all_except_quit_count() {
+        // Per TUI_REQUIREMENTS_V0.1.md: 5 main workflow items
         assert_eq!(
             MainMenuItem::all_except_quit().len(),
-            6,
-            "Should have 6 menu items excluding quit"
+            5,
+            "Should have 5 menu items excluding quit"
         );
     }
 
@@ -412,15 +426,15 @@ mod tests {
     }
 
     #[test]
-    fn test_menu_item_order_matches_spec() {
+    fn test_menu_item_order_matches_workflow() {
+        // Per TUI_REQUIREMENTS_V0.1.md: Research → Algorithms → Validate → Trade → Data → Quit
         let items = MainMenuItem::all();
-        assert_eq!(items[0], MainMenuItem::LiveData, "First item should be LiveData");
-        assert_eq!(items[1], MainMenuItem::Research, "Second item should be Research");
-        assert_eq!(items[2], MainMenuItem::Validation, "Third item should be Validation");
-        assert_eq!(items[3], MainMenuItem::Algorithms, "Fourth item should be Algorithms");
-        assert_eq!(items[4], MainMenuItem::Backtest, "Fifth item should be Backtest");
-        assert_eq!(items[5], MainMenuItem::Settings, "Sixth item should be Settings");
-        assert_eq!(items[6], MainMenuItem::Quit, "Last item should be Quit");
+        assert_eq!(items[0], MainMenuItem::Research, "First item should be Research");
+        assert_eq!(items[1], MainMenuItem::Algorithms, "Second item should be Algorithms");
+        assert_eq!(items[2], MainMenuItem::Validate, "Third item should be Validate");
+        assert_eq!(items[3], MainMenuItem::Trade, "Fourth item should be Trade");
+        assert_eq!(items[4], MainMenuItem::Data, "Fifth item should be Data");
+        assert_eq!(items[5], MainMenuItem::Quit, "Last item should be Quit");
     }
 
     #[test]
@@ -487,7 +501,7 @@ mod tests {
     }
 
     // ========================================================================
-    // Color Tests
+    // Color Tests - Semantic Color Assignments
     // ========================================================================
 
     #[test]
@@ -500,12 +514,38 @@ mod tests {
 
     #[test]
     fn test_quit_color_is_red() {
+        // Red = stop/exit
         assert_eq!(MainMenuItem::Quit.color(), Color::Red);
     }
 
     #[test]
-    fn test_live_data_color_is_green() {
-        assert_eq!(MainMenuItem::LiveData.color(), Color::Green);
+    fn test_trade_color_is_green() {
+        // Green = go/live
+        assert_eq!(MainMenuItem::Trade.color(), Color::Green);
+    }
+
+    #[test]
+    fn test_research_color_is_cyan() {
+        // Cyan = discovery/exploration
+        assert_eq!(MainMenuItem::Research.color(), Color::Cyan);
+    }
+
+    #[test]
+    fn test_validate_color_is_yellow() {
+        // Yellow = caution/testing
+        assert_eq!(MainMenuItem::Validate.color(), Color::Yellow);
+    }
+
+    #[test]
+    fn test_algorithms_color_is_magenta() {
+        // Magenta = configuration
+        assert_eq!(MainMenuItem::Algorithms.color(), Color::Magenta);
+    }
+
+    #[test]
+    fn test_data_color_is_blue() {
+        // Blue = information
+        assert_eq!(MainMenuItem::Data.color(), Color::Blue);
     }
 
     // ========================================================================
@@ -535,28 +575,27 @@ mod tests {
     }
 
     // ========================================================================
-    // Integration/Behavior Tests
+    // TUI_REQUIREMENTS_V0.1.md Compliance Tests
     // ========================================================================
 
     #[test]
     fn test_menu_has_all_required_categories() {
-        // Per Task 4.0 spec: LIVE DATA, RESEARCH, VALIDATION, ALGORITHMS, BACKTEST, SETTINGS
+        // Per TUI_REQUIREMENTS_V0.1.md: RESEARCH, ALGORITHMS, VALIDATE, TRADE, DATA
         let labels: Vec<&str> = MainMenuItem::all_except_quit()
             .iter()
             .map(|i| i.label())
             .collect();
 
-        assert!(labels.contains(&"LIVE DATA"), "Must have LIVE DATA");
         assert!(labels.contains(&"RESEARCH"), "Must have RESEARCH");
-        assert!(labels.contains(&"VALIDATION"), "Must have VALIDATION");
         assert!(labels.contains(&"ALGORITHMS"), "Must have ALGORITHMS");
-        assert!(labels.contains(&"BACKTEST"), "Must have BACKTEST");
-        assert!(labels.contains(&"SETTINGS"), "Must have SETTINGS");
+        assert!(labels.contains(&"VALIDATE"), "Must have VALIDATE");
+        assert!(labels.contains(&"TRADE"), "Must have TRADE");
+        assert!(labels.contains(&"DATA"), "Must have DATA");
     }
 
     #[test]
-    fn test_numeric_keys_1_through_6() {
-        // Task 4.0 spec requires keys 1-6 for main items
+    fn test_numeric_keys_1_through_5() {
+        // Per TUI_REQUIREMENTS_V0.1.md: keys 1-5 for main items
         let keys: Vec<char> = MainMenuItem::all_except_quit()
             .iter()
             .map(|i| i.key())
@@ -567,7 +606,8 @@ mod tests {
         assert!(keys.contains(&'3'));
         assert!(keys.contains(&'4'));
         assert!(keys.contains(&'5'));
-        assert!(keys.contains(&'6'));
+        // Key '6' should NOT be present (reduced from 6 to 5 items)
+        assert!(!keys.contains(&'6'), "Key 6 should not exist in new menu");
     }
 
     #[test]
@@ -584,5 +624,131 @@ mod tests {
             MainMenuItem::from_key('q'),
             MainMenuItem::from_key('Q')
         );
+    }
+
+    #[test]
+    fn test_workflow_order_research_first() {
+        // Research is first in workflow (discover edges before configuration)
+        assert_eq!(MainMenuItem::all()[0], MainMenuItem::Research);
+        assert_eq!(MainMenuItem::Research.key(), '1');
+    }
+
+    #[test]
+    fn test_workflow_order_trade_after_validate() {
+        // Trade comes after Validate (test before risking capital)
+        let items = MainMenuItem::all();
+        let validate_idx = items.iter().position(|i| *i == MainMenuItem::Validate).unwrap();
+        let trade_idx = items.iter().position(|i| *i == MainMenuItem::Trade).unwrap();
+        assert!(trade_idx > validate_idx, "Trade should come after Validate");
+    }
+
+    #[test]
+    fn test_descriptions_are_meaningful() {
+        // Each description should convey purpose
+        assert!(MainMenuItem::Research.description().contains("edge") ||
+                MainMenuItem::Research.description().contains("discover"),
+                "Research description should mention discovery/edges");
+        assert!(MainMenuItem::Validate.description().contains("test") ||
+                MainMenuItem::Validate.description().contains("capital"),
+                "Validate description should mention testing/capital protection");
+        assert!(MainMenuItem::Trade.description().contains("execution") ||
+                MainMenuItem::Trade.description().contains("live") ||
+                MainMenuItem::Trade.description().contains("paper"),
+                "Trade description should mention execution");
+    }
+
+    // ========================================================================
+    // Skeptical Tests - Edge Cases and Potential Bugs
+    // ========================================================================
+
+    #[test]
+    fn test_all_variants_covered_in_key() {
+        // Ensure no variant is missed in key() match
+        let _ = MainMenuItem::Research.key();
+        let _ = MainMenuItem::Algorithms.key();
+        let _ = MainMenuItem::Validate.key();
+        let _ = MainMenuItem::Trade.key();
+        let _ = MainMenuItem::Data.key();
+        let _ = MainMenuItem::Quit.key();
+    }
+
+    #[test]
+    fn test_all_variants_covered_in_label() {
+        // Ensure no variant is missed in label() match
+        let _ = MainMenuItem::Research.label();
+        let _ = MainMenuItem::Algorithms.label();
+        let _ = MainMenuItem::Validate.label();
+        let _ = MainMenuItem::Trade.label();
+        let _ = MainMenuItem::Data.label();
+        let _ = MainMenuItem::Quit.label();
+    }
+
+    #[test]
+    fn test_all_variants_covered_in_description() {
+        // Ensure no variant is missed in description() match
+        let _ = MainMenuItem::Research.description();
+        let _ = MainMenuItem::Algorithms.description();
+        let _ = MainMenuItem::Validate.description();
+        let _ = MainMenuItem::Trade.description();
+        let _ = MainMenuItem::Data.description();
+        let _ = MainMenuItem::Quit.description();
+    }
+
+    #[test]
+    fn test_all_variants_covered_in_color() {
+        // Ensure no variant is missed in color() match
+        let _ = MainMenuItem::Research.color();
+        let _ = MainMenuItem::Algorithms.color();
+        let _ = MainMenuItem::Validate.color();
+        let _ = MainMenuItem::Trade.color();
+        let _ = MainMenuItem::Data.color();
+        let _ = MainMenuItem::Quit.color();
+    }
+
+    #[test]
+    fn test_enum_derives_required_traits() {
+        // Test Clone
+        let item = MainMenuItem::Research;
+        let cloned = item.clone();
+        assert_eq!(item, cloned);
+
+        // Test Copy
+        let copied: MainMenuItem = item;
+        assert_eq!(item, copied);
+
+        // Test Debug
+        let debug_str = format!("{:?}", item);
+        assert!(!debug_str.is_empty());
+
+        // Test PartialEq + Eq
+        assert_eq!(MainMenuItem::Research, MainMenuItem::Research);
+        assert_ne!(MainMenuItem::Research, MainMenuItem::Quit);
+
+        // Test Hash
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(MainMenuItem::Research);
+        set.insert(MainMenuItem::Algorithms);
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn test_labels_are_uppercase() {
+        // All main menu labels should be uppercase for consistency
+        for item in MainMenuItem::all_except_quit() {
+            let label = item.label();
+            assert_eq!(
+                label.to_uppercase(),
+                label,
+                "Label {:?} should be uppercase",
+                item
+            );
+        }
+    }
+
+    #[test]
+    fn test_quit_label_is_title_case() {
+        // Quit should be title case, not uppercase (differentiate from main items)
+        assert_eq!(MainMenuItem::Quit.label(), "Quit");
     }
 }
