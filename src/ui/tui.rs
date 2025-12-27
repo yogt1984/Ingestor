@@ -28,7 +28,7 @@ use crate::execution::risk_manager::{RiskAction, RiskConfig};
 use crate::forward_testing::{ForwardTestSession, ForwardTestConfig};
 use crate::execution::presets::{PresetStore, ParameterPreset};
 use crate::strategies::AlgorithmType;
-use crate::ui::screens::{ResearchScreen, draw_research_screen};
+use crate::ui::screens::{ResearchScreen, draw_research_screen, MainMenuState, draw_main_menu, MainMenuItem};
 
 type Term = Terminal<CrosstermBackend<io::Stdout>>;
 
@@ -53,6 +53,7 @@ enum AppMode {
     Sweep,           // Parameter sensitivity sweep (CLI parity)
     OOSValidation,   // Out-of-sample validation (CLI parity)
     Research,        // Research Dashboard (Task 4.1)
+    NewMenu,         // New TUI v0.1 menu (under development)
 }
 
 /// Settings for the application
@@ -572,6 +573,9 @@ fn main_loop(
     let mut research_screen = ResearchScreen::new("./data/research")
         .with_symbol(&symbol);
 
+    // New TUI v0.1 main menu state (under development)
+    let mut main_menu_state = MainMenuState::new(&symbol);
+
     loop {
         // Handle input
         if event::poll(Duration::from_millis(50))? {
@@ -621,6 +625,11 @@ fn main_loop(
                         KeyCode::Char('r') => {
                             mode = AppMode::Research;
                             let _ = research_screen.refresh();
+                        }
+                        KeyCode::Char('n') => {
+                            // New TUI v0.1 menu (under development)
+                            mode = AppMode::NewMenu;
+                            main_menu_state = MainMenuState::new(&symbol);
                         }
                         KeyCode::Char('p') => {
                             settings.persist_features = !settings.persist_features;
@@ -770,6 +779,42 @@ fn main_loop(
                         // Pass key events to research screen and check if it wants to exit
                         if research_screen.handle_key(key.code) {
                             mode = AppMode::Menu;
+                        }
+                    },
+                    AppMode::NewMenu => {
+                        // Handle new TUI v0.1 main menu
+                        match key.code {
+                            KeyCode::Esc => {
+                                // Go back to old menu
+                                mode = AppMode::Menu;
+                            }
+                            KeyCode::Char(c) => {
+                                // Handle menu selection via MainMenuItem
+                                if let Some(item) = MainMenuItem::from_key(c) {
+                                    main_menu_state.selected = Some(item);
+                                    match item {
+                                        MainMenuItem::Research => {
+                                            // TODO: Navigate to Research submenu when implemented
+                                        }
+                                        MainMenuItem::Algorithms => {
+                                            // TODO: Navigate to Algorithms submenu when implemented
+                                        }
+                                        MainMenuItem::Validate => {
+                                            // TODO: Navigate to Validate submenu when implemented
+                                        }
+                                        MainMenuItem::Trade => {
+                                            // TODO: Navigate to Trade submenu when implemented
+                                        }
+                                        MainMenuItem::Data => {
+                                            // TODO: Navigate to Data submenu when implemented
+                                        }
+                                        MainMenuItem::Quit => {
+                                            return Ok(settings);
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
                     },
                 }
@@ -968,6 +1013,10 @@ fn main_loop(
                 }
                 terminal.draw(|f| draw_research_screen(f, &research_screen.state))?;
             }
+            AppMode::NewMenu => {
+                // Draw the new TUI v0.1 main menu
+                terminal.draw(|f| draw_main_menu(f, &main_menu_state))?;
+            }
         }
     }
 }
@@ -1110,6 +1159,13 @@ fn draw_menu(f: &mut ratatui::Frame, symbol: &str, settings: &TuiSettings, prese
             Span::raw("Max storage: "),
             Span::styled(&storage_str, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             Span::styled(format!("   (~{} files)", settings.max_files()), Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  NEW TUI (UNDER DEVELOPMENT)", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from(vec![
+            Span::styled("  [n] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw("New Menu"),
+            Span::styled(" - workflow-driven TUI v0.1 (Research/Algorithms/Validate/Trade/Data)", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(""),
         Line::from(vec![

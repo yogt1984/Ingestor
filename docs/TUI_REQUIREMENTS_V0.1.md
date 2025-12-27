@@ -514,16 +514,48 @@ impl StatusBar {
 
 ## Navigation Integration
 
-### Task TUI-7.0: Wire Submenus to TUI
+### Development Bridge: `[n] New Menu` Option
+
+**Status:** IMPLEMENTED
+
+During TUI v0.1 development, the old menu remains operational while the new menu is being built. This allows testing of the new menu without disrupting existing functionality.
+
+**Bridge Implementation:**
+- Old menu displays `[n] New Menu` option (added to `draw_menu()` in `tui.rs`)
+- Pressing `n` from old menu enters `AppMode::NewMenu`
+- From new menu, pressing `ESC` returns to old menu
+- New menu keys: `1`-`5` for submenu items, `q` to quit
+
+**Files Modified:**
+- `src/ui/tui.rs`:
+  - Added `NewMenu` variant to `AppMode` enum
+  - Added `main_menu_state` variable initialization
+  - Added key handler for `'n'` in `AppMode::Menu`
+  - Added key handling for `AppMode::NewMenu`
+  - Added rendering for `AppMode::NewMenu`
+  - Added `[n] New Menu` option to `draw_menu()`
+
+---
+
+### Task TUI-7.0: Remove Bridge and Replace Old Menu
 
 **File:** `src/ui/tui.rs`
 
-Update `AppMode` enum and main loop:
+**Objective:** Once all submenus (TUI-1.0 through TUI-5.0) are complete and tested, remove the old menu and make the new menu the default.
+
+**Changes Required:**
+1. Remove old `draw_menu()` function (the inline menu renderer)
+2. Change `AppMode::Menu` to render `draw_main_menu()` instead
+3. Remove `AppMode::NewMenu` variant (merge into `AppMode::Menu`)
+4. Update key bindings in `AppMode::Menu` to use new menu items
+5. Remove the `[n] New Menu` bridge option
+
+**Updated AppMode Enum (after TUI-7.0):**
 
 ```rust
 pub enum AppMode {
-    // Main menu
-    MainMenu,
+    // Main menu (new v0.1 menu)
+    Menu,
 
     // Submenus
     ResearchMenu,
@@ -565,10 +597,13 @@ pub enum AppMode {
 - From operational mode → Parent submenu (or MainMenu)
 
 **Acceptance Criteria:**
+- [ ] Old `draw_menu()` function removed
+- [ ] New menu renders by default in `AppMode::Menu`
 - [ ] All submenus navigable from main menu
 - [ ] ESC works consistently
 - [ ] Existing modes still accessible via submenus
 - [ ] No functionality lost
+- [ ] `[n] New Menu` option removed
 - [ ] Integration tests for navigation flow
 
 ---
@@ -809,4 +844,4 @@ src/ui/
 ---
 
 *Document maintained by: Development Team*
-*Last updated: December 26, 2025*
+*Last updated: December 27, 2025*
