@@ -9,10 +9,12 @@
 //!   - `main_menu`: Main menu (Task 4.0)
 //!   - `research`: Research dashboard (Task 4.1)
 //! - `state`: Global state management (TUI-0.0)
+//! - `submenu`: SubMenu trait and navigation framework (TUI-0.2)
 
 pub mod tui;
 pub mod screens;
 pub mod state;
+pub mod submenu;
 
 pub use tui::run_tui;
 
@@ -41,4 +43,20 @@ pub use state::{
     ResearchStatus,
     DataStats,
     ValidationStage,
+};
+
+// SubMenu Framework (TUI-0.2)
+pub use submenu::{
+    SubMenu,
+    SubMenuAction,
+    SubMenuItem,
+    NavigationTarget,
+    CliCommand,
+    draw_submenu_frame,
+    draw_submenu_title,
+    draw_submenu_items,
+    draw_submenu_footer,
+    draw_message_dialog,
+    key_to_char,
+    is_back_key,
 };
