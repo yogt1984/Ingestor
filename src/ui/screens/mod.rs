@@ -16,6 +16,7 @@
 pub mod main_menu;
 pub mod research;
 pub mod research_menu;
+pub mod algorithms_menu;
 
 // Main Menu (Task 4.0)
 pub use main_menu::{
@@ -36,4 +37,11 @@ pub use research::{
 pub use research_menu::{
     ResearchMenu,
     draw_research_menu,
+};
+
+// Algorithms Menu (TUI-2.0)
+pub use algorithms_menu::{
+    AlgorithmsMenu,
+    StrategyFilter,
+    draw_algorithms_menu,
 };
