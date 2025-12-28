@@ -17,6 +17,7 @@ pub mod main_menu;
 pub mod research;
 pub mod research_menu;
 pub mod algorithms_menu;
+pub mod validate_menu;
 
 // Main Menu (Task 4.0)
 pub use main_menu::{
@@ -44,4 +45,10 @@ pub use algorithms_menu::{
     AlgorithmsMenu,
     StrategyFilter,
     draw_algorithms_menu,
+};
+
+// Validate Menu (TUI-3.0)
+pub use validate_menu::{
+    ValidateMenu,
+    draw_validate_menu,
 };
