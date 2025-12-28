@@ -74,6 +74,10 @@ pub enum NavigationTarget {
     Research,
     PresetSelect,
     PaperTradePreset,
+
+    // Algorithm management modes (TUI-2.0)
+    AlgorithmSelect,
+    AlgorithmCreate,
 }
 
 impl NavigationTarget {
@@ -100,6 +104,8 @@ impl NavigationTarget {
             Self::Research => "Research Dashboard",
             Self::PresetSelect => "Preset Selection",
             Self::PaperTradePreset => "Paper Trading",
+            Self::AlgorithmSelect => "Algorithm Selection",
+            Self::AlgorithmCreate => "Create Algorithm",
         }
     }
 }
