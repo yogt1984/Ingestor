@@ -3,6 +3,7 @@
 //! This module contains specialized screens for the TUI interface:
 //! - Main Menu (Task 4.0): Restructured 6-item main menu
 //! - Research Dashboard (Task 4.1): Current research state display
+//! - Research Menu (TUI-1.0): Research submenu implementation
 //! - Validation Dashboard (Task 4.2): Validation pipeline results
 //! - Algorithm Dashboard (Task 4.3): Active algorithms display
 //!
@@ -14,6 +15,7 @@
 
 pub mod main_menu;
 pub mod research;
+pub mod research_menu;
 
 // Main Menu (Task 4.0)
 pub use main_menu::{
@@ -28,4 +30,10 @@ pub use research::{
     ResearchScreenState,
     ResearchEngineStatus,
     draw_research_screen,
+};
+
+// Research Menu (TUI-1.0)
+pub use research_menu::{
+    ResearchMenu,
+    draw_research_menu,
 };
