@@ -8,11 +8,14 @@
 //! - `screens`: Specialized dashboard screens (Task 4.x)
 //!   - `main_menu`: Main menu (Task 4.0)
 //!   - `research`: Research dashboard (Task 4.1)
+//! - `widgets`: Reusable UI widgets (TUI-6.0+)
+//!   - `status_bar`: Persistent status bar (TUI-6.0)
 //! - `state`: Global state management (TUI-0.0)
 //! - `submenu`: SubMenu trait and navigation framework (TUI-0.2)
 
 pub mod tui;
 pub mod screens;
+pub mod widgets;
 pub mod state;
 pub mod submenu;
 
@@ -60,3 +63,6 @@ pub use submenu::{
     key_to_char,
     is_back_key,
 };
+
+// Widgets (TUI-6.0+)
+pub use widgets::{StatusBar, draw_status_bar};
