@@ -19,6 +19,7 @@ pub mod research_menu;
 pub mod algorithms_menu;
 pub mod validate_menu;
 pub mod trade_menu;
+pub mod data_menu;
 
 // Main Menu (Task 4.0)
 pub use main_menu::{
@@ -58,4 +59,10 @@ pub use validate_menu::{
 pub use trade_menu::{
     TradeMenu,
     draw_trade_menu,
+};
+
+// Data Menu (TUI-5.0)
+pub use data_menu::{
+    DataMenu,
+    draw_data_menu,
 };
