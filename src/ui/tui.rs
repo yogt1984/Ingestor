@@ -29,6 +29,10 @@ use crate::forward_testing::{ForwardTestSession, ForwardTestConfig};
 use crate::execution::presets::{PresetStore, ParameterPreset};
 use crate::strategies::AlgorithmType;
 use crate::ui::screens::{ResearchScreen, draw_research_screen, MainMenuState, draw_main_menu, MainMenuItem};
+use crate::ui::tui_integration::{MenuIntegration, CurrentSubMenu, process_action, ActionResult, draw_menu_with_status};
+use crate::ui::state::GlobalState;
+use crate::ui::submenu::SubMenu;
+use crate::ui::widgets::draw_status_bar;
 
 type Term = Terminal<CrosstermBackend<io::Stdout>>;
 
@@ -576,6 +580,13 @@ fn main_loop(
     // New TUI v0.1 main menu state (under development)
     let mut main_menu_state = MainMenuState::new(&symbol);
 
+    // TUI-7.0: Menu integration with submenus
+    let mut global_state = GlobalState {
+        symbol: symbol.clone(),
+        ..Default::default()
+    };
+    let mut menu_integration = MenuIntegration::new();
+
     loop {
         // Handle input
         if event::poll(Duration::from_millis(50))? {
@@ -782,39 +793,108 @@ fn main_loop(
                         }
                     },
                     AppMode::NewMenu => {
-                        // Handle new TUI v0.1 main menu
-                        match key.code {
-                            KeyCode::Esc => {
-                                // Go back to old menu
-                                mode = AppMode::Menu;
-                            }
-                            KeyCode::Char(c) => {
-                                // Handle menu selection via MainMenuItem
-                                if let Some(item) = MainMenuItem::from_key(c) {
-                                    main_menu_state.selected = Some(item);
-                                    match item {
-                                        MainMenuItem::Research => {
-                                            // TODO: Navigate to Research submenu when implemented
-                                        }
-                                        MainMenuItem::Algorithms => {
-                                            // TODO: Navigate to Algorithms submenu when implemented
-                                        }
-                                        MainMenuItem::Validate => {
-                                            // TODO: Navigate to Validate submenu when implemented
-                                        }
-                                        MainMenuItem::Trade => {
-                                            // TODO: Navigate to Trade submenu when implemented
-                                        }
-                                        MainMenuItem::Data => {
-                                            // TODO: Navigate to Data submenu when implemented
-                                        }
-                                        MainMenuItem::Quit => {
-                                            return Ok(settings);
+                        // TUI-7.0: Handle new TUI main menu with submenu navigation
+                        if menu_integration.current.is_main_menu() {
+                            // We're at the main menu level
+                            match key.code {
+                                KeyCode::Esc => {
+                                    // Go back to old menu (bridge)
+                                    mode = AppMode::Menu;
+                                }
+                                KeyCode::Char(c) => {
+                                    // Handle menu selection via MainMenuItem
+                                    if let Some(item) = MainMenuItem::from_key(c) {
+                                        main_menu_state.selected = Some(item);
+                                        match item {
+                                            MainMenuItem::Research => {
+                                                menu_integration.navigate_to(CurrentSubMenu::Research);
+                                            }
+                                            MainMenuItem::Algorithms => {
+                                                menu_integration.navigate_to(CurrentSubMenu::Algorithms);
+                                            }
+                                            MainMenuItem::Validate => {
+                                                menu_integration.navigate_to(CurrentSubMenu::Validate);
+                                            }
+                                            MainMenuItem::Trade => {
+                                                menu_integration.navigate_to(CurrentSubMenu::Trade);
+                                            }
+                                            MainMenuItem::Data => {
+                                                menu_integration.navigate_to(CurrentSubMenu::Data);
+                                            }
+                                            MainMenuItem::Quit => {
+                                                return Ok(settings);
+                                            }
                                         }
                                     }
                                 }
+                                _ => {}
                             }
-                            _ => {}
+                        } else {
+                            // We're in a submenu - delegate to the appropriate submenu handler
+                            let action = match menu_integration.current {
+                                CurrentSubMenu::Research => {
+                                    menu_integration.research_menu.handle_key(key.code, &global_state)
+                                }
+                                CurrentSubMenu::Algorithms => {
+                                    menu_integration.algorithms_menu.handle_key(key.code, &global_state)
+                                }
+                                CurrentSubMenu::Validate => {
+                                    menu_integration.validate_menu.handle_key(key.code, &global_state)
+                                }
+                                CurrentSubMenu::Trade => {
+                                    menu_integration.trade_menu.handle_key(key.code, &global_state)
+                                }
+                                CurrentSubMenu::Data => {
+                                    menu_integration.data_menu.handle_key(key.code, &global_state)
+                                }
+                                CurrentSubMenu::None => crate::ui::submenu::SubMenuAction::None,
+                            };
+
+                            // Process the action
+                            match process_action(action) {
+                                ActionResult::None | ActionResult::Stay => {}
+                                ActionResult::NavigateToSubMenu(submenu) => {
+                                    menu_integration.navigate_to(submenu);
+                                }
+                                ActionResult::NavigateToMode(target) => {
+                                    // Navigate to AppMode based on target
+                                    use crate::ui::submenu::NavigationTarget;
+                                    match target {
+                                        NavigationTarget::Live => mode = AppMode::Live,
+                                        NavigationTarget::LiveMM => mode = AppMode::LiveMM,
+                                        NavigationTarget::Backtest => mode = AppMode::Backtest,
+                                        NavigationTarget::WalkForward => mode = AppMode::WalkForward,
+                                        NavigationTarget::DataQuality => mode = AppMode::DataQuality,
+                                        NavigationTarget::CampaignSimulation => mode = AppMode::CampaignSimulation,
+                                        NavigationTarget::DataInfo => mode = AppMode::DataInfo,
+                                        NavigationTarget::GridSearch => mode = AppMode::GridSearch,
+                                        NavigationTarget::Sweep => mode = AppMode::Sweep,
+                                        NavigationTarget::OOSValidation => mode = AppMode::OOSValidation,
+                                        NavigationTarget::Research => mode = AppMode::Research,
+                                        NavigationTarget::PresetSelect => mode = AppMode::PresetSelect,
+                                        NavigationTarget::Features => mode = AppMode::Features,
+                                        _ => {}
+                                    }
+                                    // Reset submenu state when leaving
+                                    menu_integration.go_back();
+                                }
+                                ActionResult::ShowMessage(msg) => {
+                                    menu_integration.set_message(msg);
+                                }
+                                ActionResult::ExecuteCommand(_cmd) => {
+                                    // CLI command execution would go here
+                                    // For now, just show a message
+                                    menu_integration.set_message("CLI commands not yet implemented".to_string());
+                                }
+                                ActionResult::Quit => {
+                                    return Ok(settings);
+                                }
+                            }
+
+                            // Clear message on any key if one is showing
+                            if menu_integration.has_message() && !matches!(process_action(crate::ui::submenu::SubMenuAction::None), ActionResult::ShowMessage(_)) {
+                                menu_integration.clear_message();
+                            }
                         }
                     },
                 }
@@ -1014,8 +1094,14 @@ fn main_loop(
                 terminal.draw(|f| draw_research_screen(f, &research_screen.state))?;
             }
             AppMode::NewMenu => {
-                // Draw the new TUI v0.1 main menu
-                terminal.draw(|f| draw_main_menu(f, &main_menu_state))?;
+                // TUI-7.0: Draw the new TUI with submenu support
+                if menu_integration.current.is_main_menu() {
+                    // Draw main menu
+                    terminal.draw(|f| draw_main_menu(f, &main_menu_state))?;
+                } else {
+                    // Draw current submenu with status bar
+                    terminal.draw(|f| draw_menu_with_status(f, &menu_integration, &global_state))?;
+                }
             }
         }
     }
