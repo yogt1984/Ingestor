@@ -13,6 +13,7 @@
 //! - `state`: Global state management (TUI-0.0)
 //! - `submenu`: SubMenu trait and navigation framework (TUI-0.2)
 //! - `tui_integration`: Menu integration and navigation (TUI-7.0)
+//! - `algorithm_persistence`: Algorithm selection persistence (TUI-8.0)
 
 pub mod tui;
 pub mod screens;
@@ -20,6 +21,7 @@ pub mod widgets;
 pub mod state;
 pub mod submenu;
 pub mod tui_integration;
+pub mod algorithm_persistence;
 
 pub use tui::run_tui;
 
@@ -77,4 +79,14 @@ pub use tui_integration::{
     process_action,
     draw_menu_with_status,
     draw_current_menu,
+};
+
+// Algorithm Persistence (TUI-8.0)
+pub use algorithm_persistence::{
+    AlgorithmPersistence,
+    AlgorithmPersistenceConfig,
+    PersistedSelection,
+    load_selected_algorithm,
+    save_selected_algorithm,
+    clear_selected_algorithm,
 };
