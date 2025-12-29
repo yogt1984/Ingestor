@@ -12,12 +12,14 @@
 //!   - `status_bar`: Persistent status bar (TUI-6.0)
 //! - `state`: Global state management (TUI-0.0)
 //! - `submenu`: SubMenu trait and navigation framework (TUI-0.2)
+//! - `tui_integration`: Menu integration and navigation (TUI-7.0)
 
 pub mod tui;
 pub mod screens;
 pub mod widgets;
 pub mod state;
 pub mod submenu;
+pub mod tui_integration;
 
 pub use tui::run_tui;
 
@@ -66,3 +68,13 @@ pub use submenu::{
 
 // Widgets (TUI-6.0+)
 pub use widgets::{StatusBar, draw_status_bar};
+
+// TUI Integration (TUI-7.0)
+pub use tui_integration::{
+    CurrentSubMenu,
+    MenuIntegration,
+    ActionResult,
+    process_action,
+    draw_menu_with_status,
+    draw_current_menu,
+};
