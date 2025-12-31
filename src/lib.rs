@@ -42,6 +42,9 @@ pub mod forward_testing;
 // Validation Pipeline (Task 2.0)
 pub mod validation;
 
+// Unified Command Execution Layer (TUI-0.26, Task T-1.1)
+pub mod commands;
+
 // Re-export commonly used types for convenience
 pub use data::{
     ConcurrentOrderBook, OrderBook, OrderBookEngine, OrderBookFeatures, OrderBookEngineConfig,
