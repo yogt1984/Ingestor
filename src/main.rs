@@ -37,7 +37,7 @@ async fn main() {
     env_logger::init();
 
     // Trading pair symbol (e.g., BTCUSDT, ETHUSDT, AVAXUSDT)
-    const SYMBOL: &str = "BTCUSDT";
+    const SYMBOL: &str = "ETHUSDT";
 
     let (shutdown_tx,    shutdown_rx)     = watch::channel(false);
     let (orderbook_tx,   orderbook_rx)    = mpsc::channel::<OrderBookFeatures>(100);
