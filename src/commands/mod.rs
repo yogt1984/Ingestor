@@ -6,18 +6,18 @@
 //!
 //! # Architecture
 //!
-//! ```
+//! ```text
 //! Command Execution Layer (src/commands/)
-//!     ├── backtest.rs      - All backtest commands
-//!     ├── research.rs      - All research commands
-//!     ├── validate.rs      - All validate commands
-//!     ├── algorithm.rs     - All algorithm commands
-//!     ├── params/          - Parameter builders
-//!     │   ├── backtest_params.rs
-//!     │   ├── research_params.rs
-//!     │   ├── validate_params.rs
-//!     │   └── algorithm_params.rs
-//!     └── common.rs         - Progress callbacks, shared types
+//!     - backtest.rs      - All backtest commands
+//!     - research.rs      - All research commands
+//!     - validate.rs      - All validate commands
+//!     - algorithm.rs     - All algorithm commands
+//!     - params/          - Parameter builders
+//!         - backtest_params.rs
+//!         - research_params.rs
+//!         - validate_params.rs
+//!         - algorithm_params.rs
+//!     - common.rs         - Progress callbacks, shared types
 //! ```
 //!
 //! # Usage
@@ -55,4 +55,5 @@ pub use common::{
     LogLevel,
     NoOpCallback,
 };
+
 
