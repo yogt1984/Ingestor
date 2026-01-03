@@ -4178,4 +4178,1019 @@ mod regime_optimize_params_tests {
     }
 }
 
+#[cfg(test)]
+mod train_params_tests {
+    use super::*;
+
+    // ============================================================================
+    // Builder Defaults Tests
+    // ============================================================================
+
+    #[test]
+    fn test_train_params_builder_defaults() {
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0,2.0".to_string())
+            .spread_entropy_weights("-3.0,-2.0".to_string())
+            .spread_vol_weights("200.0,400.0".to_string())
+            .skew_intercepts("0.3,0.5".to_string())
+            .skew_inv_weights("-1.0,-0.8".to_string())
+            .build()
+            .unwrap();
+
+        assert_eq!(params.train_ratio, 0.7);
+        assert_eq!(params.max_inventory, 0.1);
+        assert_eq!(params.quote_size, 0.001);
+        assert_eq!(params.fill_prob, 0.10);
+        assert_eq!(params.fee_rate, 0.0001);
+        assert!(!params.naive_fills);
+        assert_eq!(params.queue_pos, 0.5);
+    }
+
+    // ============================================================================
+    // Required Fields Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_train_params_missing_data_path() {
+        let result = TrainParamsBuilder::new()
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("data_path"));
+    }
+
+    #[test]
+    fn test_train_params_missing_algorithm() {
+        let result = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("algorithm"));
+    }
+
+    #[test]
+    fn test_train_params_missing_spread_intercepts() {
+        let result = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("spread_intercepts"));
+    }
+
+    #[test]
+    fn test_train_params_missing_spread_entropy_weights() {
+        let result = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("spread_entropy_weights"));
+    }
+
+    #[test]
+    fn test_train_params_missing_spread_vol_weights() {
+        let result = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("spread_vol_weights"));
+    }
+
+    #[test]
+    fn test_train_params_missing_skew_intercepts() {
+        let result = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("skew_intercepts"));
+    }
+
+    #[test]
+    fn test_train_params_missing_skew_inv_weights() {
+        let result = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("skew_inv_weights"));
+    }
+
+    // ============================================================================
+    // Parameter Parsing Tests
+    // ============================================================================
+
+    #[test]
+    fn test_train_params_parse_spread_intercepts() {
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0,2.0,3.0,4.0,5.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        let intercepts: Vec<f64> = params.spread_intercepts
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        assert_eq!(intercepts, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn test_train_params_parse_spread_entropy_weights() {
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-3.0,-2.0,-1.0,0.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        let weights: Vec<f64> = params.spread_entropy_weights
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        assert_eq!(weights, vec![-3.0, -2.0, -1.0, 0.0]);
+    }
+
+    #[test]
+    fn test_train_params_parse_spread_vol_weights() {
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0,400.0,600.0,800.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        let weights: Vec<f64> = params.spread_vol_weights
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        assert_eq!(weights, vec![200.0, 400.0, 600.0, 800.0]);
+    }
+
+    #[test]
+    fn test_train_params_parse_skew_intercepts() {
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3,0.5,0.7,0.9".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        let intercepts: Vec<f64> = params.skew_intercepts
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        assert_eq!(intercepts, vec![0.3, 0.5, 0.7, 0.9]);
+    }
+
+    #[test]
+    fn test_train_params_parse_skew_inv_weights() {
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0,-0.8,-0.6,-0.4,-0.2".to_string())
+            .build()
+            .unwrap();
+
+        let weights: Vec<f64> = params.skew_inv_weights
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        assert_eq!(weights, vec![-1.0, -0.8, -0.6, -0.4, -0.2]);
+    }
+
+    #[test]
+    fn test_train_params_parse_with_whitespace() {
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts(" 1.0 , 2.0 , 3.0 ".to_string())
+            .spread_entropy_weights(" -2.0 , -1.0 ".to_string())
+            .spread_vol_weights(" 200.0 , 400.0 ".to_string())
+            .skew_intercepts(" 0.3 , 0.5 ".to_string())
+            .skew_inv_weights(" -1.0 , -0.8 ".to_string())
+            .build()
+            .unwrap();
+
+        let intercepts: Vec<f64> = params.spread_intercepts
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        assert_eq!(intercepts, vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_train_params_empty_spread_intercepts() {
+        let result = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_train_params_invalid_spread_intercepts() {
+        let result = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("abc,def".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_train_params_mixed_valid_invalid() {
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0,invalid,2.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        // Should parse only valid values
+        let intercepts: Vec<f64> = params.spread_intercepts
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        assert_eq!(intercepts, vec![1.0, 2.0]);
+    }
+
+    // ============================================================================
+    // Range Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_train_params_train_ratio_range() {
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .train_ratio(0.0)
+            .build()
+            .unwrap();
+        assert_eq!(params.train_ratio, 0.0);
+
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .train_ratio(1.0)
+            .build()
+            .unwrap();
+        assert_eq!(params.train_ratio, 1.0);
+
+        let result = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .train_ratio(1.5)
+            .build();
+        assert!(result.is_err());
+
+        let result = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .train_ratio(-0.1)
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_train_params_fill_prob_range() {
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .fill_prob(0.0)
+            .build()
+            .unwrap();
+        assert_eq!(params.fill_prob, 0.0);
+
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .fill_prob(1.0)
+            .build()
+            .unwrap();
+        assert_eq!(params.fill_prob, 1.0);
+
+        let result = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .fill_prob(1.5)
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_train_params_queue_pos_range() {
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .queue_pos(0.0)
+            .build()
+            .unwrap();
+        assert_eq!(params.queue_pos, 0.0);
+
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .queue_pos(1.0)
+            .build()
+            .unwrap();
+        assert_eq!(params.queue_pos, 1.0);
+
+        let result = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .queue_pos(1.5)
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_train_params_fee_rate_validation() {
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .fee_rate(0.0)
+            .build()
+            .unwrap();
+        assert_eq!(params.fee_rate, 0.0);
+
+        let result = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .fee_rate(-0.1)
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_train_params_max_inventory_validation() {
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .max_inventory(0.01)
+            .build()
+            .unwrap();
+        assert_eq!(params.max_inventory, 0.01);
+
+        let result = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .max_inventory(0.0)
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_train_params_quote_size_validation() {
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .quote_size(0.0001)
+            .build()
+            .unwrap();
+        assert_eq!(params.quote_size, 0.0001);
+
+        let result = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .quote_size(0.0)
+            .build();
+        assert!(result.is_err());
+    }
+
+    // ============================================================================
+    // Custom Values Tests
+    // ============================================================================
+
+    #[test]
+    fn test_train_params_custom_values() {
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data/custom"))
+            .algorithm("ml-spread-skew".to_string())
+            .train_ratio(0.8)
+            .spread_intercepts("1.5,2.5,3.5".to_string())
+            .spread_entropy_weights("-2.5,-1.5".to_string())
+            .spread_vol_weights("300.0,500.0".to_string())
+            .skew_intercepts("0.4,0.6".to_string())
+            .skew_inv_weights("-0.9,-0.7".to_string())
+            .max_inventory(0.2)
+            .quote_size(0.002)
+            .fill_prob(0.15)
+            .fee_rate(0.0002)
+            .naive_fills(true)
+            .queue_pos(0.3)
+            .output(Some(PathBuf::from("./output.json")))
+            .build()
+            .unwrap();
+
+        assert_eq!(params.data_path, PathBuf::from("./data/custom"));
+        assert_eq!(params.algorithm, "ml-spread-skew");
+        assert_eq!(params.train_ratio, 0.8);
+        assert_eq!(params.spread_intercepts, "1.5,2.5,3.5");
+        assert_eq!(params.spread_entropy_weights, "-2.5,-1.5");
+        assert_eq!(params.spread_vol_weights, "300.0,500.0");
+        assert_eq!(params.skew_intercepts, "0.4,0.6");
+        assert_eq!(params.skew_inv_weights, "-0.9,-0.7");
+        assert_eq!(params.max_inventory, 0.2);
+        assert_eq!(params.quote_size, 0.002);
+        assert_eq!(params.fill_prob, 0.15);
+        assert_eq!(params.fee_rate, 0.0002);
+        assert!(params.naive_fills);
+        assert_eq!(params.queue_pos, 0.3);
+        assert_eq!(params.output, Some(PathBuf::from("./output.json")));
+    }
+
+    // ============================================================================
+    // Serialization/Deserialization Tests
+    // ============================================================================
+
+    #[test]
+    fn test_train_params_serialization() {
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .train_ratio(0.75)
+            .spread_intercepts("1.0,2.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .fill_prob(0.12)
+            .build()
+            .unwrap();
+
+        let json = serde_json::to_string(&params).unwrap();
+        let deserialized: TrainParams = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(params.data_path, deserialized.data_path);
+        assert_eq!(params.algorithm, deserialized.algorithm);
+        assert_eq!(params.train_ratio, deserialized.train_ratio);
+        assert_eq!(params.spread_intercepts, deserialized.spread_intercepts);
+        assert_eq!(params.fill_prob, deserialized.fill_prob);
+    }
+
+    #[test]
+    fn test_train_params_roundtrip_serialization() {
+        let original = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml-spread-skew".to_string())
+            .train_ratio(0.8)
+            .spread_intercepts("1.5,2.5,3.5".to_string())
+            .spread_entropy_weights("-2.5,-1.5".to_string())
+            .spread_vol_weights("300.0,500.0".to_string())
+            .skew_intercepts("0.4,0.6".to_string())
+            .skew_inv_weights("-0.9,-0.7".to_string())
+            .max_inventory(0.15)
+            .quote_size(0.0015)
+            .fill_prob(0.12)
+            .fee_rate(0.00015)
+            .naive_fills(true)
+            .queue_pos(0.4)
+            .output(Some(PathBuf::from("./results.json")))
+            .build()
+            .unwrap();
+
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: TrainParams = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(original.data_path, deserialized.data_path);
+        assert_eq!(original.algorithm, deserialized.algorithm);
+        assert_eq!(original.train_ratio, deserialized.train_ratio);
+        assert_eq!(original.spread_intercepts, deserialized.spread_intercepts);
+        assert_eq!(original.spread_entropy_weights, deserialized.spread_entropy_weights);
+        assert_eq!(original.spread_vol_weights, deserialized.spread_vol_weights);
+        assert_eq!(original.skew_intercepts, deserialized.skew_intercepts);
+        assert_eq!(original.skew_inv_weights, deserialized.skew_inv_weights);
+        assert_eq!(original.max_inventory, deserialized.max_inventory);
+        assert_eq!(original.quote_size, deserialized.quote_size);
+        assert_eq!(original.fill_prob, deserialized.fill_prob);
+        assert_eq!(original.fee_rate, deserialized.fee_rate);
+        assert_eq!(original.naive_fills, deserialized.naive_fills);
+        assert_eq!(original.queue_pos, deserialized.queue_pos);
+        assert_eq!(original.output, deserialized.output);
+    }
+
+    // ============================================================================
+    // Edge Cases Tests
+    // ============================================================================
+
+    #[test]
+    fn test_train_params_single_value_lists() {
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("2.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("400.0".to_string())
+            .skew_intercepts("0.5".to_string())
+            .skew_inv_weights("-0.8".to_string())
+            .build()
+            .unwrap();
+
+        let intercepts: Vec<f64> = params.spread_intercepts
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        assert_eq!(intercepts, vec![2.0]);
+    }
+
+    #[test]
+    fn test_train_params_large_lists() {
+        let spread_intercepts_str = (1..=50).map(|i| (i as f64).to_string()).collect::<Vec<_>>().join(",");
+        let spread_entropy_weights_str = (-10..=0).map(|i| (i as f64).to_string()).collect::<Vec<_>>().join(",");
+
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts(spread_intercepts_str.clone())
+            .spread_entropy_weights(spread_entropy_weights_str.clone())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        assert_eq!(params.spread_intercepts, spread_intercepts_str);
+        assert_eq!(params.spread_entropy_weights, spread_entropy_weights_str);
+    }
+
+    #[test]
+    fn test_train_params_path_handling() {
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("/absolute/path/to/data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .output(Some(PathBuf::from("/absolute/path/to/output.json")))
+            .build()
+            .unwrap();
+
+        assert_eq!(params.data_path, PathBuf::from("/absolute/path/to/data"));
+        assert_eq!(params.output, Some(PathBuf::from("/absolute/path/to/output.json")));
+    }
+
+    #[test]
+    fn test_train_params_none_output() {
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .output(None)
+            .build()
+            .unwrap();
+
+        assert_eq!(params.output, None);
+    }
+
+    #[test]
+    fn test_train_params_negative_weights() {
+        // Negative weights are valid for entropy and inventory weights
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-5.0,-4.0,-3.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-2.0,-1.5,-1.0".to_string())
+            .build()
+            .unwrap();
+
+        let entropy_weights: Vec<f64> = params.spread_entropy_weights
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        assert_eq!(entropy_weights, vec![-5.0, -4.0, -3.0]);
+
+        let inv_weights: Vec<f64> = params.skew_inv_weights
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        assert_eq!(inv_weights, vec![-2.0, -1.5, -1.0]);
+    }
+}
+
+/// Parameters for the `train` command (ML weight training - ML Spread/Skew algorithm only)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrainParams {
+    /// Path to data directory containing Parquet files
+    pub data_path: PathBuf,
+    /// Algorithm to use (must be ML Spread/Skew: ml or ml-spread-skew)
+    pub algorithm: String,
+    /// Train/test split ratio (fraction for training, 0.0-1.0)
+    pub train_ratio: f64,
+    /// Spread intercept values to test (comma-separated string)
+    pub spread_intercepts: String,
+    /// Spread entropy weight values to test (comma-separated string)
+    pub spread_entropy_weights: String,
+    /// Spread volatility weight values to test (comma-separated string)
+    pub spread_vol_weights: String,
+    /// Skew intercept values to test (comma-separated string)
+    pub skew_intercepts: String,
+    /// Skew inventory weight values to test (comma-separated string)
+    pub skew_inv_weights: String,
+    /// Maximum inventory
+    pub max_inventory: f64,
+    /// Quote size
+    pub quote_size: f64,
+    /// Fill probability (0.0-1.0) for simulation
+    pub fill_prob: f64,
+    /// Fee rate (e.g., 0.0001 = 1 bps)
+    pub fee_rate: f64,
+    /// Use naive fill simulation (for comparison)
+    pub naive_fills: bool,
+    /// Queue position (0.0=front, 1.0=back)
+    pub queue_pos: f64,
+    /// Output file for results (JSON)
+    pub output: Option<PathBuf>,
+}
+
+/// Builder for `TrainParams` with validation
+pub struct TrainParamsBuilder {
+    data_path: Option<PathBuf>,
+    algorithm: Option<String>,
+    train_ratio: Option<f64>,
+    spread_intercepts: Option<String>,
+    spread_entropy_weights: Option<String>,
+    spread_vol_weights: Option<String>,
+    skew_intercepts: Option<String>,
+    skew_inv_weights: Option<String>,
+    max_inventory: Option<f64>,
+    quote_size: Option<f64>,
+    fill_prob: Option<f64>,
+    fee_rate: Option<f64>,
+    naive_fills: Option<bool>,
+    queue_pos: Option<f64>,
+    output: Option<PathBuf>,
+}
+
+impl TrainParamsBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            data_path: None,
+            algorithm: None,
+            train_ratio: None,
+            spread_intercepts: None,
+            spread_entropy_weights: None,
+            spread_vol_weights: None,
+            skew_intercepts: None,
+            skew_inv_weights: None,
+            max_inventory: None,
+            quote_size: None,
+            fill_prob: None,
+            fee_rate: None,
+            naive_fills: None,
+            queue_pos: None,
+            output: None,
+        }
+    }
+
+    /// Set data path
+    pub fn data_path(mut self, path: PathBuf) -> Self {
+        self.data_path = Some(path);
+        self
+    }
+
+    /// Set algorithm
+    pub fn algorithm(mut self, algo: String) -> Self {
+        self.algorithm = Some(algo);
+        self
+    }
+
+    /// Set train ratio
+    pub fn train_ratio(mut self, ratio: f64) -> Self {
+        self.train_ratio = Some(ratio);
+        self
+    }
+
+    /// Set spread intercepts (comma-separated string)
+    pub fn spread_intercepts(mut self, intercepts: String) -> Self {
+        self.spread_intercepts = Some(intercepts);
+        self
+    }
+
+    /// Set spread entropy weights (comma-separated string)
+    pub fn spread_entropy_weights(mut self, weights: String) -> Self {
+        self.spread_entropy_weights = Some(weights);
+        self
+    }
+
+    /// Set spread volatility weights (comma-separated string)
+    pub fn spread_vol_weights(mut self, weights: String) -> Self {
+        self.spread_vol_weights = Some(weights);
+        self
+    }
+
+    /// Set skew intercepts (comma-separated string)
+    pub fn skew_intercepts(mut self, intercepts: String) -> Self {
+        self.skew_intercepts = Some(intercepts);
+        self
+    }
+
+    /// Set skew inventory weights (comma-separated string)
+    pub fn skew_inv_weights(mut self, weights: String) -> Self {
+        self.skew_inv_weights = Some(weights);
+        self
+    }
+
+    /// Set max inventory
+    pub fn max_inventory(mut self, max_inv: f64) -> Self {
+        self.max_inventory = Some(max_inv);
+        self
+    }
+
+    /// Set quote size
+    pub fn quote_size(mut self, size: f64) -> Self {
+        self.quote_size = Some(size);
+        self
+    }
+
+    /// Set fill probability
+    pub fn fill_prob(mut self, prob: f64) -> Self {
+        self.fill_prob = Some(prob);
+        self
+    }
+
+    /// Set fee rate
+    pub fn fee_rate(mut self, rate: f64) -> Self {
+        self.fee_rate = Some(rate);
+        self
+    }
+
+    /// Set naive fills flag
+    pub fn naive_fills(mut self, naive: bool) -> Self {
+        self.naive_fills = Some(naive);
+        self
+    }
+
+    /// Set queue position
+    pub fn queue_pos(mut self, pos: f64) -> Self {
+        self.queue_pos = Some(pos);
+        self
+    }
+
+    /// Set output file
+    pub fn output(mut self, path: Option<PathBuf>) -> Self {
+        self.output = path;
+        self
+    }
+
+    /// Parse comma-separated string to Vec<f64>
+    fn parse_f64_list(s: &str) -> Result<Vec<f64>> {
+        let values: Vec<f64> = s
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        if values.is_empty() {
+            anyhow::bail!("No valid numeric values found in parameter list: '{}'", s);
+        }
+        Ok(values)
+    }
+
+    /// Build `TrainParams` with validation
+    pub fn build(self) -> Result<TrainParams> {
+        // Validate required fields
+        let data_path = self.data_path
+            .ok_or_else(|| anyhow::anyhow!("data_path is required"))?;
+        let algorithm = self.algorithm
+            .ok_or_else(|| anyhow::anyhow!("algorithm is required"))?;
+        let spread_intercepts = self.spread_intercepts
+            .ok_or_else(|| anyhow::anyhow!("spread_intercepts is required"))?;
+        let spread_entropy_weights = self.spread_entropy_weights
+            .ok_or_else(|| anyhow::anyhow!("spread_entropy_weights is required"))?;
+        let spread_vol_weights = self.spread_vol_weights
+            .ok_or_else(|| anyhow::anyhow!("spread_vol_weights is required"))?;
+        let skew_intercepts = self.skew_intercepts
+            .ok_or_else(|| anyhow::anyhow!("skew_intercepts is required"))?;
+        let skew_inv_weights = self.skew_inv_weights
+            .ok_or_else(|| anyhow::anyhow!("skew_inv_weights is required"))?;
+
+        // Parse and validate parameter lists
+        let _spread_intercepts_vec = Self::parse_f64_list(&spread_intercepts)
+            .context("Failed to parse spread_intercepts")?;
+        let _spread_entropy_weights_vec = Self::parse_f64_list(&spread_entropy_weights)
+            .context("Failed to parse spread_entropy_weights")?;
+        let _spread_vol_weights_vec = Self::parse_f64_list(&spread_vol_weights)
+            .context("Failed to parse spread_vol_weights")?;
+        let _skew_intercepts_vec = Self::parse_f64_list(&skew_intercepts)
+            .context("Failed to parse skew_intercepts")?;
+        let _skew_inv_weights_vec = Self::parse_f64_list(&skew_inv_weights)
+            .context("Failed to parse skew_inv_weights")?;
+
+        // Validate train_ratio
+        let train_ratio = self.train_ratio.unwrap_or(0.7);
+        if !(0.0..=1.0).contains(&train_ratio) {
+            anyhow::bail!("train_ratio must be in range [0.0, 1.0], found {}", train_ratio);
+        }
+
+        // Validate fill_prob
+        let fill_prob = self.fill_prob.unwrap_or(0.10);
+        if !(0.0..=1.0).contains(&fill_prob) {
+            anyhow::bail!("fill_prob must be in range [0.0, 1.0], found {}", fill_prob);
+        }
+
+        // Validate other ranges
+        if let Some(queue_pos) = self.queue_pos {
+            if !(0.0..=1.0).contains(&queue_pos) {
+                anyhow::bail!("queue_pos must be in range [0.0, 1.0]");
+            }
+        }
+        if let Some(fee_rate) = self.fee_rate {
+            if fee_rate < 0.0 {
+                anyhow::bail!("fee_rate must be >= 0.0");
+            }
+        }
+        if let Some(max_inventory) = self.max_inventory {
+            if max_inventory <= 0.0 {
+                anyhow::bail!("max_inventory must be > 0.0");
+            }
+        }
+        if let Some(quote_size) = self.quote_size {
+            if quote_size <= 0.0 {
+                anyhow::bail!("quote_size must be > 0.0");
+            }
+        }
+
+        Ok(TrainParams {
+            data_path,
+            algorithm,
+            train_ratio,
+            spread_intercepts,
+            spread_entropy_weights,
+            spread_vol_weights,
+            skew_intercepts,
+            skew_inv_weights,
+            max_inventory: self.max_inventory.unwrap_or(0.1),
+            quote_size: self.quote_size.unwrap_or(0.001),
+            fill_prob,
+            fee_rate: self.fee_rate.unwrap_or(0.0001),
+            naive_fills: self.naive_fills.unwrap_or(false),
+            queue_pos: self.queue_pos.unwrap_or(0.5),
+            output: self.output,
+        })
+    }
+}
+
+impl Default for TrainParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 

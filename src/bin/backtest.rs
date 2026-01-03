@@ -63,7 +63,7 @@ use ingestor::strategies::{
 };
 use ingestor::commands::{
     BacktestCommands,
-    params::backtest_params::{EvaluateParamsBuilder, TuneParamsBuilder, RegimeSearchParamsBuilder, MultiObjectiveParamsBuilder, RegimeOptimizeParamsBuilder},
+    params::backtest_params::{EvaluateParamsBuilder, TuneParamsBuilder, RegimeSearchParamsBuilder, MultiObjectiveParamsBuilder, RegimeOptimizeParamsBuilder, TrainParamsBuilder},
 };
 use ingestor::commands::common::{NoOpCallback, ProgressCallback};
 use std::sync::Arc;
@@ -1968,75 +1968,78 @@ fn run_train_ml(
     skew_inv_weights: &str,
     output: Option<std::path::PathBuf>,
 ) -> Result<()> {
-    // Parse parameter grids
-    let spread_intercepts: Vec<f64> = spread_intercepts
+    // Build TrainParams from CLI
+    let params = TrainParamsBuilder::new()
+        .data_path(cli.data.clone())
+        .algorithm(cli.algorithm.clone())
+        .train_ratio(train_ratio)
+        .spread_intercepts(spread_intercepts.to_string())
+        .spread_entropy_weights(spread_entropy_weights.to_string())
+        .spread_vol_weights(spread_vol_weights.to_string())
+        .skew_intercepts(skew_intercepts.to_string())
+        .skew_inv_weights(skew_inv_weights.to_string())
+        .max_inventory(cli.max_inventory)
+        .quote_size(cli.quote_size)
+        .fill_prob(cli.fill_prob)
+        .fee_rate(cli.fee_rate)
+        .naive_fills(cli.naive_fills)
+        .queue_pos(cli.queue_pos)
+        .output(output.clone())
+        .build()?;
+
+    // Parse algorithm type for display
+    let (algo_type, algo_name) = parse_algorithm_type(&cli.algorithm)?;
+
+    // Parse parameter grids for display
+    let spread_intercepts_vec: Vec<f64> = spread_intercepts
         .split(',')
         .filter_map(|s| s.trim().parse().ok())
         .collect();
-    let spread_entropy_weights: Vec<f64> = spread_entropy_weights
+    let spread_entropy_weights_vec: Vec<f64> = spread_entropy_weights
         .split(',')
         .filter_map(|s| s.trim().parse().ok())
         .collect();
-    let spread_vol_weights: Vec<f64> = spread_vol_weights
+    let spread_vol_weights_vec: Vec<f64> = spread_vol_weights
         .split(',')
         .filter_map(|s| s.trim().parse().ok())
         .collect();
-    let skew_intercepts: Vec<f64> = skew_intercepts
+    let skew_intercepts_vec: Vec<f64> = skew_intercepts
         .split(',')
         .filter_map(|s| s.trim().parse().ok())
         .collect();
-    let skew_inv_weights: Vec<f64> = skew_inv_weights
+    let skew_inv_weights_vec: Vec<f64> = skew_inv_weights
         .split(',')
         .filter_map(|s| s.trim().parse().ok())
         .collect();
 
-    let total_combinations = spread_intercepts.len()
-        * spread_entropy_weights.len()
-        * spread_vol_weights.len()
-        * skew_intercepts.len()
-        * skew_inv_weights.len();
+    let total_combinations = spread_intercepts_vec.len()
+        * spread_entropy_weights_vec.len()
+        * spread_vol_weights_vec.len()
+        * skew_intercepts_vec.len()
+        * skew_inv_weights_vec.len();
 
     println!("═══════════════════════════════════════════════════════════════════════");
     println!("              ML WEIGHT TRAINING (Grid Search)                          ");
     println!("═══════════════════════════════════════════════════════════════════════");
     println!();
     println!("CONFIGURATION:");
-    println!("  Data:            {:?}", cli.data);
-    println!("  Train Ratio:     {:.0}%", train_ratio * 100.0);
+    println!("  Algorithm:        {} ({})", algo_name, algo_type.as_str());
+    println!("  Data:             {:?}", cli.data);
+    println!("  Train Ratio:      {:.0}%", train_ratio * 100.0);
     println!();
     println!("PARAMETER GRID:");
-    println!("  Spread Intercepts:      {:?}", spread_intercepts);
-    println!("  Spread Entropy Weights: {:?}", spread_entropy_weights);
-    println!("  Spread Vol Weights:     {:?}", spread_vol_weights);
-    println!("  Skew Intercepts:        {:?}", skew_intercepts);
-    println!("  Skew Inventory Weights: {:?}", skew_inv_weights);
+    println!("  Spread Intercepts:      {:?}", spread_intercepts_vec);
+    println!("  Spread Entropy Weights: {:?}", spread_entropy_weights_vec);
+    println!("  Spread Vol Weights:     {:?}", spread_vol_weights_vec);
+    println!("  Skew Intercepts:        {:?}", skew_intercepts_vec);
+    println!("  Skew Inventory Weights: {:?}", skew_inv_weights_vec);
     println!();
     println!("Total combinations: {}", total_combinations);
     println!();
 
-    // Build config
-    let config = MLTrainerConfig {
-        data_dir: cli.data.clone(),
-        train_ratio,
-        spread_intercepts,
-        spread_entropy_weights,
-        spread_volatility_weights: spread_vol_weights,
-        skew_intercepts,
-        skew_inventory_weights: skew_inv_weights,
-        max_inventory: Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
-        quote_size: Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
-        fill_probability: cli.fill_prob,
-        verbose: !cli.quiet,
-        ..Default::default()
-    };
-
-    // Run training
-    let mut trainer = MLTrainer::new(config)?;
-
-    println!("Training ML weights...");
-    println!();
-
-    let results = trainer.train()?;
+    // Run training using extracted command
+    let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+    let result = BacktestCommands::train(params.clone(), callback)?;
 
     // Print results
     println!();
@@ -2046,38 +2049,38 @@ fn run_train_ml(
     println!();
     println!("BEST WEIGHTS:");
     println!("  Spread:");
-    println!("    intercept:         {:.4}", results.optimal_weights.spread.intercept);
-    println!("    w_entropy:         {:.4}", results.optimal_weights.spread.w_entropy);
-    println!("    w_volatility:      {:.4}", results.optimal_weights.spread.w_volatility);
-    println!("    w_imbalance:       {:.4}", results.optimal_weights.spread.w_imbalance);
-    println!("    w_interaction:     {:.4}", results.optimal_weights.spread.w_interaction);
+    println!("    intercept:         {:.4}", result.optimal_weights.spread.intercept);
+    println!("    w_entropy:         {:.4}", result.optimal_weights.spread.w_entropy);
+    println!("    w_volatility:      {:.4}", result.optimal_weights.spread.w_volatility);
+    println!("    w_imbalance:       {:.4}", result.optimal_weights.spread.w_imbalance);
+    println!("    w_interaction:     {:.4}", result.optimal_weights.spread.w_interaction);
     println!("  Skew:");
-    println!("    intercept:         {:.4}", results.optimal_weights.skew.intercept);
-    println!("    w_entropy:         {:.4}", results.optimal_weights.skew.w_entropy);
-    println!("    w_volatility:      {:.4}", results.optimal_weights.skew.w_volatility);
-    println!("    w_imbalance:       {:.4}", results.optimal_weights.skew.w_imbalance);
-    println!("    w_inventory:       {:.4}", results.optimal_weights.skew.w_inventory);
+    println!("    intercept:         {:.4}", result.optimal_weights.skew.intercept);
+    println!("    w_entropy:         {:.4}", result.optimal_weights.skew.w_entropy);
+    println!("    w_volatility:      {:.4}", result.optimal_weights.skew.w_volatility);
+    println!("    w_imbalance:       {:.4}", result.optimal_weights.skew.w_imbalance);
+    println!("    w_inventory:       {:.4}", result.optimal_weights.skew.w_inventory);
     println!();
     println!("PERFORMANCE:");
-    println!("  Train Sharpe:     {:+.4}", results.train_sharpe);
-    println!("  Test Sharpe:      {:+.4}", results.test_sharpe);
-    println!("  Generalization Gap: {:.2}%", results.generalization_gap * 100.0);
+    println!("  Train Sharpe:     {:+.4}", result.train_sharpe);
+    println!("  Test Sharpe:      {:+.4}", result.test_sharpe);
+    println!("  Generalization Gap: {:.2}%", result.generalization_gap * 100.0);
     println!();
-    println!("  Train Trades:     {}", results.train_trades);
-    println!("  Test Trades:      {}", results.test_trades);
-    println!("  Configs Tested:   {}/{}", results.valid_configurations, results.total_configurations);
+    println!("  Train Trades:     {}", result.train_trades);
+    println!("  Test Trades:      {}", result.test_trades);
+    println!("  Configs Tested:   {}/{}", result.valid_configurations, result.total_configurations);
     println!("═══════════════════════════════════════════════════════════════════════");
 
     // Save results
     if let Some(ref output_path) = output {
-        let json = serde_json::to_string_pretty(&results)?;
+        let json = serde_json::to_string_pretty(&result)?;
         std::fs::write(output_path, &json)?;
         println!();
         println!("Results saved to: {:?}", output_path);
 
         // Also save just the weights for easy loading
         let weights_path = output_path.with_extension("weights.json");
-        let weights_json = serde_json::to_string_pretty(&results.optimal_weights)?;
+        let weights_json = serde_json::to_string_pretty(&result.optimal_weights)?;
         std::fs::write(&weights_path, weights_json)?;
         println!("Weights saved to: {:?}", weights_path);
     }
