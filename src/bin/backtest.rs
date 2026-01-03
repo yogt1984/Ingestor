@@ -63,7 +63,7 @@ use ingestor::strategies::{
 };
 use ingestor::commands::{
     BacktestCommands,
-    params::backtest_params::{EvaluateParamsBuilder, TuneParamsBuilder, RegimeSearchParamsBuilder},
+    params::backtest_params::{EvaluateParamsBuilder, TuneParamsBuilder, RegimeSearchParamsBuilder, MultiObjectiveParamsBuilder, RegimeOptimizeParamsBuilder},
 };
 use ingestor::commands::common::{NoOpCallback, ProgressCallback};
 use std::sync::Arc;
@@ -1666,79 +1666,114 @@ fn run_multi_objective(
     w_turnover: f64,
     output: Option<std::path::PathBuf>,
 ) -> Result<()> {
-    use ingestor::backtest::multi_objective::{MultiObjectiveOptimizer, MOConfig, ObjectiveWeights};
+    // Build MultiObjectiveParams from CLI
+    let mo_params = MultiObjectiveParamsBuilder::new()
+        .data_path(cli.data.clone())
+        .algorithm(cli.algorithm.clone())
+        .weights_file(cli.weights_file.clone())
+        .spreads(spreads.to_string())
+        .skews(skews.to_string())
+        .fill_probs(fill_probs.to_string())
+        .high_entropies(high_entropies.to_string())
+        .min_trades(min_trades)
+        .w_sharpe(w_sharpe)
+        .w_drawdown(w_drawdown)
+        .w_fill(w_fill)
+        .w_turnover(w_turnover)
+        .max_inventory(cli.max_inventory)
+        .quote_size(cli.quote_size)
+        .fee_rate(cli.fee_rate)
+        .naive_fills(cli.naive_fills)
+        .queue_pos(cli.queue_pos)
+        .low_entropy(cli.low_entropy)
+        .output(output.clone())
+        .build()?;
 
-    // Parse parameter grids
-    let spread_values: Vec<f64> = spreads
-        .split(',')
-        .map(|s| s.trim().parse().unwrap_or(1.0))
-        .collect();
-    let skew_values: Vec<f64> = skews
-        .split(',')
-        .map(|s| s.trim().parse().unwrap_or(0.5))
-        .collect();
-    let fill_prob_values: Vec<f64> = fill_probs
-        .split(',')
-        .map(|s| s.trim().parse().unwrap_or(0.10))
-        .collect();
-    let high_entropy_values: Vec<f64> = high_entropies
-        .split(',')
-        .map(|s| s.trim().parse().unwrap_or(0.7))
-        .collect();
+    // Parse algorithm type for display
+    let (algo_type, algo_name) = parse_algorithm_type(&cli.algorithm)?;
 
+    // Run multi-objective optimization using extracted command
+    let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+    let result = BacktestCommands::multi_objective(mo_params.clone(), callback)?;
+
+    // Display results
     println!("═══════════════════════════════════════════════════════════════════════");
     println!("          MULTI-OBJECTIVE OPTIMIZATION (Pareto Frontier)                ");
     println!("═══════════════════════════════════════════════════════════════════════");
     println!();
+    println!("Algorithm: {} ({})", algo_name, algo_type.as_str());
+    println!("Total combinations tested: {}", result.total_combinations);
+    println!();
+
+    // Parse parameter lists for display
+    let spread_values: Vec<f64> = mo_params.spreads.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    let skew_values: Vec<f64> = mo_params.skews.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    let fill_prob_values: Vec<f64> = mo_params.fill_probs.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    let high_entropy_values: Vec<f64> = mo_params.high_entropies.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+
     println!("PARAMETER GRID:");
     println!("  Spreads:       {:?}", spread_values);
     println!("  Skews:         {:?}", skew_values);
     println!("  Fill Probs:    {:?}", fill_prob_values);
     println!("  High Entropy:  {:?}", high_entropy_values);
-    println!("  Min Trades:    {}", min_trades);
+    println!("  Min Trades:    {}", mo_params.min_trades);
     println!();
     println!("OBJECTIVE WEIGHTS:");
-    println!("  Sharpe:     {:.0}%", w_sharpe * 100.0);
-    println!("  Drawdown:   {:.0}%", w_drawdown * 100.0);
-    println!("  Fill Rate:  {:.0}%", w_fill * 100.0);
-    println!("  Turnover:   {:.0}%", w_turnover * 100.0);
+    println!("  Sharpe:     {:.0}%", mo_params.w_sharpe * 100.0);
+    println!("  Drawdown:   {:.0}%", mo_params.w_drawdown * 100.0);
+    println!("  Fill Rate:  {:.0}%", mo_params.w_fill * 100.0);
+    println!("  Turnover:   {:.0}%", mo_params.w_turnover * 100.0);
     println!();
 
-    let total_combinations = spread_values.len() * skew_values.len() *
-        fill_prob_values.len() * high_entropy_values.len();
-    println!("Total parameter combinations: {}", total_combinations);
+    // Print Pareto frontier
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!("PARETO FRONTIER ({} solutions):", result.pareto_frontier.len());
+    println!("═══════════════════════════════════════════════════════════════════════");
+    println!("┌───────┬───────┬───────┬───────────┬──────────┬──────────┬──────────┐");
+    println!("│ Sprd  │ Skew  │ FillP │   Sharpe  │    DD    │ FillRate│ Turnover │");
+    println!("├───────┼───────┼───────┼───────────┼──────────┼──────────┼──────────┤");
+
+    for sol in result.pareto_frontier.iter().take(15) {
+        println!("│ {:5.1} │ {:5.2} │ {:4.0}% │ {:+9.3} │ {:7.2}% │ {:7.1}% │ {:7.2}/h │",
+            sol.spread_bps,
+            sol.skew_factor,
+            sol.fill_probability * 100.0,
+            sol.sharpe,
+            sol.drawdown * 100.0,
+            sol.fill_rate * 100.0,
+            sol.turnover);
+    }
+    if result.pareto_frontier.len() > 15 {
+        println!("│ ... {} more solutions on frontier ...                          │",
+            result.pareto_frontier.len() - 15);
+    }
+    println!("└───────┴───────┴───────┴───────────┴──────────┴──────────┴──────────┘");
     println!();
 
-    // Build config
-    let config = MOConfig {
-        data_dir: cli.data.clone(),
-        spreads: spread_values,
-        skews: skew_values,
-        fill_probs: fill_prob_values,
-        high_entropies: high_entropy_values,
-        objective_weights: ObjectiveWeights {
-            sharpe: w_sharpe,
-            drawdown: w_drawdown,
-            fill_rate: w_fill,
-            turnover: w_turnover,
-        },
-        min_trades,
-        verbose: true,
-    };
-
-    // Run optimization
-    let mut optimizer = MultiObjectiveOptimizer::new(config);
-    optimizer.load_data()?;
-
-    let results = optimizer.optimize()?;
-
-    // Print report
-    results.print_report();
-
-    // Save results
-    if let Some(ref output_path) = output {
-        results.save_json(output_path.to_str().unwrap_or("mo_results.json"))?;
+    // Best weighted solution
+    if let Some(ref best) = result.best_weighted {
+        println!("═══════════════════════════════════════════════════════════════════════");
+        println!("RECOMMENDED (weighted score):");
+        println!("═══════════════════════════════════════════════════════════════════════");
+        println!("  Params: spread={:.1}bps, skew={:.2}, fill={:.0}%, entropy={:.1}",
+            best.spread_bps, best.skew_factor, best.fill_probability * 100.0, best.high_entropy_threshold);
+        println!("  Objectives: Sharpe={:+.3}, DD={:.2}%, Fill={:.1}%, Turn={:.2}/hr",
+            best.sharpe, best.drawdown * 100.0, best.fill_rate * 100.0, best.turnover);
+        println!("  Rank={}, Crowding={:.3}", best.pareto_rank, best.crowding_distance);
         println!();
+    }
+
+    // Data summary
+    println!("DATA:");
+    println!("  Time span: {:.1} hours ({:.1} days)",
+        result.time_span_hours, result.time_span_hours / 24.0);
+    println!("  Events: {}", result.num_events);
+    println!("  Solutions evaluated: {}", result.all_solutions.len());
+    println!();
+
+    if let Some(ref output_path) = output {
+        let json = serde_json::to_string_pretty(&result)?;
+        std::fs::write(output_path, json)?;
         println!("Results saved to: {:?}", output_path);
     }
 
@@ -1754,16 +1789,37 @@ fn run_regime_optimize(
     allow_no_quote: bool,
     output: Option<std::path::PathBuf>,
 ) -> Result<()> {
-    use ingestor::backtest::regime_optimizer::{RegimeOptimizer, RegimeOptimizerConfig};
+    // Build RegimeOptimizeParams from CLI
+    let params = RegimeOptimizeParamsBuilder::new()
+        .data_path(cli.data.clone())
+        .algorithm(cli.algorithm.clone())
+        .weights_file(cli.weights_file.clone())
+        .spreads(spreads.to_string())
+        .skews(skews.to_string())
+        .fill_prob(fill_prob)
+        .min_trades(min_trades)
+        .allow_no_quote(allow_no_quote)
+        .high_entropy(cli.high_entropy)
+        .low_entropy(cli.low_entropy)
+        .max_inventory(cli.max_inventory)
+        .quote_size(cli.quote_size)
+        .fee_rate(cli.fee_rate)
+        .naive_fills(cli.naive_fills)
+        .queue_pos(cli.queue_pos)
+        .output(output.clone())
+        .build()?;
 
-    // Parse parameter grids
+    // Parse algorithm type for display
+    let (algo_type, algo_name) = parse_algorithm_type(&cli.algorithm)?;
+
+    // Parse parameter grids for display
     let spread_values: Vec<f64> = spreads
         .split(',')
-        .map(|s| s.trim().parse().unwrap_or(2.0))
+        .filter_map(|s| s.trim().parse().ok())
         .collect();
     let skew_values: Vec<f64> = skews
         .split(',')
-        .map(|s| s.trim().parse().unwrap_or(0.5))
+        .filter_map(|s| s.trim().parse().ok())
         .collect();
 
     println!("═══════════════════════════════════════════════════════════════════════");
@@ -1772,6 +1828,7 @@ fn run_regime_optimize(
     println!("═══════════════════════════════════════════════════════════════════════");
     println!();
     println!("CONFIGURATION:");
+    println!("  Algorithm:           {} ({})", algo_name, algo_type.as_str());
     println!("  Spreads to test:     {:?}", spread_values);
     println!("  Skews to test:       {:?}", skew_values);
     println!("  Fill probability:    {:.0}%", fill_prob * 100.0);
@@ -1785,31 +1842,114 @@ fn run_regime_optimize(
     println!("Testing {} combinations per regime", total_combinations);
     println!();
 
-    // Build config
-    let config = RegimeOptimizerConfig {
-        data_dir: cli.data.clone(),
-        high_entropy_threshold: cli.high_entropy,
-        low_entropy_threshold: cli.low_entropy,
-        spreads: spread_values,
-        skews: skew_values,
-        fill_probability: fill_prob,
-        min_trades,
-        allow_no_quote_low: allow_no_quote,
-        verbose: true,
-    };
+    // Run regime optimization using extracted command
+    let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+    let result = BacktestCommands::regime_optimize(params.clone(), callback)?;
 
-    // Run optimization
-    let mut optimizer = RegimeOptimizer::new(config);
-    optimizer.load_data()?;
+    // Print report (similar to original format)
+    println!();
+    println!("════════════════════════════════════════════════════════════════════");
+    println!("           REGIME-SPECIFIC PARAMETER OPTIMIZATION                    ");
+    println!("════════════════════════════════════════════════════════════════════");
+    println!();
 
-    let results = optimizer.optimize()?;
+    // Data summary
+    println!("DATA SUMMARY:");
+    println!("  Total events: {}", result.total_events);
+    println!("  Time span: {:.1} hours ({:.1} days)",
+        result.time_span_hours, result.time_span_hours / 24.0);
+    println!();
 
-    // Print report
-    results.print_report();
+    // Regime distribution
+    println!("REGIME DISTRIBUTION:");
+    println!("┌─────────────────┬─────────┬──────────┬────────────┐");
+    println!("│ Regime          │ Events  │ Fraction │ Hours      │");
+    println!("├─────────────────┼─────────┼──────────┼────────────┤");
+    println!("│ High Entropy    │ {:>7} │ {:>7.1}% │ {:>10.1} │",
+        result.high_entropy.event_count,
+        result.high_entropy.event_fraction * 100.0,
+        result.high_entropy.time_hours);
+    println!("│ Medium Entropy  │ {:>7} │ {:>7.1}% │ {:>10.1} │",
+        result.medium_entropy.event_count,
+        result.medium_entropy.event_fraction * 100.0,
+        result.medium_entropy.time_hours);
+    println!("│ Low Entropy     │ {:>7} │ {:>7.1}% │ {:>10.1} │",
+        result.low_entropy.event_count,
+        result.low_entropy.event_fraction * 100.0,
+        result.low_entropy.time_hours);
+    println!("└─────────────────┴─────────┴──────────┴────────────┘");
+    println!();
+
+    // Optimal parameters per regime
+    println!("OPTIMAL PARAMETERS PER REGIME:");
+    println!("┌─────────────────┬──────────┬──────────┬─────────────┬──────────┬──────────┬──────────┐");
+    println!("│ Regime          │ Spread   │ Skew     │ Should Quote│ Sharpe   │ Return   │ Drawdown │");
+    println!("├─────────────────┼──────────┼──────────┼─────────────┼──────────┼──────────┼──────────┤");
+    println!("│ High Entropy    │ {:>8.1} │ {:>8.2} │ {:>11} │ {:>8.3} │ {:>8.2}% │ {:>8.2}% │",
+        result.high_entropy.optimal_spread,
+        result.high_entropy.optimal_skew,
+        if result.high_entropy.should_quote { "Yes" } else { "No" },
+        result.high_entropy.best_sharpe,
+        result.high_entropy.best_return * 100.0,
+        result.high_entropy.best_drawdown * 100.0);
+    println!("│ Medium Entropy  │ {:>8.1} │ {:>8.2} │ {:>11} │ {:>8.3} │ {:>8.2}% │ {:>8.2}% │",
+        result.medium_entropy.optimal_spread,
+        result.medium_entropy.optimal_skew,
+        if result.medium_entropy.should_quote { "Yes" } else { "No" },
+        result.medium_entropy.best_sharpe,
+        result.medium_entropy.best_return * 100.0,
+        result.medium_entropy.best_drawdown * 100.0);
+    println!("│ Low Entropy     │ {:>8.1} │ {:>8.2} │ {:>11} │ {:>8.3} │ {:>8.2}% │ {:>8.2}% │",
+        result.low_entropy.optimal_spread,
+        result.low_entropy.optimal_skew,
+        if result.low_entropy.should_quote { "Yes" } else { "No" },
+        result.low_entropy.best_sharpe,
+        result.low_entropy.best_return * 100.0,
+        result.low_entropy.best_drawdown * 100.0);
+    println!("└─────────────────┴──────────┴──────────┴─────────────┴──────────┴──────────┴──────────┘");
+    println!();
+
+    // Strategy comparison
+    println!("STRATEGY COMPARISON:");
+    println!("┌──────────────────────┬──────────────┬──────────────────┐");
+    println!("│ Metric               │ Uniform     │ Regime-Specific │");
+    println!("├──────────────────────┼──────────────┼──────────────────┤");
+    println!("│ Sharpe Ratio         │ {:>12.3} │ {:>16.3} │",
+        result.comparison.uniform_sharpe,
+        result.comparison.regime_specific_sharpe);
+    println!("│ Total Return         │ {:>12.2}% │ {:>16.2}% │",
+        result.comparison.uniform_return * 100.0,
+        result.comparison.regime_specific_return * 100.0);
+    println!("│ Max Drawdown         │ {:>12.2}% │ {:>16.2}% │",
+        result.comparison.uniform_drawdown * 100.0,
+        result.comparison.regime_specific_drawdown * 100.0);
+    println!("│ Number of Trades     │ {:>12} │ {:>16} │",
+        result.comparison.uniform_trades,
+        result.comparison.regime_specific_trades);
+    println!("│ Win Rate             │ {:>12.1}% │ {:>16.1}% │",
+        result.comparison.uniform_win_rate * 100.0,
+        result.comparison.regime_specific_win_rate * 100.0);
+    println!("└──────────────────────┴──────────────┴──────────────────┘");
+    println!();
+
+    println!("IMPROVEMENT:");
+    println!("  Sharpe:     {:+.3} ({:+.1}%)",
+        result.comparison.sharpe_improvement,
+        (result.comparison.sharpe_improvement / result.comparison.uniform_sharpe.abs().max(0.001)) * 100.0);
+    println!("  Return:     {:+.2}% ({:+.1}%)",
+        result.comparison.return_improvement * 100.0,
+        (result.comparison.return_improvement / result.comparison.uniform_return.abs().max(0.0001)) * 100.0);
+    println!("  Drawdown:   {:+.2}% ({:+.1}%)",
+        result.comparison.drawdown_improvement * 100.0,
+        (result.comparison.drawdown_improvement / result.comparison.uniform_drawdown.abs().max(0.0001)) * 100.0);
+    println!("  Trades:     {:+.0}",
+        result.comparison.trade_count_diff);
+    println!("════════════════════════════════════════════════════════════════════");
 
     // Save results
     if let Some(ref output_path) = output {
-        results.save_json(output_path.to_str().unwrap_or("regime_opt_results.json"))?;
+        let json = serde_json::to_string_pretty(&result)?;
+        std::fs::write(output_path, &json)?;
         println!();
         println!("Results saved to: {:?}", output_path);
     }

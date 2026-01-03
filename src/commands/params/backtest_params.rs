@@ -904,6 +904,625 @@ impl Default for RegimeSearchParamsBuilder {
     }
 }
 
+/// Parameters for the `multi-objective` command (Pareto frontier optimization - MM algorithms only)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiObjectiveParams {
+    /// Path to data directory containing Parquet files
+    pub data_path: PathBuf,
+    /// Algorithm to use (must be MM algorithm: as, ml, or fixed)
+    pub algorithm: String,
+    /// Path to ML weights file (required for ML algorithm)
+    pub weights_file: Option<PathBuf>,
+    /// Spread values to test (comma-separated string)
+    pub spreads: String,
+    /// Skew values to test (comma-separated string)
+    pub skews: String,
+    /// Fill probability values to test (comma-separated string)
+    pub fill_probs: String,
+    /// High entropy threshold values to test (comma-separated string)
+    pub high_entropies: String,
+    /// Minimum number of trades for valid solution
+    pub min_trades: usize,
+    /// Weight for Sharpe ratio (0.0-1.0, must sum with others to 1.0)
+    pub w_sharpe: f64,
+    /// Weight for drawdown (0.0-1.0, must sum with others to 1.0)
+    pub w_drawdown: f64,
+    /// Weight for fill rate (0.0-1.0, must sum with others to 1.0)
+    pub w_fill: f64,
+    /// Weight for turnover (0.0-1.0, must sum with others to 1.0)
+    pub w_turnover: f64,
+    /// Maximum inventory
+    pub max_inventory: f64,
+    /// Quote size
+    pub quote_size: f64,
+    /// Fee rate (e.g., 0.0001 = 1 bps)
+    pub fee_rate: f64,
+    /// Use naive fill simulation (for comparison)
+    pub naive_fills: bool,
+    /// Queue position (0.0=front, 1.0=back)
+    pub queue_pos: f64,
+    /// Low entropy threshold (below = defensive/no quoting)
+    pub low_entropy: f64,
+    /// Output file for results (JSON)
+    pub output: Option<PathBuf>,
+}
+
+/// Builder for `MultiObjectiveParams` with validation
+pub struct MultiObjectiveParamsBuilder {
+    data_path: Option<PathBuf>,
+    algorithm: Option<String>,
+    weights_file: Option<PathBuf>,
+    spreads: Option<String>,
+    skews: Option<String>,
+    fill_probs: Option<String>,
+    high_entropies: Option<String>,
+    min_trades: Option<usize>,
+    w_sharpe: Option<f64>,
+    w_drawdown: Option<f64>,
+    w_fill: Option<f64>,
+    w_turnover: Option<f64>,
+    max_inventory: Option<f64>,
+    quote_size: Option<f64>,
+    fee_rate: Option<f64>,
+    naive_fills: Option<bool>,
+    queue_pos: Option<f64>,
+    low_entropy: Option<f64>,
+    output: Option<PathBuf>,
+}
+
+impl MultiObjectiveParamsBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            data_path: None,
+            algorithm: None,
+            weights_file: None,
+            spreads: None,
+            skews: None,
+            fill_probs: None,
+            high_entropies: None,
+            min_trades: None,
+            w_sharpe: None,
+            w_drawdown: None,
+            w_fill: None,
+            w_turnover: None,
+            max_inventory: None,
+            quote_size: None,
+            fee_rate: None,
+            naive_fills: None,
+            queue_pos: None,
+            low_entropy: None,
+            output: None,
+        }
+    }
+
+    /// Set data path
+    pub fn data_path(mut self, path: PathBuf) -> Self {
+        self.data_path = Some(path);
+        self
+    }
+
+    /// Set algorithm
+    pub fn algorithm(mut self, algo: String) -> Self {
+        self.algorithm = Some(algo);
+        self
+    }
+
+    /// Set weights file
+    pub fn weights_file(mut self, path: Option<PathBuf>) -> Self {
+        self.weights_file = path;
+        self
+    }
+
+    /// Set spreads (comma-separated string)
+    pub fn spreads(mut self, spreads: String) -> Self {
+        self.spreads = Some(spreads);
+        self
+    }
+
+    /// Set skews (comma-separated string)
+    pub fn skews(mut self, skews: String) -> Self {
+        self.skews = Some(skews);
+        self
+    }
+
+    /// Set fill probabilities (comma-separated string)
+    pub fn fill_probs(mut self, fill_probs: String) -> Self {
+        self.fill_probs = Some(fill_probs);
+        self
+    }
+
+    /// Set high entropy thresholds (comma-separated string)
+    pub fn high_entropies(mut self, high_entropies: String) -> Self {
+        self.high_entropies = Some(high_entropies);
+        self
+    }
+
+    /// Set minimum trades
+    pub fn min_trades(mut self, min_trades: usize) -> Self {
+        self.min_trades = Some(min_trades);
+        self
+    }
+
+    /// Set Sharpe weight
+    pub fn w_sharpe(mut self, weight: f64) -> Self {
+        self.w_sharpe = Some(weight);
+        self
+    }
+
+    /// Set drawdown weight
+    pub fn w_drawdown(mut self, weight: f64) -> Self {
+        self.w_drawdown = Some(weight);
+        self
+    }
+
+    /// Set fill rate weight
+    pub fn w_fill(mut self, weight: f64) -> Self {
+        self.w_fill = Some(weight);
+        self
+    }
+
+    /// Set turnover weight
+    pub fn w_turnover(mut self, weight: f64) -> Self {
+        self.w_turnover = Some(weight);
+        self
+    }
+
+    /// Set max inventory
+    pub fn max_inventory(mut self, max_inv: f64) -> Self {
+        self.max_inventory = Some(max_inv);
+        self
+    }
+
+    /// Set quote size
+    pub fn quote_size(mut self, size: f64) -> Self {
+        self.quote_size = Some(size);
+        self
+    }
+
+    /// Set fee rate
+    pub fn fee_rate(mut self, rate: f64) -> Self {
+        self.fee_rate = Some(rate);
+        self
+    }
+
+    /// Set naive fills flag
+    pub fn naive_fills(mut self, naive: bool) -> Self {
+        self.naive_fills = Some(naive);
+        self
+    }
+
+    /// Set queue position
+    pub fn queue_pos(mut self, pos: f64) -> Self {
+        self.queue_pos = Some(pos);
+        self
+    }
+
+    /// Set low entropy threshold
+    pub fn low_entropy(mut self, threshold: f64) -> Self {
+        self.low_entropy = Some(threshold);
+        self
+    }
+
+    /// Set output file
+    pub fn output(mut self, path: Option<PathBuf>) -> Self {
+        self.output = path;
+        self
+    }
+
+    /// Parse comma-separated string to Vec<f64>
+    fn parse_f64_list(s: &str) -> Result<Vec<f64>> {
+        let values: Vec<f64> = s
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        if values.is_empty() {
+            anyhow::bail!("No valid numeric values found in parameter list: '{}'", s);
+        }
+        Ok(values)
+    }
+
+    /// Build `MultiObjectiveParams` with validation
+    pub fn build(self) -> Result<MultiObjectiveParams> {
+        // Validate required fields
+        let data_path = self.data_path
+            .ok_or_else(|| anyhow::anyhow!("data_path is required"))?;
+        let algorithm = self.algorithm
+            .ok_or_else(|| anyhow::anyhow!("algorithm is required"))?;
+        let spreads = self.spreads
+            .ok_or_else(|| anyhow::anyhow!("spreads is required"))?;
+        let skews = self.skews
+            .ok_or_else(|| anyhow::anyhow!("skews is required"))?;
+        let fill_probs = self.fill_probs
+            .ok_or_else(|| anyhow::anyhow!("fill_probs is required"))?;
+        let high_entropies = self.high_entropies
+            .ok_or_else(|| anyhow::anyhow!("high_entropies is required"))?;
+
+        // Parse and validate parameter lists
+        let _spreads_vec = Self::parse_f64_list(&spreads)
+            .context("Failed to parse spreads")?;
+        let _skews_vec = Self::parse_f64_list(&skews)
+            .context("Failed to parse skews")?;
+        let fill_probs_vec = Self::parse_f64_list(&fill_probs)
+            .context("Failed to parse fill_probs")?;
+        let _high_entropies_vec = Self::parse_f64_list(&high_entropies)
+            .context("Failed to parse high_entropies")?;
+
+        // Validate fill probabilities are in [0.0, 1.0]
+        for &fill_prob in &fill_probs_vec {
+            if !(0.0..=1.0).contains(&fill_prob) {
+                anyhow::bail!("fill_prob values must be in range [0.0, 1.0], found {}", fill_prob);
+            }
+        }
+
+        // Validate weights
+        let w_sharpe = self.w_sharpe.unwrap_or(0.4);
+        let w_drawdown = self.w_drawdown.unwrap_or(0.3);
+        let w_fill = self.w_fill.unwrap_or(0.2);
+        let w_turnover = self.w_turnover.unwrap_or(0.1);
+
+        // Validate individual weights are in [0.0, 1.0]
+        if !(0.0..=1.0).contains(&w_sharpe) {
+            anyhow::bail!("w_sharpe must be in range [0.0, 1.0], found {}", w_sharpe);
+        }
+        if !(0.0..=1.0).contains(&w_drawdown) {
+            anyhow::bail!("w_drawdown must be in range [0.0, 1.0], found {}", w_drawdown);
+        }
+        if !(0.0..=1.0).contains(&w_fill) {
+            anyhow::bail!("w_fill must be in range [0.0, 1.0], found {}", w_fill);
+        }
+        if !(0.0..=1.0).contains(&w_turnover) {
+            anyhow::bail!("w_turnover must be in range [0.0, 1.0], found {}", w_turnover);
+        }
+
+        // Validate weights sum to 1.0 (with tolerance for floating point)
+        let weight_sum = w_sharpe + w_drawdown + w_fill + w_turnover;
+        if (weight_sum - 1.0).abs() > 0.001 {
+            anyhow::bail!(
+                "Objective weights must sum to 1.0, but sum to {:.6} (w_sharpe={}, w_drawdown={}, w_fill={}, w_turnover={})",
+                weight_sum, w_sharpe, w_drawdown, w_fill, w_turnover
+            );
+        }
+
+        // Validate other ranges
+        if let Some(queue_pos) = self.queue_pos {
+            if !(0.0..=1.0).contains(&queue_pos) {
+                anyhow::bail!("queue_pos must be in range [0.0, 1.0]");
+            }
+        }
+        if let Some(fee_rate) = self.fee_rate {
+            if fee_rate < 0.0 {
+                anyhow::bail!("fee_rate must be >= 0.0");
+            }
+        }
+        if let Some(min_trades) = self.min_trades {
+            if min_trades == 0 {
+                anyhow::bail!("min_trades must be > 0");
+            }
+        }
+
+        Ok(MultiObjectiveParams {
+            data_path,
+            algorithm,
+            weights_file: self.weights_file,
+            spreads,
+            skews,
+            fill_probs,
+            high_entropies,
+            min_trades: self.min_trades.unwrap_or(20),
+            w_sharpe,
+            w_drawdown,
+            w_fill,
+            w_turnover,
+            max_inventory: self.max_inventory.unwrap_or(0.1),
+            quote_size: self.quote_size.unwrap_or(0.001),
+            fee_rate: self.fee_rate.unwrap_or(0.0001),
+            naive_fills: self.naive_fills.unwrap_or(false),
+            queue_pos: self.queue_pos.unwrap_or(0.5),
+            low_entropy: self.low_entropy.unwrap_or(0.4),
+            output: self.output,
+        })
+    }
+}
+
+impl Default for MultiObjectiveParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Parameters for the `regime-optimize` command (regime-specific parameter optimization - MM algorithms only)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegimeOptimizeParams {
+    /// Path to data directory containing Parquet files
+    pub data_path: PathBuf,
+    /// Algorithm to use (must be MM algorithm: as, ml, or fixed)
+    pub algorithm: String,
+    /// Path to ML weights file (required for ML algorithm)
+    pub weights_file: Option<PathBuf>,
+    /// Spread values to test (comma-separated string)
+    pub spreads: String,
+    /// Skew values to test (comma-separated string)
+    pub skews: String,
+    /// Fill probability for simulation (0.0-1.0)
+    pub fill_prob: f64,
+    /// Minimum trades required for valid optimization
+    pub min_trades: usize,
+    /// Whether to allow no-quoting in low entropy
+    pub allow_no_quote: bool,
+    /// High entropy threshold (above = high regime)
+    pub high_entropy: f64,
+    /// Low entropy threshold (below = low regime)
+    pub low_entropy: f64,
+    /// Maximum inventory
+    pub max_inventory: f64,
+    /// Quote size
+    pub quote_size: f64,
+    /// Fee rate (e.g., 0.0001 = 1 bps)
+    pub fee_rate: f64,
+    /// Use naive fill simulation (for comparison)
+    pub naive_fills: bool,
+    /// Queue position (0.0=front, 1.0=back)
+    pub queue_pos: f64,
+    /// Output file for results (JSON)
+    pub output: Option<PathBuf>,
+}
+
+/// Builder for `RegimeOptimizeParams` with validation
+pub struct RegimeOptimizeParamsBuilder {
+    data_path: Option<PathBuf>,
+    algorithm: Option<String>,
+    weights_file: Option<PathBuf>,
+    spreads: Option<String>,
+    skews: Option<String>,
+    fill_prob: Option<f64>,
+    min_trades: Option<usize>,
+    allow_no_quote: Option<bool>,
+    high_entropy: Option<f64>,
+    low_entropy: Option<f64>,
+    max_inventory: Option<f64>,
+    quote_size: Option<f64>,
+    fee_rate: Option<f64>,
+    naive_fills: Option<bool>,
+    queue_pos: Option<f64>,
+    output: Option<PathBuf>,
+}
+
+impl RegimeOptimizeParamsBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            data_path: None,
+            algorithm: None,
+            weights_file: None,
+            spreads: None,
+            skews: None,
+            fill_prob: None,
+            min_trades: None,
+            allow_no_quote: None,
+            high_entropy: None,
+            low_entropy: None,
+            max_inventory: None,
+            quote_size: None,
+            fee_rate: None,
+            naive_fills: None,
+            queue_pos: None,
+            output: None,
+        }
+    }
+
+    /// Set data path
+    pub fn data_path(mut self, path: PathBuf) -> Self {
+        self.data_path = Some(path);
+        self
+    }
+
+    /// Set algorithm
+    pub fn algorithm(mut self, algo: String) -> Self {
+        self.algorithm = Some(algo);
+        self
+    }
+
+    /// Set weights file
+    pub fn weights_file(mut self, path: Option<PathBuf>) -> Self {
+        self.weights_file = path;
+        self
+    }
+
+    /// Set spreads (comma-separated string)
+    pub fn spreads(mut self, spreads: String) -> Self {
+        self.spreads = Some(spreads);
+        self
+    }
+
+    /// Set skews (comma-separated string)
+    pub fn skews(mut self, skews: String) -> Self {
+        self.skews = Some(skews);
+        self
+    }
+
+    /// Set fill probability
+    pub fn fill_prob(mut self, prob: f64) -> Self {
+        self.fill_prob = Some(prob);
+        self
+    }
+
+    /// Set minimum trades
+    pub fn min_trades(mut self, min_trades: usize) -> Self {
+        self.min_trades = Some(min_trades);
+        self
+    }
+
+    /// Set allow no-quote flag
+    pub fn allow_no_quote(mut self, allow: bool) -> Self {
+        self.allow_no_quote = Some(allow);
+        self
+    }
+
+    /// Set high entropy threshold
+    pub fn high_entropy(mut self, threshold: f64) -> Self {
+        self.high_entropy = Some(threshold);
+        self
+    }
+
+    /// Set low entropy threshold
+    pub fn low_entropy(mut self, threshold: f64) -> Self {
+        self.low_entropy = Some(threshold);
+        self
+    }
+
+    /// Set max inventory
+    pub fn max_inventory(mut self, max_inv: f64) -> Self {
+        self.max_inventory = Some(max_inv);
+        self
+    }
+
+    /// Set quote size
+    pub fn quote_size(mut self, size: f64) -> Self {
+        self.quote_size = Some(size);
+        self
+    }
+
+    /// Set fee rate
+    pub fn fee_rate(mut self, rate: f64) -> Self {
+        self.fee_rate = Some(rate);
+        self
+    }
+
+    /// Set naive fills flag
+    pub fn naive_fills(mut self, naive: bool) -> Self {
+        self.naive_fills = Some(naive);
+        self
+    }
+
+    /// Set queue position
+    pub fn queue_pos(mut self, pos: f64) -> Self {
+        self.queue_pos = Some(pos);
+        self
+    }
+
+    /// Set output file
+    pub fn output(mut self, path: Option<PathBuf>) -> Self {
+        self.output = path;
+        self
+    }
+
+    /// Parse comma-separated string to Vec<f64>
+    fn parse_f64_list(s: &str) -> Result<Vec<f64>> {
+        let values: Vec<f64> = s
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        if values.is_empty() {
+            anyhow::bail!("No valid numeric values found in parameter list: '{}'", s);
+        }
+        Ok(values)
+    }
+
+    /// Build `RegimeOptimizeParams` with validation
+    pub fn build(self) -> Result<RegimeOptimizeParams> {
+        // Validate required fields
+        let data_path = self.data_path
+            .ok_or_else(|| anyhow::anyhow!("data_path is required"))?;
+        let algorithm = self.algorithm
+            .ok_or_else(|| anyhow::anyhow!("algorithm is required"))?;
+        let spreads = self.spreads
+            .ok_or_else(|| anyhow::anyhow!("spreads is required"))?;
+        let skews = self.skews
+            .ok_or_else(|| anyhow::anyhow!("skews is required"))?;
+
+        // Parse and validate parameter lists
+        let spreads_vec = Self::parse_f64_list(&spreads)
+            .context("Failed to parse spreads")?;
+        let skews_vec = Self::parse_f64_list(&skews)
+            .context("Failed to parse skews")?;
+
+        // Validate spreads are non-negative
+        for &spread in &spreads_vec {
+            if spread < 0.0 {
+                anyhow::bail!("spread values must be >= 0.0, found {}", spread);
+            }
+        }
+
+        // Validate fill probability
+        let fill_prob = self.fill_prob.unwrap_or(0.10);
+        if !(0.0..=1.0).contains(&fill_prob) {
+            anyhow::bail!("fill_prob must be in range [0.0, 1.0], found {}", fill_prob);
+        }
+
+        // Validate min_trades
+        if let Some(min_trades) = self.min_trades {
+            if min_trades == 0 {
+                anyhow::bail!("min_trades must be > 0");
+            }
+        }
+
+        // Validate entropy thresholds
+        if let Some(high_entropy) = self.high_entropy {
+            if high_entropy <= 0.0 {
+                anyhow::bail!("high_entropy must be > 0.0");
+            }
+        }
+        if let Some(low_entropy) = self.low_entropy {
+            if low_entropy < 0.0 {
+                anyhow::bail!("low_entropy must be >= 0.0");
+            }
+        }
+        if let (Some(high), Some(low)) = (self.high_entropy, self.low_entropy) {
+            if high <= low {
+                anyhow::bail!("high_entropy ({}) must be > low_entropy ({})", high, low);
+            }
+        }
+
+        // Validate other ranges
+        if let Some(queue_pos) = self.queue_pos {
+            if !(0.0..=1.0).contains(&queue_pos) {
+                anyhow::bail!("queue_pos must be in range [0.0, 1.0]");
+            }
+        }
+        if let Some(fee_rate) = self.fee_rate {
+            if fee_rate < 0.0 {
+                anyhow::bail!("fee_rate must be >= 0.0");
+            }
+        }
+        if let Some(max_inventory) = self.max_inventory {
+            if max_inventory <= 0.0 {
+                anyhow::bail!("max_inventory must be > 0.0");
+            }
+        }
+        if let Some(quote_size) = self.quote_size {
+            if quote_size <= 0.0 {
+                anyhow::bail!("quote_size must be > 0.0");
+            }
+        }
+
+        Ok(RegimeOptimizeParams {
+            data_path,
+            algorithm,
+            weights_file: self.weights_file,
+            spreads,
+            skews,
+            fill_prob,
+            min_trades: self.min_trades.unwrap_or(10),
+            allow_no_quote: self.allow_no_quote.unwrap_or(true),
+            high_entropy: self.high_entropy.unwrap_or(0.7),
+            low_entropy: self.low_entropy.unwrap_or(0.4),
+            max_inventory: self.max_inventory.unwrap_or(0.1),
+            quote_size: self.quote_size.unwrap_or(0.001),
+            fee_rate: self.fee_rate.unwrap_or(0.0001),
+            naive_fills: self.naive_fills.unwrap_or(false),
+            queue_pos: self.queue_pos.unwrap_or(0.5),
+            output: self.output,
+        })
+    }
+}
+
+impl Default for RegimeOptimizeParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod regime_search_params_tests {
     use super::*;
@@ -2929,6 +3548,633 @@ mod tests {
         assert_eq!(params2.spread, 3.0);
         assert_eq!(params1.algorithm, "as");
         assert_eq!(params2.algorithm, "ml");
+    }
+}
+
+#[cfg(test)]
+mod regime_optimize_params_tests {
+    use super::*;
+
+    // ============================================================================
+    // Builder Defaults Tests
+    // ============================================================================
+
+    #[test]
+    fn test_regime_optimize_params_builder_defaults() {
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5,1.0,2.0".to_string())
+            .skews("0.2,0.3,0.5".to_string())
+            .build()
+            .unwrap();
+
+        assert_eq!(params.fill_prob, 0.10);
+        assert_eq!(params.min_trades, 10);
+        assert!(params.allow_no_quote);
+        assert_eq!(params.high_entropy, 0.7);
+        assert_eq!(params.low_entropy, 0.4);
+        assert_eq!(params.max_inventory, 0.1);
+        assert_eq!(params.quote_size, 0.001);
+        assert_eq!(params.fee_rate, 0.0001);
+        assert!(!params.naive_fills);
+        assert_eq!(params.queue_pos, 0.5);
+    }
+
+    // ============================================================================
+    // Required Fields Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_regime_optimize_params_missing_data_path() {
+        let result = RegimeOptimizeParamsBuilder::new()
+            .algorithm("as".to_string())
+            .spreads("0.5,1.0".to_string())
+            .skews("0.2,0.3".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("data_path"));
+    }
+
+    #[test]
+    fn test_regime_optimize_params_missing_algorithm() {
+        let result = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .spreads("0.5,1.0".to_string())
+            .skews("0.2,0.3".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("algorithm"));
+    }
+
+    #[test]
+    fn test_regime_optimize_params_missing_spreads() {
+        let result = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .skews("0.2,0.3".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("spreads"));
+    }
+
+    #[test]
+    fn test_regime_optimize_params_missing_skews() {
+        let result = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5,1.0".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("skews"));
+    }
+
+    // ============================================================================
+    // Parameter Parsing Tests
+    // ============================================================================
+
+    #[test]
+    fn test_regime_optimize_params_parse_spreads() {
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5,1.0,2.0,3.5".to_string())
+            .skews("0.2".to_string())
+            .build()
+            .unwrap();
+
+        let spreads: Vec<f64> = params.spreads
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        assert_eq!(spreads, vec![0.5, 1.0, 2.0, 3.5]);
+    }
+
+    #[test]
+    fn test_regime_optimize_params_parse_skews() {
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2,0.3,0.5,0.7,1.0".to_string())
+            .build()
+            .unwrap();
+
+        let skews: Vec<f64> = params.skews
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        assert_eq!(skews, vec![0.2, 0.3, 0.5, 0.7, 1.0]);
+    }
+
+    #[test]
+    fn test_regime_optimize_params_parse_with_whitespace() {
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads(" 0.5 , 1.0 , 2.0 ".to_string())
+            .skews(" 0.2 , 0.3 ".to_string())
+            .build()
+            .unwrap();
+
+        let spreads: Vec<f64> = params.spreads
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        assert_eq!(spreads, vec![0.5, 1.0, 2.0]);
+    }
+
+    #[test]
+    fn test_regime_optimize_params_empty_spreads() {
+        let result = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("".to_string())
+            .skews("0.2".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_regime_optimize_params_empty_skews() {
+        let result = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_regime_optimize_params_invalid_spreads() {
+        let result = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("abc,def".to_string())
+            .skews("0.2".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_regime_optimize_params_invalid_skews() {
+        let result = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("xyz,abc".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_regime_optimize_params_mixed_valid_invalid() {
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5,invalid,1.0".to_string())
+            .skews("0.2,0.3".to_string())
+            .build()
+            .unwrap();
+
+        // Should parse only valid values
+        let spreads: Vec<f64> = params.spreads
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        assert_eq!(spreads, vec![0.5, 1.0]);
+    }
+
+    // ============================================================================
+    // Range Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_regime_optimize_params_fill_prob_range() {
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .fill_prob(0.0)
+            .build()
+            .unwrap();
+        assert_eq!(params.fill_prob, 0.0);
+
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .fill_prob(1.0)
+            .build()
+            .unwrap();
+        assert_eq!(params.fill_prob, 1.0);
+
+        let result = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .fill_prob(1.5)
+            .build();
+        assert!(result.is_err());
+
+        let result = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .fill_prob(-0.1)
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_regime_optimize_params_min_trades_validation() {
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .min_trades(1)
+            .build()
+            .unwrap();
+        assert_eq!(params.min_trades, 1);
+
+        let result = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .min_trades(0)
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_regime_optimize_params_entropy_thresholds() {
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .high_entropy(0.8)
+            .low_entropy(0.3)
+            .build()
+            .unwrap();
+        assert_eq!(params.high_entropy, 0.8);
+        assert_eq!(params.low_entropy, 0.3);
+
+        // High must be > low
+        let result = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .high_entropy(0.3)
+            .low_entropy(0.5)
+            .build();
+        assert!(result.is_err());
+
+        // High must be > 0
+        let result = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .high_entropy(0.0)
+            .low_entropy(0.0)
+            .build();
+        assert!(result.is_err());
+
+        // Low must be >= 0
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .high_entropy(0.5)
+            .low_entropy(0.0)
+            .build()
+            .unwrap();
+        assert_eq!(params.low_entropy, 0.0);
+    }
+
+    #[test]
+    fn test_regime_optimize_params_spread_validation() {
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.0,1.0,2.0".to_string())
+            .skews("0.2".to_string())
+            .build()
+            .unwrap();
+        // Should accept 0.0
+
+        let result = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("-1.0,1.0".to_string())
+            .skews("0.2".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_regime_optimize_params_queue_pos_range() {
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .queue_pos(0.0)
+            .build()
+            .unwrap();
+        assert_eq!(params.queue_pos, 0.0);
+
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .queue_pos(1.0)
+            .build()
+            .unwrap();
+        assert_eq!(params.queue_pos, 1.0);
+
+        let result = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .queue_pos(1.5)
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_regime_optimize_params_fee_rate_validation() {
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .fee_rate(0.0)
+            .build()
+            .unwrap();
+        assert_eq!(params.fee_rate, 0.0);
+
+        let result = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .fee_rate(-0.1)
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_regime_optimize_params_max_inventory_validation() {
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .max_inventory(0.01)
+            .build()
+            .unwrap();
+        assert_eq!(params.max_inventory, 0.01);
+
+        let result = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .max_inventory(0.0)
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_regime_optimize_params_quote_size_validation() {
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .quote_size(0.0001)
+            .build()
+            .unwrap();
+        assert_eq!(params.quote_size, 0.0001);
+
+        let result = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .quote_size(0.0)
+            .build();
+        assert!(result.is_err());
+    }
+
+    // ============================================================================
+    // Custom Values Tests
+    // ============================================================================
+
+    #[test]
+    fn test_regime_optimize_params_custom_values() {
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data/custom"))
+            .algorithm("ml".to_string())
+            .weights_file(Some(PathBuf::from("./weights.json")))
+            .spreads("1.0,2.0,3.0".to_string())
+            .skews("0.3,0.5,0.7".to_string())
+            .fill_prob(0.15)
+            .min_trades(20)
+            .allow_no_quote(false)
+            .high_entropy(0.8)
+            .low_entropy(0.3)
+            .max_inventory(0.2)
+            .quote_size(0.002)
+            .fee_rate(0.0002)
+            .naive_fills(true)
+            .queue_pos(0.3)
+            .output(Some(PathBuf::from("./output.json")))
+            .build()
+            .unwrap();
+
+        assert_eq!(params.data_path, PathBuf::from("./data/custom"));
+        assert_eq!(params.algorithm, "ml");
+        assert_eq!(params.weights_file, Some(PathBuf::from("./weights.json")));
+        assert_eq!(params.spreads, "1.0,2.0,3.0");
+        assert_eq!(params.skews, "0.3,0.5,0.7");
+        assert_eq!(params.fill_prob, 0.15);
+        assert_eq!(params.min_trades, 20);
+        assert!(!params.allow_no_quote);
+        assert_eq!(params.high_entropy, 0.8);
+        assert_eq!(params.low_entropy, 0.3);
+        assert_eq!(params.max_inventory, 0.2);
+        assert_eq!(params.quote_size, 0.002);
+        assert_eq!(params.fee_rate, 0.0002);
+        assert!(params.naive_fills);
+        assert_eq!(params.queue_pos, 0.3);
+        assert_eq!(params.output, Some(PathBuf::from("./output.json")));
+    }
+
+    // ============================================================================
+    // Serialization/Deserialization Tests
+    // ============================================================================
+
+    #[test]
+    fn test_regime_optimize_params_serialization() {
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5,1.0".to_string())
+            .skews("0.2,0.3".to_string())
+            .fill_prob(0.10)
+            .min_trades(15)
+            .allow_no_quote(true)
+            .build()
+            .unwrap();
+
+        let json = serde_json::to_string(&params).unwrap();
+        let deserialized: RegimeOptimizeParams = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(params.data_path, deserialized.data_path);
+        assert_eq!(params.algorithm, deserialized.algorithm);
+        assert_eq!(params.spreads, deserialized.spreads);
+        assert_eq!(params.skews, deserialized.skews);
+        assert_eq!(params.fill_prob, deserialized.fill_prob);
+        assert_eq!(params.min_trades, deserialized.min_trades);
+        assert_eq!(params.allow_no_quote, deserialized.allow_no_quote);
+    }
+
+    #[test]
+    fn test_regime_optimize_params_roundtrip_serialization() {
+        let original = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .weights_file(Some(PathBuf::from("./weights.json")))
+            .spreads("1.0,2.0,3.0".to_string())
+            .skews("0.3,0.5".to_string())
+            .fill_prob(0.12)
+            .min_trades(25)
+            .allow_no_quote(false)
+            .high_entropy(0.75)
+            .low_entropy(0.35)
+            .max_inventory(0.15)
+            .quote_size(0.0015)
+            .fee_rate(0.00015)
+            .naive_fills(true)
+            .queue_pos(0.4)
+            .output(Some(PathBuf::from("./results.json")))
+            .build()
+            .unwrap();
+
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: RegimeOptimizeParams = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(original.data_path, deserialized.data_path);
+        assert_eq!(original.algorithm, deserialized.algorithm);
+        assert_eq!(original.weights_file, deserialized.weights_file);
+        assert_eq!(original.spreads, deserialized.spreads);
+        assert_eq!(original.skews, deserialized.skews);
+        assert_eq!(original.fill_prob, deserialized.fill_prob);
+        assert_eq!(original.min_trades, deserialized.min_trades);
+        assert_eq!(original.allow_no_quote, deserialized.allow_no_quote);
+        assert_eq!(original.high_entropy, deserialized.high_entropy);
+        assert_eq!(original.low_entropy, deserialized.low_entropy);
+        assert_eq!(original.max_inventory, deserialized.max_inventory);
+        assert_eq!(original.quote_size, deserialized.quote_size);
+        assert_eq!(original.fee_rate, deserialized.fee_rate);
+        assert_eq!(original.naive_fills, deserialized.naive_fills);
+        assert_eq!(original.queue_pos, deserialized.queue_pos);
+        assert_eq!(original.output, deserialized.output);
+    }
+
+    // ============================================================================
+    // Edge Cases Tests
+    // ============================================================================
+
+    #[test]
+    fn test_regime_optimize_params_single_value_lists() {
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("2.0".to_string())
+            .skews("0.5".to_string())
+            .build()
+            .unwrap();
+
+        let spreads: Vec<f64> = params.spreads
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        assert_eq!(spreads, vec![2.0]);
+    }
+
+    #[test]
+    fn test_regime_optimize_params_large_lists() {
+        let spreads_str = (1..=100).map(|i| (i as f64).to_string()).collect::<Vec<_>>().join(",");
+        let skews_str = (1..=50).map(|i| (i as f64 / 100.0).to_string()).collect::<Vec<_>>().join(",");
+
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads(spreads_str.clone())
+            .skews(skews_str.clone())
+            .build()
+            .unwrap();
+
+        assert_eq!(params.spreads, spreads_str);
+        assert_eq!(params.skews, skews_str);
+    }
+
+    #[test]
+    fn test_regime_optimize_params_path_handling() {
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("/absolute/path/to/data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .output(Some(PathBuf::from("/absolute/path/to/output.json")))
+            .build()
+            .unwrap();
+
+        assert_eq!(params.data_path, PathBuf::from("/absolute/path/to/data"));
+        assert_eq!(params.output, Some(PathBuf::from("/absolute/path/to/output.json")));
+    }
+
+    #[test]
+    fn test_regime_optimize_params_none_output() {
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .output(None)
+            .build()
+            .unwrap();
+
+        assert_eq!(params.output, None);
+    }
+
+    #[test]
+    fn test_regime_optimize_params_none_weights_file() {
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5".to_string())
+            .skews("0.2".to_string())
+            .weights_file(None)
+            .build()
+            .unwrap();
+
+        assert_eq!(params.weights_file, None);
     }
 }
 

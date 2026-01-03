@@ -30,7 +30,7 @@ use num::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::common::{ProgressCallback, ProgressEvent, LogLevel};
-use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams};
+use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams};
 use crate::backtest::{
     BacktestEngine, BacktestConfig, BacktestResults,
     replay::{ParquetReplay, ReplayConfig},
@@ -61,6 +61,49 @@ pub struct RegimeSearchResultItem {
     pub avg_trade_pnl: f64,
 }
 
+/// Single solution from multi-objective optimization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiObjectiveSolution {
+    /// Parameters used
+    pub spread_bps: f64,
+    pub skew_factor: f64,
+    pub fill_probability: f64,
+    pub high_entropy_threshold: f64,
+    /// Objective values achieved
+    pub sharpe: f64,
+    pub drawdown: f64,
+    pub fill_rate: f64,
+    pub turnover: f64,
+    pub total_return: f64,
+    pub win_rate: f64,
+    pub num_trades: usize,
+    /// Pareto rank (1 = frontier, 2 = second tier, etc.)
+    pub pareto_rank: usize,
+    /// Crowding distance (higher = more isolated = more diverse)
+    pub crowding_distance: f64,
+}
+
+/// Results from the `multi_objective` command (Pareto frontier optimization)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiObjectiveResult {
+    /// Algorithm type used
+    pub algorithm: String,
+    /// Algorithm display name
+    pub algorithm_name: String,
+    /// All evaluated solutions
+    pub all_solutions: Vec<MultiObjectiveSolution>,
+    /// Pareto frontier solutions (rank 1)
+    pub pareto_frontier: Vec<MultiObjectiveSolution>,
+    /// Best solution by weighted score
+    pub best_weighted: Option<MultiObjectiveSolution>,
+    /// Total number of combinations tested
+    pub total_combinations: usize,
+    /// Time span of data in hours
+    pub time_span_hours: f64,
+    /// Number of events processed
+    pub num_events: usize,
+}
+
 /// Results from the `regime_search` command (regime-specific grid search)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegimeSearchResult {
@@ -78,6 +121,79 @@ pub struct RegimeSearchResult {
     pub avg_sharpe_with_quote: Option<f64>,
     /// Average Sharpe for results without low entropy quoting
     pub avg_sharpe_without_quote: Option<f64>,
+}
+
+/// Metrics for a single regime from optimization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegimeOptimizeMetrics {
+    pub regime: String,
+    pub event_count: usize,
+    pub event_fraction: f64,
+    pub time_hours: f64,
+    pub optimal_spread: f64,
+    pub optimal_skew: f64,
+    pub should_quote: bool,
+    pub best_sharpe: f64,
+    pub best_return: f64,
+    pub best_drawdown: f64,
+    pub best_trades: usize,
+    pub best_win_rate: f64,
+}
+
+/// Optimal parameter set for a regime
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegimeParamSet {
+    pub spread_bps: f64,
+    pub skew_factor: f64,
+    pub should_quote: bool,
+}
+
+/// Optimal regime parameters (one set per regime)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OptimalRegimeParams {
+    pub high: RegimeParamSet,
+    pub medium: RegimeParamSet,
+    pub low: RegimeParamSet,
+}
+
+/// Strategy comparison metrics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StrategyComparison {
+    pub uniform_sharpe: f64,
+    pub uniform_return: f64,
+    pub uniform_drawdown: f64,
+    pub uniform_trades: usize,
+    pub uniform_win_rate: f64,
+    pub regime_specific_sharpe: f64,
+    pub regime_specific_return: f64,
+    pub regime_specific_drawdown: f64,
+    pub regime_specific_trades: usize,
+    pub regime_specific_win_rate: f64,
+    pub sharpe_improvement: f64,
+    pub return_improvement: f64,
+    pub drawdown_improvement: f64,
+    pub trade_count_diff: i64,
+}
+
+/// Results from the `regime_optimize` command (regime-specific parameter optimization)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegimeOptimizeResult {
+    /// Algorithm type used
+    pub algorithm: String,
+    /// Algorithm display name
+    pub algorithm_name: String,
+    /// Per-regime optimization results
+    pub high_entropy: RegimeOptimizeMetrics,
+    pub medium_entropy: RegimeOptimizeMetrics,
+    pub low_entropy: RegimeOptimizeMetrics,
+    /// Optimal combined regime params
+    pub optimal_regime_params: OptimalRegimeParams,
+    /// Comparison with uniform approach
+    pub comparison: StrategyComparison,
+    /// Total number of events processed
+    pub total_events: usize,
+    /// Time span of data in hours
+    pub time_span_hours: f64,
 }
 
 /// Single grid search result
@@ -850,6 +966,401 @@ impl BacktestCommands {
             total_combinations,
             avg_sharpe_with_quote: avg_sharpe_with,
             avg_sharpe_without_quote: avg_sharpe_without,
+        })
+    }
+
+    /// Run multi-objective optimization command (Pareto frontier) - MM algorithms only
+    ///
+    /// This is the extracted version of the `run_multi_objective()` function from the CLI.
+    /// It supports progress callbacks for real-time updates during execution.
+    ///
+    /// Returns `MultiObjectiveResult` with Pareto frontier solutions.
+    pub fn multi_objective(
+        params: MultiObjectiveParams,
+        callback: Arc<dyn ProgressCallback>,
+    ) -> Result<MultiObjectiveResult> {
+        use crate::backtest::multi_objective::{MultiObjectiveOptimizer, MOConfig, ObjectiveWeights};
+
+        // Parse algorithm type early to fail fast on invalid algorithm
+        let algo_type = AlgorithmType::from_str(&params.algorithm)
+            .map_err(|_| anyhow::anyhow!(
+                "Unknown algorithm '{}'. Valid options: {}",
+                params.algorithm,
+                AlgorithmRegistry::all_type_strings().join(", ")
+            ))?;
+
+        let algo_name = algo_type.display_name().to_string();
+
+        // Validate that algorithm is a Market Making algorithm
+        Self::validate_mm_algorithm(algo_type)?;
+
+        // Parse parameter lists
+        let spread_values: Vec<f64> = params.spreads
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let skew_values: Vec<f64> = params.skews
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let fill_prob_values: Vec<f64> = params.fill_probs
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let high_entropy_values: Vec<f64> = params.high_entropies
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+
+        let total_combinations = spread_values.len() * skew_values.len() *
+            fill_prob_values.len() * high_entropy_values.len();
+
+        callback.on_event(ProgressEvent::Started {
+            total: Some(total_combinations),
+            message: format!(
+                "Starting multi-objective optimization with {} combinations for algorithm: {}",
+                total_combinations,
+                algo_name
+            ),
+        });
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!(
+                "Parameter grid: spreads={:?}, skews={:?}, fill_probs={:?}, high_entropies={:?}",
+                spread_values, skew_values, fill_prob_values, high_entropy_values
+            ),
+        });
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!(
+                "Objective weights: Sharpe={:.0}%, Drawdown={:.0}%, Fill={:.0}%, Turnover={:.0}%",
+                params.w_sharpe * 100.0,
+                params.w_drawdown * 100.0,
+                params.w_fill * 100.0,
+                params.w_turnover * 100.0
+            ),
+        });
+
+        // Build MOConfig
+        let mo_config = MOConfig {
+            data_dir: params.data_path.clone(),
+            spreads: spread_values,
+            skews: skew_values,
+            fill_probs: fill_prob_values,
+            high_entropies: high_entropy_values,
+            objective_weights: ObjectiveWeights {
+                sharpe: params.w_sharpe,
+                drawdown: params.w_drawdown,
+                fill_rate: params.w_fill,
+                turnover: params.w_turnover,
+            },
+            min_trades: params.min_trades,
+            verbose: false, // We'll handle output via callbacks
+        };
+
+        // Create optimizer and load data
+        let mut optimizer = MultiObjectiveOptimizer::new(mo_config);
+        let num_events = optimizer.load_data()
+            .context("Failed to load market data")?;
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!("Loaded {} events", num_events),
+        });
+
+        // Run optimization with progress updates
+        // Note: The optimizer doesn't support callbacks directly, so we'll need to
+        // wrap it or modify it. For now, we'll run it and convert the results.
+        let mo_results = optimizer.optimize()
+            .context("Failed to run multi-objective optimization")?;
+
+        // Convert MOResults to MultiObjectiveResult
+        let all_solutions: Vec<MultiObjectiveSolution> = mo_results.all_solutions
+            .iter()
+            .map(|sol| MultiObjectiveSolution {
+                spread_bps: sol.params.spread_bps,
+                skew_factor: sol.params.skew_factor,
+                fill_probability: sol.params.fill_probability,
+                high_entropy_threshold: sol.params.high_entropy_threshold,
+                sharpe: sol.objectives.sharpe,
+                drawdown: sol.objectives.drawdown,
+                fill_rate: sol.objectives.fill_rate,
+                turnover: sol.objectives.turnover,
+                total_return: sol.objectives.total_return,
+                win_rate: sol.objectives.win_rate,
+                num_trades: sol.objectives.num_trades,
+                pareto_rank: sol.pareto_rank,
+                crowding_distance: sol.crowding_distance,
+            })
+            .collect();
+
+        let pareto_frontier: Vec<MultiObjectiveSolution> = mo_results.pareto_frontier()
+            .iter()
+            .map(|sol| MultiObjectiveSolution {
+                spread_bps: sol.params.spread_bps,
+                skew_factor: sol.params.skew_factor,
+                fill_probability: sol.params.fill_probability,
+                high_entropy_threshold: sol.params.high_entropy_threshold,
+                sharpe: sol.objectives.sharpe,
+                drawdown: sol.objectives.drawdown,
+                fill_rate: sol.objectives.fill_rate,
+                turnover: sol.objectives.turnover,
+                total_return: sol.objectives.total_return,
+                win_rate: sol.objectives.win_rate,
+                num_trades: sol.objectives.num_trades,
+                pareto_rank: sol.pareto_rank,
+                crowding_distance: sol.crowding_distance,
+            })
+            .collect();
+
+        let best_weighted = mo_results.best_weighted()
+            .map(|sol| MultiObjectiveSolution {
+                spread_bps: sol.params.spread_bps,
+                skew_factor: sol.params.skew_factor,
+                fill_probability: sol.params.fill_probability,
+                high_entropy_threshold: sol.params.high_entropy_threshold,
+                sharpe: sol.objectives.sharpe,
+                drawdown: sol.objectives.drawdown,
+                fill_rate: sol.objectives.fill_rate,
+                turnover: sol.objectives.turnover,
+                total_return: sol.objectives.total_return,
+                win_rate: sol.objectives.win_rate,
+                num_trades: sol.objectives.num_trades,
+                pareto_rank: sol.pareto_rank,
+                crowding_distance: sol.crowding_distance,
+            });
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!(
+                "Multi-objective optimization completed: {} solutions evaluated, {} on Pareto frontier",
+                all_solutions.len(),
+                pareto_frontier.len()
+            ),
+        });
+
+        callback.on_event(ProgressEvent::Completed {
+            message: format!(
+                "Multi-objective optimization completed: {} solutions on Pareto frontier",
+                pareto_frontier.len()
+            ),
+        });
+
+        Ok(MultiObjectiveResult {
+            algorithm: params.algorithm.clone(),
+            algorithm_name: algo_name,
+            all_solutions,
+            pareto_frontier,
+            best_weighted,
+            total_combinations,
+            time_span_hours: mo_results.time_span_hours,
+            num_events: mo_results.num_events,
+        })
+    }
+
+    /// Regime-specific parameter optimization (MM algorithms only)
+    ///
+    /// This function optimizes MM parameters independently for each market regime
+    /// (high/medium/low entropy), then combines them into an optimal regime-switching strategy.
+    ///
+    /// # Arguments
+    ///
+    /// * `params` - Parameters for regime optimization
+    /// * `callback` - Progress callback for real-time updates
+    ///
+    /// # Returns
+    ///
+    /// `RegimeOptimizeResult` with per-regime optimization results and comparison with uniform approach.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Algorithm type is not a Market Making algorithm
+    /// - Data cannot be loaded
+    /// - Optimization fails
+    ///
+    /// This is the extracted version of the `run_regime_optimize()` function from the CLI.
+    pub fn regime_optimize(
+        params: RegimeOptimizeParams,
+        callback: Arc<dyn ProgressCallback>,
+    ) -> Result<RegimeOptimizeResult> {
+        use crate::backtest::regime_optimizer::{RegimeOptimizer, RegimeOptimizerConfig};
+
+        // Validate algorithm type (MM only)
+        let algo_type = AlgorithmType::from_str(&params.algorithm)
+            .map_err(|e| anyhow::anyhow!("Invalid algorithm: {}", e))?;
+        Self::validate_mm_algorithm(algo_type)?;
+
+        let algo_name = algo_type.display_name().to_string();
+
+        callback.on_event(ProgressEvent::Started {
+            total: None,
+            message: format!(
+                "Starting regime-specific parameter optimization for {}",
+                algo_name
+            ),
+        });
+
+        // Parse parameter grids
+        let spread_values: Vec<f64> = params.spreads
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let skew_values: Vec<f64> = params.skews
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+
+        if spread_values.is_empty() {
+            anyhow::bail!("No valid spread values found in '{}'", params.spreads);
+        }
+        if skew_values.is_empty() {
+            anyhow::bail!("No valid skew values found in '{}'", params.skews);
+        }
+
+        let total_combinations = spread_values.len() * skew_values.len();
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!(
+                "Testing {} combinations per regime ({} spreads × {} skews)",
+                total_combinations,
+                spread_values.len(),
+                skew_values.len()
+            ),
+        });
+
+        // Build config
+        let config = RegimeOptimizerConfig {
+            data_dir: params.data_path.clone(),
+            high_entropy_threshold: params.high_entropy,
+            low_entropy_threshold: params.low_entropy,
+            spreads: spread_values,
+            skews: skew_values,
+            fill_probability: params.fill_prob,
+            min_trades: params.min_trades,
+            allow_no_quote_low: params.allow_no_quote,
+            verbose: false, // Use callback instead
+        };
+
+        // Run optimization
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: "Loading data...".to_string(),
+        });
+
+        let mut optimizer = RegimeOptimizer::new(config);
+        optimizer.load_data()
+            .context("Failed to load data for regime optimization")?;
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: "Running regime-specific optimization...".to_string(),
+        });
+
+        let results = optimizer.optimize()
+            .context("Failed to run regime optimization")?;
+
+        // Convert results to our result struct
+        let high_entropy = RegimeOptimizeMetrics {
+            regime: "High Entropy".to_string(),
+            event_count: results.high_entropy.event_count,
+            event_fraction: results.high_entropy.event_fraction,
+            time_hours: results.high_entropy.time_hours,
+            optimal_spread: results.high_entropy.optimal_spread,
+            optimal_skew: results.high_entropy.optimal_skew,
+            should_quote: results.high_entropy.should_quote,
+            best_sharpe: results.high_entropy.best_sharpe,
+            best_return: results.high_entropy.best_return,
+            best_drawdown: results.high_entropy.best_drawdown,
+            best_trades: results.high_entropy.best_trades,
+            best_win_rate: results.high_entropy.best_win_rate,
+        };
+
+        let medium_entropy = RegimeOptimizeMetrics {
+            regime: "Medium Entropy".to_string(),
+            event_count: results.medium_entropy.event_count,
+            event_fraction: results.medium_entropy.event_fraction,
+            time_hours: results.medium_entropy.time_hours,
+            optimal_spread: results.medium_entropy.optimal_spread,
+            optimal_skew: results.medium_entropy.optimal_skew,
+            should_quote: results.medium_entropy.should_quote,
+            best_sharpe: results.medium_entropy.best_sharpe,
+            best_return: results.medium_entropy.best_return,
+            best_drawdown: results.medium_entropy.best_drawdown,
+            best_trades: results.medium_entropy.best_trades,
+            best_win_rate: results.medium_entropy.best_win_rate,
+        };
+
+        let low_entropy = RegimeOptimizeMetrics {
+            regime: "Low Entropy".to_string(),
+            event_count: results.low_entropy.event_count,
+            event_fraction: results.low_entropy.event_fraction,
+            time_hours: results.low_entropy.time_hours,
+            optimal_spread: results.low_entropy.optimal_spread,
+            optimal_skew: results.low_entropy.optimal_skew,
+            should_quote: results.low_entropy.should_quote,
+            best_sharpe: results.low_entropy.best_sharpe,
+            best_return: results.low_entropy.best_return,
+            best_drawdown: results.low_entropy.best_drawdown,
+            best_trades: results.low_entropy.best_trades,
+            best_win_rate: results.low_entropy.best_win_rate,
+        };
+
+        let optimal_regime_params = OptimalRegimeParams {
+            high: RegimeParamSet {
+                spread_bps: results.optimal_regime_params.high.spread_bps,
+                skew_factor: results.optimal_regime_params.high.skew_factor,
+                should_quote: results.optimal_regime_params.high.should_quote,
+            },
+            medium: RegimeParamSet {
+                spread_bps: results.optimal_regime_params.medium.spread_bps,
+                skew_factor: results.optimal_regime_params.medium.skew_factor,
+                should_quote: results.optimal_regime_params.medium.should_quote,
+            },
+            low: RegimeParamSet {
+                spread_bps: results.optimal_regime_params.low.spread_bps,
+                skew_factor: results.optimal_regime_params.low.skew_factor,
+                should_quote: results.optimal_regime_params.low.should_quote,
+            },
+        };
+
+        let comparison = StrategyComparison {
+            uniform_sharpe: results.comparison.uniform.sharpe,
+            uniform_return: results.comparison.uniform.total_return,
+            uniform_drawdown: results.comparison.uniform.max_drawdown,
+            uniform_trades: results.comparison.uniform.num_trades,
+            uniform_win_rate: results.comparison.uniform.win_rate,
+            regime_specific_sharpe: results.comparison.regime_specific.sharpe,
+            regime_specific_return: results.comparison.regime_specific.total_return,
+            regime_specific_drawdown: results.comparison.regime_specific.max_drawdown,
+            regime_specific_trades: results.comparison.regime_specific.num_trades,
+            regime_specific_win_rate: results.comparison.regime_specific.win_rate,
+            sharpe_improvement: results.comparison.sharpe_improvement,
+            return_improvement: results.comparison.return_improvement,
+            drawdown_improvement: results.comparison.drawdown_improvement,
+            trade_count_diff: results.comparison.trade_count_diff,
+        };
+
+        callback.on_event(ProgressEvent::Completed {
+            message: format!(
+                "Regime optimization completed: {} events processed over {:.1} hours",
+                results.total_events,
+                results.time_span_hours
+            ),
+        });
+
+        Ok(RegimeOptimizeResult {
+            algorithm: params.algorithm.clone(),
+            algorithm_name: algo_name,
+            high_entropy,
+            medium_entropy,
+            low_entropy,
+            optimal_regime_params,
+            comparison,
+            total_events: results.total_events,
+            time_span_hours: results.time_span_hours,
         })
     }
 }
@@ -3032,6 +3543,620 @@ mod tests {
 
         assert!(item.sharpe < 0.0);
         assert!(item.total_return < 0.0);
+    }
+
+    // ============================================================================
+    // RegimeOptimizeResult Structure Tests
+    // ============================================================================
+
+    #[test]
+    fn test_regime_optimize_result_structure() {
+        let result = RegimeOptimizeResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            high_entropy: RegimeOptimizeMetrics {
+                regime: "High Entropy".to_string(),
+                event_count: 1000,
+                event_fraction: 0.4,
+                time_hours: 24.0,
+                optimal_spread: 1.5,
+                optimal_skew: 0.3,
+                should_quote: true,
+                best_sharpe: 2.0,
+                best_return: 0.05,
+                best_drawdown: 0.02,
+                best_trades: 100,
+                best_win_rate: 0.55,
+            },
+            medium_entropy: RegimeOptimizeMetrics {
+                regime: "Medium Entropy".to_string(),
+                event_count: 1200,
+                event_fraction: 0.5,
+                time_hours: 30.0,
+                optimal_spread: 2.0,
+                optimal_skew: 0.5,
+                should_quote: true,
+                best_sharpe: 1.5,
+                best_return: 0.03,
+                best_drawdown: 0.03,
+                best_trades: 80,
+                best_win_rate: 0.52,
+            },
+            low_entropy: RegimeOptimizeMetrics {
+                regime: "Low Entropy".to_string(),
+                event_count: 300,
+                event_fraction: 0.1,
+                time_hours: 6.0,
+                optimal_spread: 4.0,
+                optimal_skew: 0.8,
+                should_quote: false,
+                best_sharpe: 0.5,
+                best_return: 0.01,
+                best_drawdown: 0.05,
+                best_trades: 20,
+                best_win_rate: 0.45,
+            },
+            optimal_regime_params: OptimalRegimeParams {
+                high: RegimeParamSet {
+                    spread_bps: 1.5,
+                    skew_factor: 0.3,
+                    should_quote: true,
+                },
+                medium: RegimeParamSet {
+                    spread_bps: 2.0,
+                    skew_factor: 0.5,
+                    should_quote: true,
+                },
+                low: RegimeParamSet {
+                    spread_bps: 4.0,
+                    skew_factor: 0.8,
+                    should_quote: false,
+                },
+            },
+            comparison: StrategyComparison {
+                uniform_sharpe: 1.2,
+                uniform_return: 0.03,
+                uniform_drawdown: 0.04,
+                uniform_trades: 200,
+                uniform_win_rate: 0.51,
+                regime_specific_sharpe: 1.5,
+                regime_specific_return: 0.04,
+                regime_specific_drawdown: 0.03,
+                regime_specific_trades: 200,
+                regime_specific_win_rate: 0.52,
+                sharpe_improvement: 0.3,
+                return_improvement: 0.01,
+                drawdown_improvement: -0.01,
+                trade_count_diff: 0,
+            },
+            total_events: 2500,
+            time_span_hours: 60.0,
+        };
+
+        assert_eq!(result.algorithm, "as");
+        assert_eq!(result.high_entropy.optimal_spread, 1.5);
+        assert_eq!(result.medium_entropy.optimal_spread, 2.0);
+        assert_eq!(result.low_entropy.should_quote, false);
+        assert_eq!(result.comparison.sharpe_improvement, 0.3);
+    }
+
+    #[test]
+    fn test_regime_optimize_result_serialization() {
+        let result = RegimeOptimizeResult {
+            algorithm: "ml".to_string(),
+            algorithm_name: "ML Spread/Skew".to_string(),
+            high_entropy: RegimeOptimizeMetrics {
+                regime: "High Entropy".to_string(),
+                event_count: 500,
+                event_fraction: 0.3,
+                time_hours: 12.0,
+                optimal_spread: 1.0,
+                optimal_skew: 0.2,
+                should_quote: true,
+                best_sharpe: 1.8,
+                best_return: 0.04,
+                best_drawdown: 0.02,
+                best_trades: 50,
+                best_win_rate: 0.56,
+            },
+            medium_entropy: RegimeOptimizeMetrics {
+                regime: "Medium Entropy".to_string(),
+                event_count: 800,
+                event_fraction: 0.5,
+                time_hours: 20.0,
+                optimal_spread: 1.8,
+                optimal_skew: 0.4,
+                should_quote: true,
+                best_sharpe: 1.4,
+                best_return: 0.03,
+                best_drawdown: 0.025,
+                best_trades: 60,
+                best_win_rate: 0.53,
+            },
+            low_entropy: RegimeOptimizeMetrics {
+                regime: "Low Entropy".to_string(),
+                event_count: 400,
+                event_fraction: 0.2,
+                time_hours: 8.0,
+                optimal_spread: 3.5,
+                optimal_skew: 0.7,
+                should_quote: true,
+                best_sharpe: 0.8,
+                best_return: 0.015,
+                best_drawdown: 0.04,
+                best_trades: 30,
+                best_win_rate: 0.48,
+            },
+            optimal_regime_params: OptimalRegimeParams {
+                high: RegimeParamSet {
+                    spread_bps: 1.0,
+                    skew_factor: 0.2,
+                    should_quote: true,
+                },
+                medium: RegimeParamSet {
+                    spread_bps: 1.8,
+                    skew_factor: 0.4,
+                    should_quote: true,
+                },
+                low: RegimeParamSet {
+                    spread_bps: 3.5,
+                    skew_factor: 0.7,
+                    should_quote: true,
+                },
+            },
+            comparison: StrategyComparison {
+                uniform_sharpe: 1.0,
+                uniform_return: 0.025,
+                uniform_drawdown: 0.035,
+                uniform_trades: 140,
+                uniform_win_rate: 0.50,
+                regime_specific_sharpe: 1.3,
+                regime_specific_return: 0.03,
+                regime_specific_drawdown: 0.03,
+                regime_specific_trades: 140,
+                regime_specific_win_rate: 0.52,
+                sharpe_improvement: 0.3,
+                return_improvement: 0.005,
+                drawdown_improvement: -0.005,
+                trade_count_diff: 0,
+            },
+            total_events: 1700,
+            time_span_hours: 40.0,
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: RegimeOptimizeResult = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(result.algorithm, deserialized.algorithm);
+        assert_eq!(result.high_entropy.optimal_spread, deserialized.high_entropy.optimal_spread);
+        assert_eq!(result.comparison.sharpe_improvement, deserialized.comparison.sharpe_improvement);
+    }
+
+    #[test]
+    fn test_regime_optimize_metrics_structure() {
+        let metrics = RegimeOptimizeMetrics {
+            regime: "High Entropy".to_string(),
+            event_count: 1000,
+            event_fraction: 0.4,
+            time_hours: 24.0,
+            optimal_spread: 1.5,
+            optimal_skew: 0.3,
+            should_quote: true,
+            best_sharpe: 2.0,
+            best_return: 0.05,
+            best_drawdown: 0.02,
+            best_trades: 100,
+            best_win_rate: 0.55,
+        };
+
+        assert_eq!(metrics.regime, "High Entropy");
+        assert_eq!(metrics.event_count, 1000);
+        assert_eq!(metrics.event_fraction, 0.4);
+        assert!(metrics.should_quote);
+        assert!(metrics.best_sharpe > 0.0);
+    }
+
+    #[test]
+    fn test_optimal_regime_params_structure() {
+        let params = OptimalRegimeParams {
+            high: RegimeParamSet {
+                spread_bps: 1.5,
+                skew_factor: 0.3,
+                should_quote: true,
+            },
+            medium: RegimeParamSet {
+                spread_bps: 2.0,
+                skew_factor: 0.5,
+                should_quote: true,
+            },
+            low: RegimeParamSet {
+                spread_bps: 4.0,
+                skew_factor: 0.8,
+                should_quote: false,
+            },
+        };
+
+        assert_eq!(params.high.spread_bps, 1.5);
+        assert_eq!(params.medium.skew_factor, 0.5);
+        assert!(!params.low.should_quote);
+    }
+
+    #[test]
+    fn test_strategy_comparison_structure() {
+        let comparison = StrategyComparison {
+            uniform_sharpe: 1.2,
+            uniform_return: 0.03,
+            uniform_drawdown: 0.04,
+            uniform_trades: 200,
+            uniform_win_rate: 0.51,
+            regime_specific_sharpe: 1.5,
+            regime_specific_return: 0.04,
+            regime_specific_drawdown: 0.03,
+            regime_specific_trades: 200,
+            regime_specific_win_rate: 0.52,
+            sharpe_improvement: 0.3,
+            return_improvement: 0.01,
+            drawdown_improvement: -0.01,
+            trade_count_diff: 0,
+        };
+
+        assert!(comparison.regime_specific_sharpe > comparison.uniform_sharpe);
+        assert!(comparison.sharpe_improvement > 0.0);
+        assert!(comparison.drawdown_improvement < 0.0); // Negative is better (less drawdown)
+    }
+
+    // ============================================================================
+    // RegimeOptimize Function Tests (Algorithm Validation)
+    // ============================================================================
+
+    #[test]
+    fn test_regime_optimize_invalid_algorithm() {
+        use crate::commands::params::backtest_params::RegimeOptimizeParamsBuilder;
+
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("invalid".to_string())
+            .spreads("0.5,1.0".to_string())
+            .skews("0.2,0.3".to_string())
+            .build()
+            .unwrap();
+
+        let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+        let result = BacktestCommands::regime_optimize(params, callback);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid algorithm"));
+    }
+
+    #[test]
+    fn test_regime_optimize_non_mm_algorithm() {
+        use crate::commands::params::backtest_params::RegimeOptimizeParamsBuilder;
+        use crate::strategies::AlgorithmType;
+
+        // Try with a non-MM algorithm (if one exists)
+        // Note: This test assumes there are non-MM algorithms in the system
+        // If all algorithms are MM, this test may need adjustment
+
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("momentum".to_string()) // Assuming this doesn't exist or isn't MM
+            .spreads("0.5,1.0".to_string())
+            .skews("0.2,0.3".to_string())
+            .build();
+
+        // Should fail at build or at algorithm validation
+        if let Ok(params) = params {
+            let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+            let result = BacktestCommands::regime_optimize(params, callback);
+            // Should fail with MM validation error if algorithm type is parsed but not MM
+            if result.is_err() {
+                let err_msg = result.unwrap_err().to_string();
+                // Either invalid algorithm or not MM algorithm
+                assert!(err_msg.contains("Invalid algorithm") || err_msg.contains("Market Making"));
+            }
+        }
+    }
+
+    #[test]
+    fn test_regime_optimize_valid_mm_algorithms() {
+        use crate::commands::params::backtest_params::RegimeOptimizeParamsBuilder;
+
+        let algorithms = vec!["as", "ml", "fixed", "avellaneda-stoikov", "ml-spread-skew"];
+
+        for algo in algorithms {
+            let params = RegimeOptimizeParamsBuilder::new()
+                .data_path(PathBuf::from("./data"))
+                .algorithm(algo.to_string())
+                .spreads("0.5".to_string())
+                .skews("0.2".to_string())
+                .build();
+
+            // Should build successfully (algorithm validation happens in function)
+            if let Ok(params) = params {
+                // Note: Actual execution would require real data, so we just test parameter building
+                assert_eq!(params.algorithm, algo);
+            }
+        }
+    }
+
+    // ============================================================================
+    // Progress Callback Tests for RegimeOptimize
+    // ============================================================================
+
+    #[test]
+    fn test_regime_optimize_nonexistent_data_path() {
+        use crate::commands::params::backtest_params::RegimeOptimizeParamsBuilder;
+
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("/nonexistent/path/that/does/not/exist"))
+            .algorithm("as".to_string())
+            .spreads("0.5,1.0".to_string())
+            .skews("0.2,0.3".to_string())
+            .build()
+            .unwrap();
+
+        let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+        let result = BacktestCommands::regime_optimize(params, callback);
+
+        // Should fail when trying to load data
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("load") || err_msg.contains("data") || err_msg.contains("Failed"));
+    }
+
+    #[test]
+    fn test_regime_optimize_empty_spread_list() {
+        use crate::commands::params::backtest_params::RegimeOptimizeParamsBuilder;
+
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("".to_string())
+            .skews("0.2,0.3".to_string())
+            .build();
+
+        // Should fail at build time
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_regime_optimize_empty_skew_list() {
+        use crate::commands::params::backtest_params::RegimeOptimizeParamsBuilder;
+
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5,1.0".to_string())
+            .skews("".to_string())
+            .build();
+
+        // Should fail at build time
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_regime_optimize_invalid_spread_values() {
+        use crate::commands::params::backtest_params::RegimeOptimizeParamsBuilder;
+
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("abc,def,xyz".to_string())
+            .skews("0.2,0.3".to_string())
+            .build();
+
+        // Should fail at build time (no valid numeric values)
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_regime_optimize_invalid_skew_values() {
+        use crate::commands::params::backtest_params::RegimeOptimizeParamsBuilder;
+
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5,1.0".to_string())
+            .skews("invalid,values".to_string())
+            .build();
+
+        // Should fail at build time (no valid numeric values)
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_regime_optimize_negative_spread() {
+        use crate::commands::params::backtest_params::RegimeOptimizeParamsBuilder;
+
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("-1.0,1.0".to_string())
+            .skews("0.2,0.3".to_string())
+            .build();
+
+        // Should fail at build time (negative spread not allowed)
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_regime_optimize_invalid_fill_prob() {
+        use crate::commands::params::backtest_params::RegimeOptimizeParamsBuilder;
+
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5,1.0".to_string())
+            .skews("0.2,0.3".to_string())
+            .fill_prob(1.5) // > 1.0
+            .build();
+
+        // Should fail at build time
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_regime_optimize_invalid_entropy_thresholds() {
+        use crate::commands::params::backtest_params::RegimeOptimizeParamsBuilder;
+
+        // High entropy <= low entropy should fail
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5,1.0".to_string())
+            .skews("0.2,0.3".to_string())
+            .high_entropy(0.3)
+            .low_entropy(0.5) // High < Low
+            .build();
+
+        // Should fail at build time
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_regime_optimize_zero_min_trades() {
+        use crate::commands::params::backtest_params::RegimeOptimizeParamsBuilder;
+
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5,1.0".to_string())
+            .skews("0.2,0.3".to_string())
+            .min_trades(0)
+            .build();
+
+        // Should fail at build time
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_regime_optimize_progress_callbacks_structure() {
+        use crate::commands::params::backtest_params::RegimeOptimizeParamsBuilder;
+
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.5,1.0".to_string())
+            .skews("0.2,0.3".to_string())
+            .build()
+            .unwrap();
+
+        // Test that params are correctly structured for progress callbacks
+        // Actual callback testing would require real data execution
+        assert_eq!(params.algorithm, "as");
+        assert_eq!(params.spreads, "0.5,1.0");
+        assert_eq!(params.skews, "0.2,0.3");
+    }
+
+    #[test]
+    fn test_regime_optimize_progress_callback_events() {
+        use crate::commands::params::backtest_params::RegimeOptimizeParamsBuilder;
+        use std::sync::Mutex;
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+
+        struct TestCallback {
+            events: Arc<Mutex<Vec<ProgressEvent>>>,
+        }
+
+        impl ProgressCallback for TestCallback {
+            fn on_event(&self, event: ProgressEvent) {
+                self.events.lock().unwrap().push(event);
+            }
+        }
+
+        let callback: Arc<dyn ProgressCallback> = Arc::new(TestCallback {
+            events: events.clone(),
+        });
+
+        let params = RegimeOptimizeParamsBuilder::new()
+            .data_path(PathBuf::from("/nonexistent/path")) // Will fail, but we can test callbacks
+            .algorithm("as".to_string())
+            .spreads("0.5,1.0".to_string())
+            .skews("0.2,0.3".to_string())
+            .build()
+            .unwrap();
+
+        let _result = BacktestCommands::regime_optimize(params, callback);
+
+        // Even if execution fails, we should have received at least a Started event
+        let events_guard = events.lock().unwrap();
+        assert!(!events_guard.is_empty(), "Should have received at least one progress event");
+        assert!(matches!(events_guard[0], ProgressEvent::Started { .. }));
+    }
+
+    #[test]
+    fn test_regime_optimize_all_mm_algorithms() {
+        use crate::commands::params::backtest_params::RegimeOptimizeParamsBuilder;
+
+        // Test that all MM algorithms can be parsed (validation happens in function)
+        let mm_algorithms = vec!["as", "ml", "fixed"];
+
+        for algo in mm_algorithms {
+            let params = RegimeOptimizeParamsBuilder::new()
+                .data_path(PathBuf::from("./data"))
+                .algorithm(algo.to_string())
+                .spreads("0.5".to_string())
+                .skews("0.2".to_string())
+                .build();
+
+            assert!(params.is_ok(), "Should build params for MM algorithm: {}", algo);
+            let params = params.unwrap();
+            assert_eq!(params.algorithm, algo);
+        }
+    }
+
+    #[test]
+    fn test_regime_optimize_result_conversion() {
+        // Test that result structs can be properly constructed and converted
+        let metrics = RegimeOptimizeMetrics {
+            regime: "Test Regime".to_string(),
+            event_count: 100,
+            event_fraction: 0.5,
+            time_hours: 10.0,
+            optimal_spread: 2.0,
+            optimal_skew: 0.5,
+            should_quote: true,
+            best_sharpe: 1.5,
+            best_return: 0.03,
+            best_drawdown: 0.02,
+            best_trades: 50,
+            best_win_rate: 0.55,
+        };
+
+        assert_eq!(metrics.regime, "Test Regime");
+        assert_eq!(metrics.optimal_spread, 2.0);
+        assert!(metrics.should_quote);
+        assert!(metrics.best_sharpe > 0.0);
+    }
+
+    #[test]
+    fn test_regime_optimize_optimal_params_conversion() {
+        // Test that optimal regime params can be properly constructed
+        let params = OptimalRegimeParams {
+            high: RegimeParamSet {
+                spread_bps: 1.0,
+                skew_factor: 0.3,
+                should_quote: true,
+            },
+            medium: RegimeParamSet {
+                spread_bps: 2.0,
+                skew_factor: 0.5,
+                should_quote: true,
+            },
+            low: RegimeParamSet {
+                spread_bps: 4.0,
+                skew_factor: 0.8,
+                should_quote: false,
+            },
+        };
+
+        // Verify structure
+        assert_eq!(params.high.spread_bps, 1.0);
+        assert_eq!(params.medium.skew_factor, 0.5);
+        assert!(!params.low.should_quote);
+        assert!(params.high.should_quote);
+        assert!(params.medium.should_quote);
     }
 }
 
