@@ -30,7 +30,7 @@ use num::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::common::{ProgressCallback, ProgressEvent, LogLevel};
-use crate::commands::params::backtest_params::EvaluateParams;
+use crate::commands::params::backtest_params::{EvaluateParams, TuneParams};
 use crate::backtest::{
     BacktestEngine, BacktestConfig, BacktestResults,
     replay::{ParquetReplay, ReplayConfig},
@@ -41,6 +41,36 @@ use crate::execution::mm_simulator::SimulatorConfig;
 use crate::strategies::{
     AlgorithmType, AlgorithmRegistry, BacktestAlgorithmParams, MLModelWeights,
 };
+
+/// Single grid search result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TuneResultItem {
+    pub spread: f64,
+    pub skew: f64,
+    pub high_entropy_threshold: f64,
+    pub fill_prob: f64,
+    pub sharpe: f64,
+    pub total_return: f64,
+    pub max_drawdown: f64,
+    pub num_trades: usize,
+    pub win_rate: f64,
+    pub avg_trade_pnl: f64,
+}
+
+/// Results from the `tune` command (grid search)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TuneResult {
+    /// Algorithm type used
+    pub algorithm: String,
+    /// Algorithm display name
+    pub algorithm_name: String,
+    /// All grid search results (sorted by Sharpe ratio, descending)
+    pub all_results: Vec<TuneResultItem>,
+    /// Best parameter combination (by Sharpe ratio)
+    pub best: Option<TuneResultItem>,
+    /// Total number of combinations tested
+    pub total_combinations: usize,
+}
 
 /// Results from the `evaluate` command
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -263,6 +293,222 @@ impl BacktestCommands {
             algo_params = algo_params.with_ml_weights(weights);
         }
         algo_params
+    }
+
+    /// Run grid search (tune) command - MM algorithms only
+    ///
+    /// This is the extracted version of the `run_grid_search()` function from the CLI.
+    /// It supports progress callbacks for real-time updates during execution.
+    ///
+    /// Returns `TuneResult` with all grid search results sorted by Sharpe ratio.
+    pub fn tune(
+        params: TuneParams,
+        callback: Arc<dyn ProgressCallback>,
+    ) -> Result<TuneResult> {
+        // Parse algorithm type early to fail fast on invalid algorithm
+        let algo_type = AlgorithmType::from_str(&params.algorithm)
+            .map_err(|_| anyhow::anyhow!(
+                "Unknown algorithm '{}'. Valid options: {}",
+                params.algorithm,
+                AlgorithmRegistry::all_type_strings().join(", ")
+            ))?;
+
+        let algo_name = algo_type.display_name().to_string();
+
+        // Validate that algorithm is a Market Making algorithm
+        Self::validate_mm_algorithm(algo_type)?;
+
+        // Parse parameter lists
+        let spreads: Vec<f64> = params.spreads
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let skews: Vec<f64> = params.skews
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let high_entropies: Vec<f64> = params.high_entropies
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let fill_probs: Vec<f64> = params.fill_probs
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+
+        let total_combinations = spreads.len() * skews.len() * high_entropies.len() * fill_probs.len();
+
+        callback.on_event(ProgressEvent::Started {
+            total: Some(total_combinations),
+            message: format!(
+                "Starting grid search with {} combinations for algorithm: {}",
+                total_combinations,
+                algo_name
+            ),
+        });
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!(
+                "Parameter space: spreads={:?}, skews={:?}, high_entropies={:?}, fill_probs={:?}",
+                spreads, skews, high_entropies, fill_probs
+            ),
+        });
+
+        // Load ML weights if needed
+        let ml_weights = Self::load_ml_weights_if_needed(
+            algo_type,
+            params.weights_file.as_deref(),
+            &callback,
+        )?;
+
+        // Load data once (we'll reload events for each combination)
+        let replay_config = ReplayConfig {
+            data_dir: params.data_path.clone(),
+            ..Default::default()
+        };
+
+        let mut all_results: Vec<TuneResultItem> = Vec::new();
+        let mut count = 0;
+
+        for &spread in &spreads {
+            for &skew in &skews {
+                for &high_entropy in &high_entropies {
+                    for &fill_prob in &fill_probs {
+                        count += 1;
+
+                        callback.on_event(ProgressEvent::Progress {
+                            current: count,
+                            total: Some(total_combinations),
+                            message: format!(
+                                "Testing: spread={:.1}, skew={:.1}, entropy={:.1}, fill_prob={:.2}",
+                                spread, skew, high_entropy, fill_prob
+                            ),
+                        });
+
+                        // Reload events (need fresh copy for each run)
+                        let mut replay = ParquetReplay::new(replay_config.clone());
+                        replay.load()
+                            .context("Failed to load market data")?;
+                        let events = replay.into_events();
+
+                        // Create algorithm with grid parameters
+                        let mut algo_params = BacktestAlgorithmParams::new(
+                            Decimal::from_f64_retain(params.max_inventory).unwrap_or(dec!(0.1)),
+                            Decimal::from_f64_retain(params.quote_size).unwrap_or(dec!(0.001)),
+                            spread,
+                            skew,
+                        );
+                        if let Some(weights) = ml_weights.clone() {
+                            algo_params = algo_params.with_ml_weights(weights);
+                        }
+
+                        let algorithm = AlgorithmRegistry::create_for_backtest(algo_type, &algo_params)
+                            .map_err(|e| anyhow::anyhow!("Failed to create algorithm '{}': {}", algo_name, e))?;
+
+                        let config = BacktestConfig {
+                            replay: replay_config.clone(),
+                            mm: MMConfig::default(),
+                            simulator: SimulatorConfig {
+                                fee_rate: Decimal::from_f64_retain(params.fee_rate).unwrap_or(dec!(0.0001)),
+                                ..Default::default()
+                            },
+                            fill_sim: FillSimulatorConfig {
+                                base_fill_probability: fill_prob,
+                                queue_position: params.queue_pos,
+                                fee_rate: Decimal::from_f64_retain(params.fee_rate).unwrap_or(dec!(0.0001)),
+                                ..Default::default()
+                            },
+                            verbose: false,
+                            use_realistic_fills: !params.naive_fills,
+                            ..Default::default()
+                        };
+
+                        let mut engine = BacktestEngine::from_events_with_algorithm(config, events, algorithm);
+                        let results = engine.run()
+                            .context("Failed to run backtest")?;
+
+                        let avg_trade_pnl = if results.metrics.num_trades > 0 {
+                            results.metrics.total_return / results.metrics.num_trades as f64
+                        } else {
+                            0.0
+                        };
+
+                        let grid_result = TuneResultItem {
+                            spread,
+                            skew,
+                            high_entropy_threshold: high_entropy,
+                            fill_prob,
+                            sharpe: results.metrics.sharpe_ratio,
+                            total_return: results.metrics.total_return,
+                            max_drawdown: results.metrics.max_drawdown,
+                            num_trades: results.metrics.num_trades,
+                            win_rate: results.metrics.win_rate,
+                            avg_trade_pnl,
+                        };
+
+                        // Send metric update with current best Sharpe
+                        let current_best_sharpe = all_results
+                            .iter()
+                            .map(|r| r.sharpe)
+                            .fold(f64::NEG_INFINITY, f64::max);
+                        let new_best = grid_result.sharpe > current_best_sharpe;
+
+                        callback.on_event(ProgressEvent::Metric {
+                            name: "sharpe_ratio".to_string(),
+                            value: grid_result.sharpe,
+                        });
+
+                        if new_best {
+                            callback.on_event(ProgressEvent::Log {
+                                level: LogLevel::Info,
+                                message: format!(
+                                    "New best Sharpe: {:.2} (spread={:.1}, skew={:.1}, entropy={:.1}, fill_prob={:.2})",
+                                    grid_result.sharpe, spread, skew, high_entropy, fill_prob
+                                ),
+                            });
+                        }
+
+                        all_results.push(grid_result);
+                    }
+                }
+            }
+        }
+
+        // Sort by Sharpe ratio (descending)
+        all_results.sort_by(|a, b| b.sharpe.partial_cmp(&a.sharpe).unwrap_or(std::cmp::Ordering::Equal));
+
+        let best = all_results.first().cloned();
+
+        callback.on_event(ProgressEvent::Completed {
+            message: format!(
+                "Grid search completed: tested {} combinations, best Sharpe={:.2}",
+                total_combinations,
+                best.as_ref().map(|b| b.sharpe).unwrap_or(0.0)
+            ),
+        });
+
+        Ok(TuneResult {
+            algorithm: params.algorithm.clone(),
+            algorithm_name: algo_name,
+            all_results,
+            best,
+            total_combinations,
+        })
+    }
+
+    /// Validate that the algorithm is a Market Making algorithm
+    fn validate_mm_algorithm(algo_type: AlgorithmType) -> Result<()> {
+        match algo_type {
+            AlgorithmType::AvellanedaStoikov
+            | AlgorithmType::MLSpreadSkew
+            | AlgorithmType::FixedSpread => Ok(()),
+            _ => anyhow::bail!(
+                "Algorithm '{}' is not a Market Making algorithm. \
+                 Grid search (tune) is only available for MM algorithms: as, ml, fixed",
+                algo_type.as_str()
+            ),
+        }
     }
 }
 
@@ -1339,6 +1585,721 @@ mod tests {
 
         assert_eq!(params2.weights_file, Some(PathBuf::from("./weights.json")));
         assert_eq!(params2.output, Some(PathBuf::from("./output.json")));
+    }
+
+    // ============================================================================
+    // Tune Command Tests
+    // ============================================================================
+
+    #[test]
+    fn test_tune_result_item_structure() {
+        let item = TuneResultItem {
+            spread: 2.0,
+            skew: 0.5,
+            high_entropy_threshold: 0.7,
+            fill_prob: 0.10,
+            sharpe: 1.5,
+            total_return: 0.05,
+            max_drawdown: 0.02,
+            num_trades: 100,
+            win_rate: 0.55,
+            avg_trade_pnl: 0.001,
+        };
+
+        assert_eq!(item.spread, 2.0);
+        assert_eq!(item.skew, 0.5);
+        assert_eq!(item.sharpe, 1.5);
+        assert_eq!(item.num_trades, 100);
+    }
+
+    #[test]
+    fn test_tune_result_item_serialization() {
+        let item = TuneResultItem {
+            spread: 2.0,
+            skew: 0.5,
+            high_entropy_threshold: 0.7,
+            fill_prob: 0.10,
+            sharpe: 1.5,
+            total_return: 0.05,
+            max_drawdown: 0.02,
+            num_trades: 100,
+            win_rate: 0.55,
+            avg_trade_pnl: 0.001,
+        };
+
+        let json = serde_json::to_string(&item).unwrap();
+        let deserialized: TuneResultItem = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(item.spread, deserialized.spread);
+        assert_eq!(item.skew, deserialized.skew);
+        assert_eq!(item.sharpe, deserialized.sharpe);
+        assert_eq!(item.num_trades, deserialized.num_trades);
+    }
+
+    #[test]
+    fn test_tune_result_item_clone() {
+        let item1 = TuneResultItem {
+            spread: 2.0,
+            skew: 0.5,
+            high_entropy_threshold: 0.7,
+            fill_prob: 0.10,
+            sharpe: 1.5,
+            total_return: 0.05,
+            max_drawdown: 0.02,
+            num_trades: 100,
+            win_rate: 0.55,
+            avg_trade_pnl: 0.001,
+        };
+
+        let item2 = item1.clone();
+        assert_eq!(item1.spread, item2.spread);
+        assert_eq!(item1.sharpe, item2.sharpe);
+    }
+
+    #[test]
+    fn test_tune_result_structure() {
+        use crate::commands::params::backtest_params::TuneParamsBuilder;
+
+        let result = TuneResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            all_results: vec![
+                TuneResultItem {
+                    spread: 2.0,
+                    skew: 0.5,
+                    high_entropy_threshold: 0.7,
+                    fill_prob: 0.10,
+                    sharpe: 1.5,
+                    total_return: 0.05,
+                    max_drawdown: 0.02,
+                    num_trades: 100,
+                    win_rate: 0.55,
+                    avg_trade_pnl: 0.001,
+                },
+            ],
+            best: Some(TuneResultItem {
+                spread: 2.0,
+                skew: 0.5,
+                high_entropy_threshold: 0.7,
+                fill_prob: 0.10,
+                sharpe: 1.5,
+                total_return: 0.05,
+                max_drawdown: 0.02,
+                num_trades: 100,
+                win_rate: 0.55,
+                avg_trade_pnl: 0.001,
+            }),
+            total_combinations: 1,
+        };
+
+        assert_eq!(result.algorithm, "as");
+        assert_eq!(result.all_results.len(), 1);
+        assert!(result.best.is_some());
+        assert_eq!(result.total_combinations, 1);
+    }
+
+    #[test]
+    fn test_tune_result_empty_results() {
+        let result = TuneResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            all_results: vec![],
+            best: None,
+            total_combinations: 0,
+        };
+
+        assert_eq!(result.all_results.len(), 0);
+        assert!(result.best.is_none());
+        assert_eq!(result.total_combinations, 0);
+    }
+
+    #[test]
+    fn test_tune_result_serialization() {
+        let result = TuneResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            all_results: vec![
+                TuneResultItem {
+                    spread: 2.0,
+                    skew: 0.5,
+                    high_entropy_threshold: 0.7,
+                    fill_prob: 0.10,
+                    sharpe: 1.5,
+                    total_return: 0.05,
+                    max_drawdown: 0.02,
+                    num_trades: 100,
+                    win_rate: 0.55,
+                    avg_trade_pnl: 0.001,
+                },
+            ],
+            best: Some(TuneResultItem {
+                spread: 2.0,
+                skew: 0.5,
+                high_entropy_threshold: 0.7,
+                fill_prob: 0.10,
+                sharpe: 1.5,
+                total_return: 0.05,
+                max_drawdown: 0.02,
+                num_trades: 100,
+                win_rate: 0.55,
+                avg_trade_pnl: 0.001,
+            }),
+            total_combinations: 1,
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: TuneResult = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(result.algorithm, deserialized.algorithm);
+        assert_eq!(result.all_results.len(), deserialized.all_results.len());
+        assert_eq!(result.best.as_ref().unwrap().sharpe, deserialized.best.as_ref().unwrap().sharpe);
+    }
+
+    #[test]
+    fn test_tune_result_sorted_by_sharpe() {
+        let mut result = TuneResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            all_results: vec![
+                TuneResultItem {
+                    spread: 1.0,
+                    skew: 0.3,
+                    high_entropy_threshold: 0.6,
+                    fill_prob: 0.05,
+                    sharpe: 0.5,
+                    total_return: 0.02,
+                    max_drawdown: 0.01,
+                    num_trades: 50,
+                    win_rate: 0.50,
+                    avg_trade_pnl: 0.0004,
+                },
+                TuneResultItem {
+                    spread: 2.0,
+                    skew: 0.5,
+                    high_entropy_threshold: 0.7,
+                    fill_prob: 0.10,
+                    sharpe: 1.5,
+                    total_return: 0.05,
+                    max_drawdown: 0.02,
+                    num_trades: 100,
+                    win_rate: 0.55,
+                    avg_trade_pnl: 0.0005,
+                },
+                TuneResultItem {
+                    spread: 3.0,
+                    skew: 0.7,
+                    high_entropy_threshold: 0.8,
+                    fill_prob: 0.15,
+                    sharpe: 1.0,
+                    total_return: 0.03,
+                    max_drawdown: 0.015,
+                    num_trades: 75,
+                    win_rate: 0.52,
+                    avg_trade_pnl: 0.0004,
+                },
+            ],
+            best: None,
+            total_combinations: 3,
+        };
+
+        // Sort by Sharpe (descending)
+        result.all_results.sort_by(|a, b| b.sharpe.partial_cmp(&a.sharpe).unwrap_or(std::cmp::Ordering::Equal));
+        result.best = result.all_results.first().cloned();
+
+        // Verify sorted order
+        assert_eq!(result.all_results[0].sharpe, 1.5);
+        assert_eq!(result.all_results[1].sharpe, 1.0);
+        assert_eq!(result.all_results[2].sharpe, 0.5);
+        assert_eq!(result.best.as_ref().unwrap().sharpe, 1.5);
+    }
+
+    // ============================================================================
+    // Algorithm Type Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_validate_mm_algorithm_avellaneda_stoikov() {
+        let result = BacktestCommands::validate_mm_algorithm(AlgorithmType::AvellanedaStoikov);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_mm_algorithm_ml_spread_skew() {
+        let result = BacktestCommands::validate_mm_algorithm(AlgorithmType::MLSpreadSkew);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_mm_algorithm_fixed_spread() {
+        let result = BacktestCommands::validate_mm_algorithm(AlgorithmType::FixedSpread);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_mm_algorithm_all_variants() {
+        // Test all three MM algorithm types
+        assert!(BacktestCommands::validate_mm_algorithm(AlgorithmType::AvellanedaStoikov).is_ok());
+        assert!(BacktestCommands::validate_mm_algorithm(AlgorithmType::MLSpreadSkew).is_ok());
+        assert!(BacktestCommands::validate_mm_algorithm(AlgorithmType::FixedSpread).is_ok());
+    }
+
+    // ============================================================================
+    // Tune Command Error Handling Tests
+    // ============================================================================
+
+    #[test]
+    fn test_tune_invalid_algorithm() {
+        use crate::commands::params::backtest_params::TuneParamsBuilder;
+
+        let params = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("invalid_algorithm".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .high_entropies("0.6".to_string())
+            .fill_probs("0.05".to_string())
+            .build()
+            .unwrap();
+
+        let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+        let result = BacktestCommands::tune(params, callback);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Unknown algorithm"));
+    }
+
+    #[test]
+    fn test_tune_invalid_algorithm_string() {
+        use crate::commands::params::backtest_params::TuneParamsBuilder;
+
+        // Test with an algorithm string that doesn't exist
+        // This will fail at parse_algorithm_type, not at validate_mm_algorithm
+        let params = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("nonexistent_algorithm".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .high_entropies("0.6".to_string())
+            .fill_probs("0.05".to_string())
+            .build()
+            .unwrap();
+
+        let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+        let result = BacktestCommands::tune(params, callback);
+
+        assert!(result.is_err());
+        // Should fail at algorithm parsing, not MM validation
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Unknown algorithm") || err_msg.contains("algorithm"));
+    }
+
+    #[test]
+    fn test_tune_nonexistent_data_path() {
+        use crate::commands::params::backtest_params::TuneParamsBuilder;
+
+        let params = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("/nonexistent/path/that/does/not/exist"))
+            .algorithm("as".to_string())
+            .spreads("1".to_string())
+            .skews("0.3".to_string())
+            .high_entropies("0.6".to_string())
+            .fill_probs("0.05".to_string())
+            .build()
+            .unwrap();
+
+        let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+        let result = BacktestCommands::tune(params, callback);
+
+        // Should fail when trying to load data
+        assert!(result.is_err());
+    }
+
+    // ============================================================================
+    // Progress Callback Tests for Tune
+    // ============================================================================
+
+    #[test]
+    fn test_tune_progress_callback_events() {
+        use crate::commands::params::backtest_params::TuneParamsBuilder;
+
+        // This test would require actual data, so we'll just test the callback structure
+        let callback = Arc::new(TestCallback::new());
+        let callback_clone = callback.clone();
+
+        // Simulate events that would be sent during tuning
+        callback.on_event(ProgressEvent::Started {
+            total: Some(10),
+            message: "Starting grid search".to_string(),
+        });
+
+        callback.on_event(ProgressEvent::Progress {
+            current: 1,
+            total: Some(10),
+            message: "Testing combination 1".to_string(),
+        });
+
+        callback.on_event(ProgressEvent::Metric {
+            name: "sharpe_ratio".to_string(),
+            value: 1.5,
+        });
+
+        assert_eq!(callback_clone.event_count(), 3);
+        let events = callback_clone.get_events();
+        assert!(matches!(events[0], ProgressEvent::Started { .. }));
+        assert!(matches!(events[1], ProgressEvent::Progress { .. }));
+        assert!(matches!(events[2], ProgressEvent::Metric { .. }));
+    }
+
+    // ============================================================================
+    // Parameter Parsing Tests
+    // ============================================================================
+
+    #[test]
+    fn test_tune_params_parse_spreads() {
+        use crate::commands::params::backtest_params::TuneParamsBuilder;
+
+        let params = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3,4,5".to_string())
+            .skews("0.3".to_string())
+            .high_entropies("0.6".to_string())
+            .fill_probs("0.05".to_string())
+            .build()
+            .unwrap();
+
+        let spreads: Vec<f64> = params.spreads.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        assert_eq!(spreads, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn test_tune_params_parse_skews() {
+        use crate::commands::params::backtest_params::TuneParamsBuilder;
+
+        let params = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1".to_string())
+            .skews("0.3,0.5,0.7,1.0".to_string())
+            .high_entropies("0.6".to_string())
+            .fill_probs("0.05".to_string())
+            .build()
+            .unwrap();
+
+        let skews: Vec<f64> = params.skews.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        assert_eq!(skews, vec![0.3, 0.5, 0.7, 1.0]);
+    }
+
+    #[test]
+    fn test_tune_params_parse_high_entropies() {
+        use crate::commands::params::backtest_params::TuneParamsBuilder;
+
+        let params = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1".to_string())
+            .skews("0.3".to_string())
+            .high_entropies("0.6,0.7,0.8".to_string())
+            .fill_probs("0.05".to_string())
+            .build()
+            .unwrap();
+
+        let high_entropies: Vec<f64> = params.high_entropies.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        assert_eq!(high_entropies, vec![0.6, 0.7, 0.8]);
+    }
+
+    #[test]
+    fn test_tune_params_parse_fill_probs() {
+        use crate::commands::params::backtest_params::TuneParamsBuilder;
+
+        let params = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1".to_string())
+            .skews("0.3".to_string())
+            .high_entropies("0.6".to_string())
+            .fill_probs("0.05,0.10,0.15".to_string())
+            .build()
+            .unwrap();
+
+        let fill_probs: Vec<f64> = params.fill_probs.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        assert_eq!(fill_probs, vec![0.05, 0.10, 0.15]);
+    }
+
+    #[test]
+    fn test_tune_params_calculate_total_combinations() {
+        use crate::commands::params::backtest_params::TuneParamsBuilder;
+
+        let params = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())  // 3 values
+            .skews("0.3,0.5".to_string())   // 2 values
+            .high_entropies("0.6,0.7".to_string())  // 2 values
+            .fill_probs("0.05,0.10".to_string())   // 2 values
+            .build()
+            .unwrap();
+
+        let spreads: Vec<f64> = params.spreads.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        let skews: Vec<f64> = params.skews.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        let high_entropies: Vec<f64> = params.high_entropies.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        let fill_probs: Vec<f64> = params.fill_probs.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+
+        let total = spreads.len() * skews.len() * high_entropies.len() * fill_probs.len();
+        assert_eq!(total, 3 * 2 * 2 * 2); // 24 combinations
+    }
+
+    // ============================================================================
+    // Edge Cases for Tune
+    // ============================================================================
+
+    #[test]
+    fn test_tune_result_item_zero_trades() {
+        let item = TuneResultItem {
+            spread: 2.0,
+            skew: 0.5,
+            high_entropy_threshold: 0.7,
+            fill_prob: 0.10,
+            sharpe: 0.0,
+            total_return: 0.0,
+            max_drawdown: 0.0,
+            num_trades: 0,
+            win_rate: 0.0,
+            avg_trade_pnl: 0.0,
+        };
+
+        assert_eq!(item.num_trades, 0);
+        assert_eq!(item.win_rate, 0.0);
+        assert_eq!(item.avg_trade_pnl, 0.0);
+    }
+
+    #[test]
+    fn test_tune_result_item_negative_sharpe() {
+        let item = TuneResultItem {
+            spread: 2.0,
+            skew: 0.5,
+            high_entropy_threshold: 0.7,
+            fill_prob: 0.10,
+            sharpe: -1.5,
+            total_return: -0.10,
+            max_drawdown: 0.15,
+            num_trades: 50,
+            win_rate: 0.30,
+            avg_trade_pnl: -0.002,
+        };
+
+        assert_eq!(item.sharpe, -1.5);
+        assert_eq!(item.total_return, -0.10);
+        assert!(item.win_rate < 0.5);
+    }
+
+    #[test]
+    fn test_tune_result_item_extreme_values() {
+        let item = TuneResultItem {
+            spread: 1000.0,
+            skew: 100.0,
+            high_entropy_threshold: 1.0,
+            fill_prob: 1.0,
+            sharpe: 10.0,
+            total_return: 5.0,
+            max_drawdown: 2.0,
+            num_trades: 1_000_000,
+            win_rate: 0.99,
+            avg_trade_pnl: 1000.0,
+        };
+
+        assert_eq!(item.spread, 1000.0);
+        assert_eq!(item.sharpe, 10.0);
+        assert_eq!(item.num_trades, 1_000_000);
+    }
+
+    #[test]
+    fn test_tune_result_multiple_items_sorting() {
+        let mut items = vec![
+            TuneResultItem {
+                spread: 1.0,
+                skew: 0.3,
+                high_entropy_threshold: 0.6,
+                fill_prob: 0.05,
+                sharpe: 0.5,
+                total_return: 0.02,
+                max_drawdown: 0.01,
+                num_trades: 50,
+                win_rate: 0.50,
+                avg_trade_pnl: 0.0004,
+            },
+            TuneResultItem {
+                spread: 2.0,
+                skew: 0.5,
+                high_entropy_threshold: 0.7,
+                fill_prob: 0.10,
+                sharpe: 1.5,
+                total_return: 0.05,
+                max_drawdown: 0.02,
+                num_trades: 100,
+                win_rate: 0.55,
+                avg_trade_pnl: 0.0005,
+            },
+            TuneResultItem {
+                spread: 3.0,
+                skew: 0.7,
+                high_entropy_threshold: 0.8,
+                fill_prob: 0.15,
+                sharpe: 1.0,
+                total_return: 0.03,
+                max_drawdown: 0.015,
+                num_trades: 75,
+                win_rate: 0.52,
+                avg_trade_pnl: 0.0004,
+            },
+        ];
+
+        items.sort_by(|a, b| b.sharpe.partial_cmp(&a.sharpe).unwrap_or(std::cmp::Ordering::Equal));
+
+        assert_eq!(items[0].sharpe, 1.5);
+        assert_eq!(items[1].sharpe, 1.0);
+        assert_eq!(items[2].sharpe, 0.5);
+    }
+
+    #[test]
+    fn test_tune_result_best_selection() {
+        let items = vec![
+            TuneResultItem {
+                spread: 1.0,
+                skew: 0.3,
+                high_entropy_threshold: 0.6,
+                fill_prob: 0.05,
+                sharpe: 0.5,
+                total_return: 0.02,
+                max_drawdown: 0.01,
+                num_trades: 50,
+                win_rate: 0.50,
+                avg_trade_pnl: 0.0004,
+            },
+            TuneResultItem {
+                spread: 2.0,
+                skew: 0.5,
+                high_entropy_threshold: 0.7,
+                fill_prob: 0.10,
+                sharpe: 1.5,
+                total_return: 0.05,
+                max_drawdown: 0.02,
+                num_trades: 100,
+                win_rate: 0.55,
+                avg_trade_pnl: 0.0005,
+            },
+        ];
+
+        let best = items.iter().max_by(|a, b| a.sharpe.partial_cmp(&b.sharpe).unwrap_or(std::cmp::Ordering::Equal));
+        assert!(best.is_some());
+        assert_eq!(best.unwrap().sharpe, 1.5);
+    }
+
+    // ============================================================================
+    // Thread Safety Tests for Tune
+    // ============================================================================
+
+    #[test]
+    fn test_tune_progress_callback_thread_safety() {
+        use std::thread;
+
+        let callback = Arc::new(TestCallback::new());
+        let mut handles = vec![];
+
+        // Spawn multiple threads sending progress events
+        for i in 0..10 {
+            let callback_clone = callback.clone();
+            let handle = thread::spawn(move || {
+                for j in 0..100 {
+                    callback_clone.on_event(ProgressEvent::Progress {
+                        current: i * 100 + j,
+                        total: Some(1000),
+                        message: format!("Thread {} combination {}", i, j),
+                    });
+                }
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all threads
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // Should have received all events (10 threads * 100 events = 1000)
+        assert_eq!(callback.event_count(), 1000);
+    }
+
+    // ============================================================================
+    // Integration-style Tests (without actual data)
+    // ============================================================================
+
+    #[test]
+    fn test_tune_params_to_result_flow() {
+        use crate::commands::params::backtest_params::TuneParamsBuilder;
+
+        // Test the flow from TuneParams to expected result structure
+        let params = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3,0.5".to_string())
+            .high_entropies("0.6,0.7".to_string())
+            .fill_probs("0.05,0.10".to_string())
+            .build()
+            .unwrap();
+
+        // Calculate expected combinations
+        let spreads: Vec<f64> = params.spreads.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        let skews: Vec<f64> = params.skews.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        let high_entropies: Vec<f64> = params.high_entropies.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        let fill_probs: Vec<f64> = params.fill_probs.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+
+        let expected_combinations = spreads.len() * skews.len() * high_entropies.len() * fill_probs.len();
+        assert_eq!(expected_combinations, 2 * 2 * 2 * 2); // 16 combinations
+    }
+
+    #[test]
+    fn test_tune_result_completeness() {
+        let result = TuneResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            all_results: vec![
+                TuneResultItem {
+                    spread: 2.0,
+                    skew: 0.5,
+                    high_entropy_threshold: 0.7,
+                    fill_prob: 0.10,
+                    sharpe: 1.5,
+                    total_return: 0.05,
+                    max_drawdown: 0.02,
+                    num_trades: 100,
+                    win_rate: 0.55,
+                    avg_trade_pnl: 0.001,
+                },
+            ],
+            best: Some(TuneResultItem {
+                spread: 2.0,
+                skew: 0.5,
+                high_entropy_threshold: 0.7,
+                fill_prob: 0.10,
+                sharpe: 1.5,
+                total_return: 0.05,
+                max_drawdown: 0.02,
+                num_trades: 100,
+                win_rate: 0.55,
+                avg_trade_pnl: 0.001,
+            }),
+            total_combinations: 1,
+        };
+
+        // Verify all fields are accessible
+        assert_eq!(result.algorithm, "as");
+        assert_eq!(result.algorithm_name, "Avellaneda-Stoikov");
+        assert_eq!(result.all_results.len(), 1);
+        assert!(result.best.is_some());
+        assert_eq!(result.total_combinations, 1);
+        assert_eq!(result.best.as_ref().unwrap().sharpe, 1.5);
     }
 }
 
