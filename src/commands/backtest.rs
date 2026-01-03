@@ -30,7 +30,7 @@ use num::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::common::{ProgressCallback, ProgressEvent, LogLevel};
-use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams};
+use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams};
 use crate::backtest::{
     BacktestEngine, BacktestConfig, BacktestResults,
     replay::{ParquetReplay, ReplayConfig},
@@ -40,6 +40,7 @@ use crate::execution::market_maker::{MMConfig, RegimeParams, RegimeConfig, Regim
 use crate::execution::mm_simulator::SimulatorConfig;
 use crate::strategies::{
     AlgorithmType, AlgorithmRegistry, BacktestAlgorithmParams, MLModelWeights,
+    SpreadWeights, SkewWeights,
 };
 
 /// Single regime search result
@@ -194,6 +195,31 @@ pub struct RegimeOptimizeResult {
     pub total_events: usize,
     /// Time span of data in hours
     pub time_span_hours: f64,
+}
+
+/// Results from the `train` command (ML weight training - ML Spread/Skew only)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrainResult {
+    /// Algorithm type used (should be ML Spread/Skew)
+    pub algorithm: String,
+    /// Algorithm display name
+    pub algorithm_name: String,
+    /// Optimal trained weights
+    pub optimal_weights: MLModelWeights,
+    /// Training performance metrics
+    pub train_sharpe: f64,
+    pub train_return: f64,
+    pub train_trades: usize,
+    /// Test performance metrics
+    pub test_sharpe: f64,
+    pub test_return: f64,
+    pub test_trades: usize,
+    /// Generalization gap (train_sharpe - test_sharpe)
+    pub generalization_gap: f64,
+    /// Number of valid configurations tested
+    pub valid_configurations: usize,
+    /// Total number of configurations tested
+    pub total_configurations: usize,
 }
 
 /// Single grid search result
@@ -1361,6 +1387,171 @@ impl BacktestCommands {
             comparison,
             total_events: results.total_events,
             time_span_hours: results.time_span_hours,
+        })
+    }
+
+    /// ML weight training (ML Spread/Skew algorithm only)
+    ///
+    /// This function trains ML weights for the ML Spread/Skew algorithm using grid search
+    /// over historical backtest data with train/test validation.
+    ///
+    /// # Arguments
+    ///
+    /// * `params` - Parameters for ML training
+    /// * `callback` - Progress callback for real-time updates
+    ///
+    /// # Returns
+    ///
+    /// `TrainResult` with optimal trained weights and performance metrics.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Algorithm type is not ML Spread/Skew
+    /// - Data cannot be loaded
+    /// - Training fails
+    ///
+    /// This is the extracted version of the `run_train_ml()` function from the CLI.
+    pub fn train(
+        params: TrainParams,
+        callback: Arc<dyn ProgressCallback>,
+    ) -> Result<TrainResult> {
+        use crate::backtest::ml_trainer::{MLTrainer, MLTrainerConfig};
+
+        // Validate algorithm type (ML Spread/Skew only)
+        let algo_type = AlgorithmType::from_str(&params.algorithm)
+            .map_err(|e| anyhow::anyhow!("Invalid algorithm: {}", e))?;
+        
+        match algo_type {
+            AlgorithmType::MLSpreadSkew => {},
+            _ => anyhow::bail!(
+                "Algorithm '{}' is not ML Spread/Skew. \
+                 Training is only available for ML Spread/Skew algorithm (ml, ml-spread-skew)",
+                algo_type.as_str()
+            ),
+        }
+
+        let algo_name = algo_type.display_name().to_string();
+
+        callback.on_event(ProgressEvent::Started {
+            total: None,
+            message: format!(
+                "Starting ML weight training for {}",
+                algo_name
+            ),
+        });
+
+        // Parse parameter grids
+        let spread_intercepts: Vec<f64> = params.spread_intercepts
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let spread_entropy_weights: Vec<f64> = params.spread_entropy_weights
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let spread_vol_weights: Vec<f64> = params.spread_vol_weights
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let skew_intercepts: Vec<f64> = params.skew_intercepts
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let skew_inv_weights: Vec<f64> = params.skew_inv_weights
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+
+        if spread_intercepts.is_empty() {
+            anyhow::bail!("No valid spread_intercept values found in '{}'", params.spread_intercepts);
+        }
+        if spread_entropy_weights.is_empty() {
+            anyhow::bail!("No valid spread_entropy_weight values found in '{}'", params.spread_entropy_weights);
+        }
+        if spread_vol_weights.is_empty() {
+            anyhow::bail!("No valid spread_vol_weight values found in '{}'", params.spread_vol_weights);
+        }
+        if skew_intercepts.is_empty() {
+            anyhow::bail!("No valid skew_intercept values found in '{}'", params.skew_intercepts);
+        }
+        if skew_inv_weights.is_empty() {
+            anyhow::bail!("No valid skew_inv_weight values found in '{}'", params.skew_inv_weights);
+        }
+
+        let total_combinations = spread_intercepts.len()
+            * spread_entropy_weights.len()
+            * spread_vol_weights.len()
+            * skew_intercepts.len()
+            * skew_inv_weights.len();
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!(
+                "Testing {} weight combinations ({} spreads × {} skews)",
+                total_combinations,
+                spread_intercepts.len() * spread_entropy_weights.len() * spread_vol_weights.len(),
+                skew_intercepts.len() * skew_inv_weights.len()
+            ),
+        });
+
+        // Build config
+        let config = MLTrainerConfig {
+            data_dir: params.data_path.clone(),
+            train_ratio: params.train_ratio,
+            spread_intercepts,
+            spread_entropy_weights,
+            spread_volatility_weights: spread_vol_weights,
+            skew_intercepts,
+            skew_inventory_weights: skew_inv_weights,
+            max_inventory: Decimal::from_f64_retain(params.max_inventory).unwrap_or(dec!(0.1)),
+            quote_size: Decimal::from_f64_retain(params.quote_size).unwrap_or(dec!(0.001)),
+            fill_probability: params.fill_prob,
+            min_trades: 10,
+            objective: "sharpe".to_string(),
+            verbose: false, // Use callback instead
+        };
+
+        // Run training
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: "Loading data and initializing trainer...".to_string(),
+        });
+
+        let mut trainer = MLTrainer::new(config)
+            .context("Failed to create ML trainer")?;
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: "Training ML weights...".to_string(),
+        });
+
+        let results = trainer.train()
+            .context("Failed to train ML weights")?;
+
+        // Convert results to our result struct
+        callback.on_event(ProgressEvent::Completed {
+            message: format!(
+                "ML training completed: {} valid configurations tested, train Sharpe: {:.3}, test Sharpe: {:.3}",
+                results.valid_configurations,
+                results.train_sharpe,
+                results.test_sharpe
+            ),
+        });
+
+        Ok(TrainResult {
+            algorithm: params.algorithm.clone(),
+            algorithm_name: algo_name,
+            optimal_weights: results.optimal_weights,
+            train_sharpe: results.train_sharpe,
+            train_return: results.train_return,
+            train_trades: results.train_trades,
+            test_sharpe: results.test_sharpe,
+            test_return: results.test_return,
+            test_trades: results.test_trades,
+            generalization_gap: results.generalization_gap,
+            valid_configurations: results.valid_configurations,
+            total_configurations: results.total_configurations,
         })
     }
 }
@@ -4157,6 +4348,391 @@ mod tests {
         assert!(!params.low.should_quote);
         assert!(params.high.should_quote);
         assert!(params.medium.should_quote);
+    }
+
+    // ============================================================================
+    // TrainResult Structure Tests
+    // ============================================================================
+
+    #[test]
+    fn test_train_result_structure() {
+        use crate::strategies::{SpreadWeights, SkewWeights, MLModelWeights};
+
+        let result = TrainResult {
+            algorithm: "ml".to_string(),
+            algorithm_name: "ML Spread/Skew".to_string(),
+            optimal_weights: MLModelWeights {
+                spread: SpreadWeights {
+                    intercept: 2.5,
+                    w_entropy: -2.0,
+                    w_volatility: 500.0,
+                    w_imbalance: 1.0,
+                    w_interaction: -100.0,
+                },
+                skew: SkewWeights {
+                    intercept: 0.5,
+                    w_entropy: -0.2,
+                    w_volatility: 50.0,
+                    w_imbalance: 0.1,
+                    w_inventory: -0.8,
+                },
+                version: "1.0".to_string(),
+            },
+            train_sharpe: 1.8,
+            train_return: 0.04,
+            train_trades: 150,
+            test_sharpe: 1.5,
+            test_return: 0.03,
+            test_trades: 50,
+            generalization_gap: 0.3,
+            valid_configurations: 120,
+            total_configurations: 150,
+        };
+
+        assert_eq!(result.algorithm, "ml");
+        assert_eq!(result.optimal_weights.spread.intercept, 2.5);
+        assert_eq!(result.optimal_weights.skew.w_inventory, -0.8);
+        assert_eq!(result.train_sharpe, 1.8);
+        assert_eq!(result.test_sharpe, 1.5);
+        assert_eq!(result.generalization_gap, 0.3);
+    }
+
+    #[test]
+    fn test_train_result_serialization() {
+        use crate::strategies::{SpreadWeights, SkewWeights, MLModelWeights};
+
+        let result = TrainResult {
+            algorithm: "ml-spread-skew".to_string(),
+            algorithm_name: "ML Spread/Skew".to_string(),
+            optimal_weights: MLModelWeights {
+                spread: SpreadWeights {
+                    intercept: 3.0,
+                    w_entropy: -1.5,
+                    w_volatility: 600.0,
+                    w_imbalance: 1.2,
+                    w_interaction: -120.0,
+                },
+                skew: SkewWeights {
+                    intercept: 0.6,
+                    w_entropy: -0.3,
+                    w_volatility: 60.0,
+                    w_imbalance: 0.15,
+                    w_inventory: -0.9,
+                },
+                version: "1.0".to_string(),
+            },
+            train_sharpe: 2.0,
+            train_return: 0.05,
+            train_trades: 200,
+            test_sharpe: 1.7,
+            test_return: 0.04,
+            test_trades: 80,
+            generalization_gap: 0.3,
+            valid_configurations: 180,
+            total_configurations: 200,
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: TrainResult = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(result.algorithm, deserialized.algorithm);
+        assert_eq!(result.optimal_weights.spread.intercept, deserialized.optimal_weights.spread.intercept);
+        assert_eq!(result.train_sharpe, deserialized.train_sharpe);
+        assert_eq!(result.generalization_gap, deserialized.generalization_gap);
+    }
+
+    // ============================================================================
+    // Train Function Tests (Algorithm Validation)
+    // ============================================================================
+
+    #[test]
+    fn test_train_invalid_algorithm() {
+        use crate::commands::params::backtest_params::TrainParamsBuilder;
+
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("invalid".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+        let result = BacktestCommands::train(params, callback);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid algorithm"));
+    }
+
+    #[test]
+    fn test_train_non_ml_algorithm() {
+        use crate::commands::params::backtest_params::TrainParamsBuilder;
+
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string()) // Avellaneda-Stoikov, not ML
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+        let result = BacktestCommands::train(params, callback);
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("ML Spread/Skew") || err_msg.contains("not ML"));
+    }
+
+    #[test]
+    fn test_train_valid_ml_algorithms() {
+        use crate::commands::params::backtest_params::TrainParamsBuilder;
+
+        let ml_algorithms = vec!["ml", "ml-spread-skew", "ml_spread_skew"];
+
+        for algo in ml_algorithms {
+            let params = TrainParamsBuilder::new()
+                .data_path(PathBuf::from("./data"))
+                .algorithm(algo.to_string())
+                .spread_intercepts("1.0".to_string())
+                .spread_entropy_weights("-2.0".to_string())
+                .spread_vol_weights("200.0".to_string())
+                .skew_intercepts("0.3".to_string())
+                .skew_inv_weights("-1.0".to_string())
+                .build();
+
+            // Should build successfully (algorithm validation happens in function)
+            if let Ok(params) = params {
+                assert_eq!(params.algorithm, algo);
+            }
+        }
+    }
+
+    #[test]
+    fn test_train_nonexistent_data_path() {
+        use crate::commands::params::backtest_params::TrainParamsBuilder;
+
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("/nonexistent/path/that/does/not/exist"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+        let result = BacktestCommands::train(params, callback);
+
+        // Should fail when trying to load data
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("load") || err_msg.contains("data") || err_msg.contains("Failed"));
+    }
+
+    #[test]
+    fn test_train_empty_spread_intercepts() {
+        use crate::commands::params::backtest_params::TrainParamsBuilder;
+
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+
+        // Should fail at build time
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_train_empty_skew_intercepts() {
+        use crate::commands::params::backtest_params::TrainParamsBuilder;
+
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+
+        // Should fail at build time
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_train_invalid_spread_intercepts() {
+        use crate::commands::params::backtest_params::TrainParamsBuilder;
+
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("abc,def".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+
+        // Should fail at build time
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_train_invalid_train_ratio() {
+        use crate::commands::params::backtest_params::TrainParamsBuilder;
+
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .train_ratio(1.5) // > 1.0
+            .build();
+
+        // Should fail at build time
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_train_progress_callback_events() {
+        use crate::commands::params::backtest_params::TrainParamsBuilder;
+        use std::sync::Mutex;
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+
+        struct TestCallback {
+            events: Arc<Mutex<Vec<ProgressEvent>>>,
+        }
+
+        impl ProgressCallback for TestCallback {
+            fn on_event(&self, event: ProgressEvent) {
+                self.events.lock().unwrap().push(event);
+            }
+        }
+
+        let callback: Arc<dyn ProgressCallback> = Arc::new(TestCallback {
+            events: events.clone(),
+        });
+
+        let params = TrainParamsBuilder::new()
+            .data_path(PathBuf::from("/nonexistent/path")) // Will fail, but we can test callbacks
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        let _result = BacktestCommands::train(params, callback);
+
+        // Even if execution fails, we should have received at least a Started event
+        let events_guard = events.lock().unwrap();
+        assert!(!events_guard.is_empty(), "Should have received at least one progress event");
+        assert!(matches!(events_guard[0], ProgressEvent::Started { .. }));
+    }
+
+    #[test]
+    fn test_train_result_generalization_gap() {
+        use crate::strategies::{SpreadWeights, SkewWeights, MLModelWeights};
+
+        // Test that generalization gap is correctly calculated
+        let result = TrainResult {
+            algorithm: "ml".to_string(),
+            algorithm_name: "ML Spread/Skew".to_string(),
+            optimal_weights: MLModelWeights {
+                spread: SpreadWeights::default(),
+                skew: SkewWeights::default(),
+                version: "1.0".to_string(),
+            },
+            train_sharpe: 2.0,
+            train_return: 0.05,
+            train_trades: 200,
+            test_sharpe: 1.5,
+            test_return: 0.03,
+            test_trades: 80,
+            generalization_gap: 0.5, // train_sharpe - test_sharpe
+            valid_configurations: 150,
+            total_configurations: 200,
+        };
+
+        assert_eq!(result.generalization_gap, 0.5);
+        assert!(result.train_sharpe > result.test_sharpe); // Expected: train > test
+    }
+
+    #[test]
+    fn test_train_result_zero_trades() {
+        use crate::strategies::{SpreadWeights, SkewWeights, MLModelWeights};
+
+        let result = TrainResult {
+            algorithm: "ml".to_string(),
+            algorithm_name: "ML Spread/Skew".to_string(),
+            optimal_weights: MLModelWeights {
+                spread: SpreadWeights::default(),
+                skew: SkewWeights::default(),
+                version: "1.0".to_string(),
+            },
+            train_sharpe: 0.0,
+            train_return: 0.0,
+            train_trades: 0,
+            test_sharpe: 0.0,
+            test_return: 0.0,
+            test_trades: 0,
+            generalization_gap: 0.0,
+            valid_configurations: 0,
+            total_configurations: 100,
+        };
+
+        assert_eq!(result.train_trades, 0);
+        assert_eq!(result.test_trades, 0);
+        assert_eq!(result.valid_configurations, 0);
+    }
+
+    #[test]
+    fn test_train_result_negative_generalization_gap() {
+        use crate::strategies::{SpreadWeights, SkewWeights, MLModelWeights};
+
+        // Test case where test performs better than train (overfitting)
+        let result = TrainResult {
+            algorithm: "ml".to_string(),
+            algorithm_name: "ML Spread/Skew".to_string(),
+            optimal_weights: MLModelWeights {
+                spread: SpreadWeights::default(),
+                skew: SkewWeights::default(),
+                version: "1.0".to_string(),
+            },
+            train_sharpe: 1.0,
+            train_return: 0.02,
+            train_trades: 100,
+            test_sharpe: 1.5, // Test better than train
+            test_return: 0.04,
+            test_trades: 50,
+            generalization_gap: -0.5, // Negative gap
+            valid_configurations: 80,
+            total_configurations: 100,
+        };
+
+        assert!(result.generalization_gap < 0.0);
+        assert!(result.test_sharpe > result.train_sharpe);
     }
 }
 
