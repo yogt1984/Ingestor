@@ -61,6 +61,12 @@ use ingestor::strategies::{
     AlgorithmType, MLModelWeights,
     AlgorithmRegistry, BacktestAlgorithmParams,
 };
+use ingestor::commands::{
+    BacktestCommands,
+    params::backtest_params::EvaluateParamsBuilder,
+};
+use ingestor::commands::common::{NoOpCallback, ProgressCallback};
+use std::sync::Arc;
 
 #[derive(Parser)]
 #[command(name = "backtest")]
@@ -792,55 +798,54 @@ fn run_single(cli: &Cli) -> Result<()> {
     use ingestor::backtest::replay::ParquetReplay;
     use ingestor::backtest::harness::BacktestEngine;
 
+    // Build EvaluateParams from CLI
+    let eval_params = EvaluateParamsBuilder::new()
+        .data_path(cli.data.clone())
+        .algorithm(cli.algorithm.clone())
+        .weights_file(cli.weights_file.clone())
+        .spread(cli.spread)
+        .skew(cli.skew)
+        .max_inventory(cli.max_inventory)
+        .quote_size(cli.quote_size)
+        .fee_rate(cli.fee_rate)
+        .naive_fills(cli.naive_fills)
+        .fill_prob(cli.fill_prob)
+        .queue_pos(cli.queue_pos)
+        .high_entropy(cli.high_entropy)
+        .low_entropy(cli.low_entropy)
+        .regime_params(cli.regime_params)
+        .high_spread(cli.high_spread)
+        .med_spread(cli.med_spread)
+        .low_spread(cli.low_spread)
+        .high_skew(cli.high_skew)
+        .med_skew(cli.med_skew)
+        .low_skew(cli.low_skew)
+        .quote_low_entropy(cli.quote_low_entropy)
+        .output(cli.output.clone())
+        .json(cli.json)
+        .quiet(cli.quiet)
+        .stats(cli.stats)
+        .build()?;
+
     // Parse algorithm type early to fail fast on invalid algorithm
     let (algo_type, algo_name) = parse_algorithm_type(&cli.algorithm)?;
     let ml_weights = load_ml_weights_if_needed(algo_type, cli.weights_file.as_deref())?;
 
+    // Run the backtest using extracted command
+    let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+    let (results, eval_result) = BacktestCommands::evaluate(eval_params.clone(), callback)?;
+
     // JSON mode: minimal output, just the results
     if cli.json {
-        let replay_config = ReplayConfig {
-            data_dir: cli.data.clone(),
-            ..Default::default()
-        };
-
-        let mut replay = ParquetReplay::new(replay_config.clone());
-        replay.load()?;
-        let events = replay.into_events();
-
-        let params = create_algorithm_params(cli, ml_weights.clone());
-        let algorithm = AlgorithmRegistry::create_for_backtest(algo_type, &params)
-            .map_err(|e| anyhow::anyhow!("Failed to create algorithm '{}': {}", algo_name, e))?;
-
-        let backtest_config = BacktestConfig {
-            replay: replay_config,
-            mm: MMConfig::default(),
-            simulator: SimulatorConfig {
-                fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
-                ..Default::default()
-            },
-            fill_sim: ingestor::backtest::FillSimulatorConfig {
-                base_fill_probability: cli.fill_prob,
-                queue_position: cli.queue_pos,
-                fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
-                ..Default::default()
-            },
-            verbose: false,
-            use_realistic_fills: !cli.naive_fills,
-            ..Default::default()
-        };
-
-        let mut engine = BacktestEngine::from_events_with_algorithm(backtest_config, events, algorithm);
-        let results = engine.run()?;
-
-        // Output JSON for Optuna/scripting
+        // Output JSON for Optuna/scripting (preserve original format)
         let json_output = serde_json::json!({
             "algorithm": algo_type.as_str(),
-            "sharpe": results.metrics.sharpe_ratio,
-            "total_return": results.metrics.total_return,
-            "max_drawdown": results.metrics.max_drawdown,
-            "num_trades": results.metrics.num_trades,
-            "win_rate": results.metrics.win_rate,
-            "avg_trade_pnl": results.metrics.avg_trade_pnl,
+            "sharpe": eval_result.metrics.sharpe_ratio,
+            "total_return": eval_result.metrics.total_return,
+            "max_drawdown": eval_result.metrics.max_drawdown,
+            "num_trades": eval_result.metrics.num_trades,
+            "win_rate": eval_result.metrics.win_rate,
+            "avg_trade_pnl": eval_result.metrics.avg_trade_pnl,
             "params": {
                 "spread": cli.spread,
                 "skew": cli.skew,
@@ -852,6 +857,7 @@ fn run_single(cli: &Cli) -> Result<()> {
         return Ok(());
     }
 
+    // Normal mode: display configuration and results
     println!("═══════════════════════════════════════════════════════");
     println!("           INGESTOR BACKTEST ENGINE                     ");
     println!("═══════════════════════════════════════════════════════");
@@ -888,46 +894,7 @@ fn run_single(cli: &Cli) -> Result<()> {
     }
     println!();
 
-    // Load data
-    let replay_config = ReplayConfig {
-        data_dir: cli.data.clone(),
-        ..Default::default()
-    };
-
-    println!("Loading data...");
-    let mut replay = ParquetReplay::new(replay_config.clone());
-    let num_events = replay.load()?;
-    let events = replay.into_events();
-    println!("Loaded {} events", num_events);
-    println!();
-
-    // Create algorithm using registry
-    let params = create_algorithm_params(cli, ml_weights);
-    let algorithm = AlgorithmRegistry::create_for_backtest(algo_type, &params)
-        .map_err(|e| anyhow::anyhow!("Failed to create algorithm '{}': {}", algo_name, e))?;
-
-    // Build backtest config
-    let backtest_config = BacktestConfig {
-        replay: replay_config,
-        mm: MMConfig::default(),
-        simulator: SimulatorConfig {
-            fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
-            ..Default::default()
-        },
-        fill_sim: ingestor::backtest::FillSimulatorConfig {
-            base_fill_probability: cli.fill_prob,
-            queue_position: cli.queue_pos,
-            fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
-            ..Default::default()
-        },
-        verbose: !cli.quiet,
-        use_realistic_fills: !cli.naive_fills,
-        ..Default::default()
-    };
-
-    let mut engine = BacktestEngine::from_events_with_algorithm(backtest_config, events, algorithm);
-    let results = engine.run()?;
-
+    // Print results using the full BacktestResults
     if cli.stats {
         results.print_summary_with_stats(1); // Single trial for individual backtest
     } else {
