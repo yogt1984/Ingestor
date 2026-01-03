@@ -342,6 +342,10 @@ impl Default for EvaluateParamsBuilder {
 mod tests {
     use super::*;
 
+    // ============================================================================
+    // Builder Defaults Tests
+    // ============================================================================
+
     #[test]
     fn test_evaluate_params_builder_defaults() {
         let params = EvaluateParamsBuilder::new()
@@ -367,12 +371,64 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_params_builder_validation() {
-        // Missing required field
+    fn test_evaluate_params_builder_default_impl() {
+        let builder1 = EvaluateParamsBuilder::new();
+        let builder2 = EvaluateParamsBuilder::default();
+        // Both should create equivalent builders
+        assert!(builder1.data_path.is_none());
+        assert!(builder2.data_path.is_none());
+    }
+
+    // ============================================================================
+    // Required Fields Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_evaluate_params_missing_data_path() {
+        let result = EvaluateParamsBuilder::new()
+            .algorithm("as".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("data_path"));
+    }
+
+    #[test]
+    fn test_evaluate_params_missing_algorithm() {
+        let result = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("algorithm"));
+    }
+
+    #[test]
+    fn test_evaluate_params_missing_both_required() {
         let result = EvaluateParamsBuilder::new().build();
         assert!(result.is_err());
+    }
 
-        // Invalid fill_prob
+    // ============================================================================
+    // Range Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_evaluate_params_fill_prob_validation() {
+        // Valid boundary values
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .fill_prob(0.0)
+            .build();
+        assert!(params.is_ok());
+
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .fill_prob(1.0)
+            .build();
+        assert!(params.is_ok());
+
+        // Invalid: above 1.0
         let result = EvaluateParamsBuilder::new()
             .data_path(PathBuf::from("./data"))
             .algorithm("as".to_string())
@@ -380,7 +436,41 @@ mod tests {
             .build();
         assert!(result.is_err());
 
-        // Invalid queue_pos
+        // Invalid: below 0.0
+        let result = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .fill_prob(-0.1)
+            .build();
+        assert!(result.is_err());
+
+        // Valid: middle value
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .fill_prob(0.5)
+            .build();
+        assert!(params.is_ok());
+    }
+
+    #[test]
+    fn test_evaluate_params_queue_pos_validation() {
+        // Valid boundary values
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .queue_pos(0.0)
+            .build();
+        assert!(params.is_ok());
+
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .queue_pos(1.0)
+            .build();
+        assert!(params.is_ok());
+
+        // Invalid: above 1.0
         let result = EvaluateParamsBuilder::new()
             .data_path(PathBuf::from("./data"))
             .algorithm("as".to_string())
@@ -388,7 +478,34 @@ mod tests {
             .build();
         assert!(result.is_err());
 
-        // Invalid fee_rate
+        // Invalid: below 0.0
+        let result = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .queue_pos(-0.1)
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_evaluate_params_fee_rate_validation() {
+        // Valid: zero
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .fee_rate(0.0)
+            .build();
+        assert!(params.is_ok());
+
+        // Valid: positive
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .fee_rate(0.001)
+            .build();
+        assert!(params.is_ok());
+
+        // Invalid: negative
         let result = EvaluateParamsBuilder::new()
             .data_path(PathBuf::from("./data"))
             .algorithm("as".to_string())
@@ -396,6 +513,37 @@ mod tests {
             .build();
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_evaluate_params_spread_validation() {
+        // Valid: zero
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spread(0.0)
+            .build();
+        assert!(params.is_ok());
+
+        // Valid: positive
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spread(10.0)
+            .build();
+        assert!(params.is_ok());
+
+        // Invalid: negative (spread must be >= 0.0)
+        let result = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spread(-1.0)
+            .build();
+        assert!(result.is_err());
+    }
+
+    // ============================================================================
+    // Parameter Setting Tests
+    // ============================================================================
 
     #[test]
     fn test_evaluate_params_builder_custom_values() {
@@ -449,6 +597,904 @@ mod tests {
         assert!(params.json);
         assert!(params.quiet);
         assert!(params.stats);
+    }
+
+    #[test]
+    fn test_evaluate_params_builder_method_chaining() {
+        // Test that all builder methods can be chained
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .weights_file(Some(PathBuf::from("./weights.json")))
+            .spread(1.0)
+            .skew(0.5)
+            .max_inventory(0.1)
+            .quote_size(0.001)
+            .fee_rate(0.0001)
+            .naive_fills(false)
+            .fill_prob(0.1)
+            .queue_pos(0.5)
+            .high_entropy(0.7)
+            .low_entropy(0.4)
+            .regime_params(false)
+            .high_spread(1.0)
+            .med_spread(2.5)
+            .low_spread(5.0)
+            .high_skew(0.3)
+            .med_skew(0.5)
+            .low_skew(1.0)
+            .quote_low_entropy(false)
+            .output(Some(PathBuf::from("./output.json")))
+            .json(false)
+            .quiet(false)
+            .stats(false)
+            .build()
+            .unwrap();
+
+        assert_eq!(params.weights_file, Some(PathBuf::from("./weights.json")));
+        assert_eq!(params.output, Some(PathBuf::from("./output.json")));
+    }
+
+    #[test]
+    fn test_evaluate_params_builder_partial_setting() {
+        // Test setting only some parameters, others should use defaults
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spread(5.0)
+            .skew(0.7)
+            .build()
+            .unwrap();
+
+        assert_eq!(params.spread, 5.0);
+        assert_eq!(params.skew, 0.7);
+        // Other values should be defaults
+        assert_eq!(params.max_inventory, 0.1);
+        assert_eq!(params.quote_size, 0.001);
+        assert_eq!(params.fee_rate, 0.0001);
+        assert!(!params.naive_fills);
+    }
+
+    #[test]
+    fn test_evaluate_params_builder_optional_fields() {
+        // Test that optional fields can be None
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .weights_file(None)
+            .output(None)
+            .build()
+            .unwrap();
+
+        assert_eq!(params.weights_file, None);
+        assert_eq!(params.output, None);
+    }
+
+    // ============================================================================
+    // Edge Cases Tests
+    // ============================================================================
+
+    #[test]
+    fn test_evaluate_params_extreme_spread_values() {
+        // Very small spread
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spread(0.01)
+            .build();
+        assert!(params.is_ok());
+
+        // Very large spread
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spread(1000.0)
+            .build();
+        assert!(params.is_ok());
+    }
+
+    #[test]
+    fn test_evaluate_params_extreme_skew_values() {
+        // Very small skew
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .skew(0.01)
+            .build();
+        assert!(params.is_ok());
+
+        // Very large skew
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .skew(10.0)
+            .build();
+        assert!(params.is_ok());
+    }
+
+    #[test]
+    fn test_evaluate_params_extreme_inventory_values() {
+        // Very small inventory
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .max_inventory(0.0001)
+            .build();
+        assert!(params.is_ok());
+
+        // Very large inventory
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .max_inventory(10.0)
+            .build();
+        assert!(params.is_ok());
+    }
+
+    #[test]
+    fn test_evaluate_params_boundary_fill_prob() {
+        // Exactly 0.0
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .fill_prob(0.0)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.as_ref().unwrap().fill_prob, 0.0);
+
+        // Exactly 1.0
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .fill_prob(1.0)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().fill_prob, 1.0);
+    }
+
+    #[test]
+    fn test_evaluate_params_boundary_queue_pos() {
+        // Exactly 0.0 (front of queue)
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .queue_pos(0.0)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.as_ref().unwrap().queue_pos, 0.0);
+
+        // Exactly 1.0 (back of queue)
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .queue_pos(1.0)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().queue_pos, 1.0);
+    }
+
+    // ============================================================================
+    // Boolean Flags Tests
+    // ============================================================================
+
+    #[test]
+    fn test_evaluate_params_boolean_flags() {
+        // All false
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .naive_fills(false)
+            .regime_params(false)
+            .quote_low_entropy(false)
+            .json(false)
+            .quiet(false)
+            .stats(false)
+            .build()
+            .unwrap();
+
+        assert!(!params.naive_fills);
+        assert!(!params.regime_params);
+        assert!(!params.quote_low_entropy);
+        assert!(!params.json);
+        assert!(!params.quiet);
+        assert!(!params.stats);
+
+        // All true
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .naive_fills(true)
+            .regime_params(true)
+            .quote_low_entropy(true)
+            .json(true)
+            .quiet(true)
+            .stats(true)
+            .build()
+            .unwrap();
+
+        assert!(params.naive_fills);
+        assert!(params.regime_params);
+        assert!(params.quote_low_entropy);
+        assert!(params.json);
+        assert!(params.quiet);
+        assert!(params.stats);
+    }
+
+    // ============================================================================
+    // Regime Parameters Tests
+    // ============================================================================
+
+    #[test]
+    fn test_evaluate_params_regime_spreads() {
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .regime_params(true)
+            .high_spread(1.0)
+            .med_spread(2.0)
+            .low_spread(3.0)
+            .build()
+            .unwrap();
+
+        assert_eq!(params.high_spread, 1.0);
+        assert_eq!(params.med_spread, 2.0);
+        assert_eq!(params.low_spread, 3.0);
+    }
+
+    #[test]
+    fn test_evaluate_params_regime_skews() {
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .regime_params(true)
+            .high_skew(0.2)
+            .med_skew(0.5)
+            .low_skew(0.8)
+            .build()
+            .unwrap();
+
+        assert_eq!(params.high_skew, 0.2);
+        assert_eq!(params.med_skew, 0.5);
+        assert_eq!(params.low_skew, 0.8);
+    }
+
+    // ============================================================================
+    // Serialization Tests
+    // ============================================================================
+
+    #[test]
+    fn test_evaluate_params_serialization() {
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spread(2.5)
+            .skew(0.6)
+            .build()
+            .unwrap();
+
+        // Test JSON serialization
+        let json = serde_json::to_string(&params).unwrap();
+        assert!(json.contains("\"spread\":2.5"));
+        assert!(json.contains("\"skew\":0.6"));
+        assert!(json.contains("\"algorithm\":\"as\""));
+
+        // Test deserialization
+        let deserialized: EvaluateParams = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.spread, params.spread);
+        assert_eq!(deserialized.skew, params.skew);
+        assert_eq!(deserialized.algorithm, params.algorithm);
+    }
+
+    #[test]
+    fn test_evaluate_params_serialization_with_optionals() {
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .weights_file(Some(PathBuf::from("./weights.json")))
+            .output(Some(PathBuf::from("./output.json")))
+            .build()
+            .unwrap();
+
+        let json = serde_json::to_string(&params).unwrap();
+        let deserialized: EvaluateParams = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.weights_file, params.weights_file);
+        assert_eq!(deserialized.output, params.output);
+    }
+
+    // ============================================================================
+    // Path Handling Tests
+    // ============================================================================
+
+    #[test]
+    fn test_evaluate_params_path_handling() {
+        // Absolute path
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("/absolute/path/to/data"))
+            .algorithm("as".to_string())
+            .build()
+            .unwrap();
+        assert!(params.data_path.is_absolute());
+
+        // Relative path
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./relative/path"))
+            .algorithm("as".to_string())
+            .build()
+            .unwrap();
+        assert!(!params.data_path.is_absolute() || params.data_path.starts_with("."));
+    }
+
+    #[test]
+    fn test_evaluate_params_weights_file_path() {
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .weights_file(Some(PathBuf::from("./weights.json")))
+            .build()
+            .unwrap();
+
+        assert_eq!(params.weights_file, Some(PathBuf::from("./weights.json")));
+    }
+
+    #[test]
+    fn test_evaluate_params_output_file_path() {
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .output(Some(PathBuf::from("./results.json")))
+            .build()
+            .unwrap();
+
+        assert_eq!(params.output, Some(PathBuf::from("./results.json")));
+    }
+
+    // ============================================================================
+    // Algorithm String Tests
+    // ============================================================================
+
+    #[test]
+    fn test_evaluate_params_different_algorithms() {
+        let algorithms = vec!["as", "ml", "fixed", "momentum"];
+        for algo in algorithms {
+            let params = EvaluateParamsBuilder::new()
+                .data_path(PathBuf::from("./data"))
+                .algorithm(algo.to_string())
+                .build()
+                .unwrap();
+            assert_eq!(params.algorithm, algo);
+        }
+    }
+
+    #[test]
+    fn test_evaluate_params_empty_algorithm_string() {
+        // Empty string is technically valid (validation happens at command level)
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("".to_string())
+            .build()
+            .unwrap();
+        assert_eq!(params.algorithm, "");
+    }
+
+    // ============================================================================
+    // Multiple Build Tests
+    // ============================================================================
+
+
+    // ============================================================================
+    // Numeric Precision and Edge Cases
+    // ============================================================================
+
+    #[test]
+    fn test_evaluate_params_very_small_values() {
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spread(0.0001)
+            .skew(0.0001)
+            .max_inventory(0.0001)
+            .quote_size(0.0001)
+            .fee_rate(0.000001)
+            .fill_prob(0.0001)
+            .queue_pos(0.0001)
+            .build()
+            .unwrap();
+
+        assert_eq!(params.spread, 0.0001);
+        assert_eq!(params.skew, 0.0001);
+        assert_eq!(params.max_inventory, 0.0001);
+    }
+
+    #[test]
+    fn test_evaluate_params_very_large_values() {
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spread(1000.0)
+            .skew(100.0)
+            .max_inventory(10.0)
+            .quote_size(1.0)
+            .fee_rate(0.1)
+            .build()
+            .unwrap();
+
+        assert_eq!(params.spread, 1000.0);
+        assert_eq!(params.skew, 100.0);
+        assert_eq!(params.max_inventory, 10.0);
+    }
+
+    #[test]
+    fn test_evaluate_params_entropy_thresholds_order() {
+        // High entropy should be >= low entropy for logical consistency
+        // (Note: builder doesn't enforce this, but we test the values are stored)
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .high_entropy(0.8)
+            .low_entropy(0.3)
+            .build()
+            .unwrap();
+
+        assert!(params.high_entropy > params.low_entropy);
+    }
+
+    #[test]
+    fn test_evaluate_params_regime_spread_order() {
+        // Typically: high_spread < med_spread < low_spread
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .regime_params(true)
+            .high_spread(1.0)
+            .med_spread(2.5)
+            .low_spread(5.0)
+            .build()
+            .unwrap();
+
+        assert!(params.high_spread < params.med_spread);
+        assert!(params.med_spread < params.low_spread);
+    }
+
+    #[test]
+    fn test_evaluate_params_regime_skew_order() {
+        // Typically: high_skew < med_skew < low_skew
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .regime_params(true)
+            .high_skew(0.3)
+            .med_skew(0.5)
+            .low_skew(1.0)
+            .build()
+            .unwrap();
+
+        assert!(params.high_skew < params.med_skew);
+        assert!(params.med_skew < params.low_skew);
+    }
+
+    // ============================================================================
+    // Flag Combinations Tests
+    // ============================================================================
+
+    #[test]
+    fn test_evaluate_params_all_flags_enabled() {
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .naive_fills(true)
+            .regime_params(true)
+            .quote_low_entropy(true)
+            .json(true)
+            .quiet(true)
+            .stats(true)
+            .build()
+            .unwrap();
+
+        assert!(params.naive_fills);
+        assert!(params.regime_params);
+        assert!(params.quote_low_entropy);
+        assert!(params.json);
+        assert!(params.quiet);
+        assert!(params.stats);
+    }
+
+    #[test]
+    fn test_evaluate_params_all_flags_disabled() {
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .naive_fills(false)
+            .regime_params(false)
+            .quote_low_entropy(false)
+            .json(false)
+            .quiet(false)
+            .stats(false)
+            .build()
+            .unwrap();
+
+        assert!(!params.naive_fills);
+        assert!(!params.regime_params);
+        assert!(!params.quote_low_entropy);
+        assert!(!params.json);
+        assert!(!params.quiet);
+        assert!(!params.stats);
+    }
+
+    #[test]
+    fn test_evaluate_params_naive_fills_with_fill_prob() {
+        // When naive_fills is true, fill_prob and queue_pos are still stored
+        // but may not be used by the backtest engine
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .naive_fills(true)
+            .fill_prob(0.5)
+            .queue_pos(0.3)
+            .build()
+            .unwrap();
+
+        assert!(params.naive_fills);
+        assert_eq!(params.fill_prob, 0.5);
+        assert_eq!(params.queue_pos, 0.3);
+    }
+
+    // ============================================================================
+    // Path Handling Tests
+    // ============================================================================
+
+    #[test]
+    fn test_evaluate_params_relative_paths() {
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .weights_file(Some(PathBuf::from("./weights.json")))
+            .output(Some(PathBuf::from("./results.json")))
+            .build()
+            .unwrap();
+
+        assert_eq!(params.data_path, PathBuf::from("./data/features"));
+        assert_eq!(params.weights_file, Some(PathBuf::from("./weights.json")));
+        assert_eq!(params.output, Some(PathBuf::from("./results.json")));
+    }
+
+    #[test]
+    fn test_evaluate_params_absolute_paths() {
+        #[cfg(unix)]
+        let abs_path = PathBuf::from("/tmp/test_data");
+        #[cfg(windows)]
+        let abs_path = PathBuf::from("C:\\tmp\\test_data");
+
+        let params = EvaluateParamsBuilder::new()
+            .data_path(abs_path.clone())
+            .algorithm("as".to_string())
+            .build()
+            .unwrap();
+
+        assert_eq!(params.data_path, abs_path);
+    }
+
+    #[test]
+    fn test_evaluate_params_path_with_spaces() {
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data with spaces"))
+            .algorithm("as".to_string())
+            .build()
+            .unwrap();
+
+        assert!(params.data_path.to_string_lossy().contains("spaces"));
+    }
+
+    #[test]
+    fn test_evaluate_params_empty_paths() {
+        // Empty string paths are valid (though may fail at runtime)
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from(""))
+            .algorithm("as".to_string())
+            .build()
+            .unwrap();
+
+        assert_eq!(params.data_path, PathBuf::from(""));
+    }
+
+    // ============================================================================
+    // Algorithm String Tests
+    // ============================================================================
+
+    #[test]
+    fn test_evaluate_params_algorithm_case_sensitivity() {
+        // Algorithm strings are case-sensitive (validation happens later)
+        let params1 = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("AS".to_string())
+            .build()
+            .unwrap();
+
+        let params2 = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .build()
+            .unwrap();
+
+        assert_ne!(params1.algorithm, params2.algorithm);
+    }
+
+    #[test]
+    fn test_evaluate_params_algorithm_whitespace() {
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("  as  ".to_string())
+            .build()
+            .unwrap();
+
+        assert_eq!(params.algorithm, "  as  "); // Preserves whitespace
+    }
+
+    #[test]
+    fn test_evaluate_params_algorithm_special_chars() {
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("algo-v1.2".to_string())
+            .build()
+            .unwrap();
+
+        assert_eq!(params.algorithm, "algo-v1.2");
+    }
+
+    // ============================================================================
+    // Serialization/Deserialization Tests
+    // ============================================================================
+
+    #[test]
+    fn test_evaluate_params_roundtrip_serialization() {
+        let original = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spread(3.0)
+            .skew(0.7)
+            .max_inventory(0.15)
+            .quote_size(0.002)
+            .fee_rate(0.0002)
+            .naive_fills(true)
+            .fill_prob(0.15)
+            .queue_pos(0.3)
+            .high_entropy(0.8)
+            .low_entropy(0.3)
+            .regime_params(true)
+            .high_spread(1.5)
+            .med_spread(3.0)
+            .low_spread(6.0)
+            .high_skew(0.4)
+            .med_skew(0.6)
+            .low_skew(1.2)
+            .quote_low_entropy(true)
+            .json(true)
+            .quiet(true)
+            .stats(true)
+            .build()
+            .unwrap();
+
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: EvaluateParams = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(original.data_path, deserialized.data_path);
+        assert_eq!(original.algorithm, deserialized.algorithm);
+        assert_eq!(original.spread, deserialized.spread);
+        assert_eq!(original.skew, deserialized.skew);
+        assert_eq!(original.max_inventory, deserialized.max_inventory);
+        assert_eq!(original.quote_size, deserialized.quote_size);
+        assert_eq!(original.fee_rate, deserialized.fee_rate);
+        assert_eq!(original.naive_fills, deserialized.naive_fills);
+        assert_eq!(original.fill_prob, deserialized.fill_prob);
+        assert_eq!(original.queue_pos, deserialized.queue_pos);
+        assert_eq!(original.high_entropy, deserialized.high_entropy);
+        assert_eq!(original.low_entropy, deserialized.low_entropy);
+        assert_eq!(original.regime_params, deserialized.regime_params);
+        assert_eq!(original.high_spread, deserialized.high_spread);
+        assert_eq!(original.med_spread, deserialized.med_spread);
+        assert_eq!(original.low_spread, deserialized.low_spread);
+        assert_eq!(original.high_skew, deserialized.high_skew);
+        assert_eq!(original.med_skew, deserialized.med_skew);
+        assert_eq!(original.low_skew, deserialized.low_skew);
+        assert_eq!(original.quote_low_entropy, deserialized.quote_low_entropy);
+        assert_eq!(original.json, deserialized.json);
+        assert_eq!(original.quiet, deserialized.quiet);
+        assert_eq!(original.stats, deserialized.stats);
+    }
+
+    #[test]
+    fn test_evaluate_params_serialization_with_none_optionals() {
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .weights_file(None)
+            .output(None)
+            .build()
+            .unwrap();
+
+        let json = serde_json::to_string(&params).unwrap();
+        let deserialized: EvaluateParams = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(params.weights_file, deserialized.weights_file);
+        assert_eq!(params.output, deserialized.output);
+    }
+
+    #[test]
+    fn test_evaluate_params_serialization_with_some_optionals() {
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .weights_file(Some(PathBuf::from("./weights.json")))
+            .output(Some(PathBuf::from("./output.json")))
+            .build()
+            .unwrap();
+
+        let json = serde_json::to_string(&params).unwrap();
+        let deserialized: EvaluateParams = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(params.weights_file, deserialized.weights_file);
+        assert_eq!(params.output, deserialized.output);
+    }
+
+    // ============================================================================
+    // Builder Method Chaining Edge Cases
+    // ============================================================================
+
+    #[test]
+    fn test_evaluate_params_builder_set_twice() {
+        // Setting the same parameter twice should use the last value
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spread(2.0)
+            .spread(5.0) // Override
+            .build()
+            .unwrap();
+
+        assert_eq!(params.spread, 5.0);
+    }
+
+    #[test]
+    fn test_evaluate_params_builder_all_methods() {
+        // Test that all builder methods can be called
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .weights_file(Some(PathBuf::from("./weights.json")))
+            .spread(2.0)
+            .skew(0.5)
+            .max_inventory(0.1)
+            .quote_size(0.001)
+            .fee_rate(0.0001)
+            .naive_fills(false)
+            .fill_prob(0.10)
+            .queue_pos(0.5)
+            .high_entropy(0.7)
+            .low_entropy(0.4)
+            .regime_params(false)
+            .high_spread(1.0)
+            .med_spread(2.5)
+            .low_spread(5.0)
+            .high_skew(0.3)
+            .med_skew(0.5)
+            .low_skew(1.0)
+            .quote_low_entropy(false)
+            .output(Some(PathBuf::from("./output.json")))
+            .json(false)
+            .quiet(false)
+            .stats(false)
+            .build()
+            .unwrap();
+
+        assert_eq!(params.spread, 2.0);
+        assert_eq!(params.skew, 0.5);
+    }
+
+    // ============================================================================
+    // Clone and Debug Tests
+    // ============================================================================
+
+    #[test]
+    fn test_evaluate_params_clone() {
+        let params1 = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spread(3.0)
+            .build()
+            .unwrap();
+
+        let params2 = params1.clone();
+        assert_eq!(params1.spread, params2.spread);
+        assert_eq!(params1.algorithm, params2.algorithm);
+    }
+
+    #[test]
+    fn test_evaluate_params_debug_format() {
+        let params = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .build()
+            .unwrap();
+
+        let debug_str = format!("{:?}", params);
+        assert!(debug_str.contains("EvaluateParams"));
+        assert!(debug_str.contains("as"));
+    }
+
+    // ============================================================================
+    // Default Value Consistency Tests
+    // ============================================================================
+
+    #[test]
+    fn test_evaluate_params_defaults_consistency() {
+        // Test that defaults match expected values from CLI
+        let params1 = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .build()
+            .unwrap();
+
+        let params2 = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spread(2.0)
+            .skew(0.5)
+            .max_inventory(0.1)
+            .quote_size(0.001)
+            .fee_rate(0.0001)
+            .naive_fills(false)
+            .fill_prob(0.10)
+            .queue_pos(0.5)
+            .high_entropy(0.7)
+            .low_entropy(0.4)
+            .regime_params(false)
+            .high_spread(1.0)
+            .med_spread(2.5)
+            .low_spread(5.0)
+            .high_skew(0.3)
+            .med_skew(0.5)
+            .low_skew(1.0)
+            .quote_low_entropy(false)
+            .json(false)
+            .quiet(false)
+            .stats(false)
+            .build()
+            .unwrap();
+
+        assert_eq!(params1.spread, params2.spread);
+        assert_eq!(params1.skew, params2.skew);
+        assert_eq!(params1.max_inventory, params2.max_inventory);
+        assert_eq!(params1.quote_size, params2.quote_size);
+        assert_eq!(params1.fee_rate, params2.fee_rate);
+        assert_eq!(params1.naive_fills, params2.naive_fills);
+        assert_eq!(params1.fill_prob, params2.fill_prob);
+        assert_eq!(params1.queue_pos, params2.queue_pos);
+        assert_eq!(params1.high_entropy, params2.high_entropy);
+        assert_eq!(params1.low_entropy, params2.low_entropy);
+    }
+
+    #[test]
+    fn test_evaluate_params_builder_reuse() {
+        // Build first params
+        let params1 = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spread(2.0)
+            .build()
+            .unwrap();
+
+        // Build second params with different values (new builder)
+        let params2 = EvaluateParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread(3.0)
+            .build()
+            .unwrap();
+
+        assert_eq!(params1.spread, 2.0);
+        assert_eq!(params2.spread, 3.0);
+        assert_eq!(params1.algorithm, "as");
+        assert_eq!(params2.algorithm, "ml");
     }
 }
 
