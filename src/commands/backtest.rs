@@ -30,17 +30,55 @@ use num::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::common::{ProgressCallback, ProgressEvent, LogLevel};
-use crate::commands::params::backtest_params::{EvaluateParams, TuneParams};
+use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams};
 use crate::backtest::{
     BacktestEngine, BacktestConfig, BacktestResults,
     replay::{ParquetReplay, ReplayConfig},
     fill_simulator::FillSimulatorConfig,
 };
-use crate::execution::market_maker::MMConfig;
+use crate::execution::market_maker::{MMConfig, RegimeParams, RegimeConfig, RegimeThresholds};
 use crate::execution::mm_simulator::SimulatorConfig;
 use crate::strategies::{
     AlgorithmType, AlgorithmRegistry, BacktestAlgorithmParams, MLModelWeights,
 };
+
+/// Single regime search result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegimeSearchResultItem {
+    pub high_spread: f64,
+    pub high_skew: f64,
+    pub med_spread: f64,
+    pub med_skew: f64,
+    /// Low entropy spread (None = no quoting in low entropy)
+    pub low_spread: Option<f64>,
+    pub low_skew: f64,
+    pub fill_prob: f64,
+    pub sharpe: f64,
+    pub total_return: f64,
+    pub max_drawdown: f64,
+    pub num_trades: usize,
+    pub win_rate: f64,
+    pub avg_trade_pnl: f64,
+}
+
+/// Results from the `regime_search` command (regime-specific grid search)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegimeSearchResult {
+    /// Algorithm type used
+    pub algorithm: String,
+    /// Algorithm display name
+    pub algorithm_name: String,
+    /// All grid search results (sorted by Sharpe ratio, descending)
+    pub all_results: Vec<RegimeSearchResultItem>,
+    /// Best parameter combination (by Sharpe ratio)
+    pub best: Option<RegimeSearchResultItem>,
+    /// Total number of combinations tested
+    pub total_combinations: usize,
+    /// Average Sharpe for results with low entropy quoting
+    pub avg_sharpe_with_quote: Option<f64>,
+    /// Average Sharpe for results without low entropy quoting
+    pub avg_sharpe_without_quote: Option<f64>,
+}
 
 /// Single grid search result
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -509,6 +547,310 @@ impl BacktestCommands {
                 algo_type.as_str()
             ),
         }
+    }
+
+    /// Run regime-specific grid search command - MM algorithms only
+    ///
+    /// This is the extracted version of the `run_regime_search()` function from the CLI.
+    /// It supports progress callbacks for real-time updates during execution.
+    ///
+    /// Returns `RegimeSearchResult` with all grid search results sorted by Sharpe ratio.
+    pub fn regime_search(
+        params: RegimeSearchParams,
+        callback: Arc<dyn ProgressCallback>,
+    ) -> Result<RegimeSearchResult> {
+        use crate::backtest::replay::ParquetReplay;
+
+        // Parse algorithm type early to fail fast on invalid algorithm
+        let algo_type = AlgorithmType::from_str(&params.algorithm)
+            .map_err(|_| anyhow::anyhow!(
+                "Unknown algorithm '{}'. Valid options: {}",
+                params.algorithm,
+                AlgorithmRegistry::all_type_strings().join(", ")
+            ))?;
+
+        let algo_name = algo_type.display_name().to_string();
+
+        // Validate that algorithm is a Market Making algorithm
+        Self::validate_mm_algorithm(algo_type)?;
+
+        // Parse parameter lists
+        let high_spreads: Vec<f64> = params.high_spreads
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let med_spreads: Vec<f64> = params.med_spreads
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let high_skews: Vec<f64> = params.high_skews
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let med_skews: Vec<f64> = params.med_skews
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let low_skews: Vec<f64> = params.low_skews
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let fill_probs: Vec<f64> = params.fill_probs
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+
+        // Parse low entropy spreads - can include "none"
+        #[derive(Debug, Clone)]
+        enum LowEntropySpread {
+            Value(f64),
+            NoQuote,
+        }
+
+        let low_spreads: Vec<LowEntropySpread> = params.low_spreads
+            .split(',')
+            .map(|s| {
+                let s = s.trim().to_lowercase();
+                if s == "none" || s == "no" {
+                    LowEntropySpread::NoQuote
+                } else {
+                    s.parse().map(LowEntropySpread::Value).unwrap_or(LowEntropySpread::NoQuote)
+                }
+            })
+            .collect();
+
+        let total_combinations = high_spreads.len() * high_skews.len()
+            * med_spreads.len() * med_skews.len()
+            * low_spreads.len() * low_skews.len()
+            * fill_probs.len();
+
+        callback.on_event(ProgressEvent::Started {
+            total: Some(total_combinations),
+            message: format!(
+                "Starting regime-specific grid search with {} combinations for algorithm: {}",
+                total_combinations,
+                algo_name
+            ),
+        });
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!(
+                "Parameter space: high_spreads={:?}, med_spreads={:?}, low_spreads={}, high_skews={:?}, med_skews={:?}, low_skews={:?}, fill_probs={:?}",
+                high_spreads, med_spreads, params.low_spreads, high_skews, med_skews, low_skews, fill_probs
+            ),
+        });
+
+        // Load ML weights if needed
+        let ml_weights = Self::load_ml_weights_if_needed(
+            algo_type,
+            params.weights_file.as_deref(),
+            &callback,
+        )?;
+
+        // Load data once (we'll reload events for each combination)
+        let replay_config = ReplayConfig {
+            data_dir: params.data_path.clone(),
+            ..Default::default()
+        };
+
+        let mut all_results: Vec<RegimeSearchResultItem> = Vec::new();
+        let mut count = 0;
+
+        for &h_spread in &high_spreads {
+            for &h_skew in &high_skews {
+                for &m_spread in &med_spreads {
+                    for &m_skew in &med_skews {
+                        for l_spread in &low_spreads {
+                            for &l_skew in &low_skews {
+                                for &fill_prob in &fill_probs {
+                                    count += 1;
+
+                                    callback.on_event(ProgressEvent::Progress {
+                                        current: count,
+                                        total: Some(total_combinations),
+                                        message: format!(
+                                            "Testing: H({:.1},{:.1}) M({:.1},{:.1}) L({},{:.1}) fp={:.2}",
+                                            h_spread, h_skew, m_spread, m_skew,
+                                            match l_spread {
+                                                LowEntropySpread::Value(v) => format!("{:.1}", v),
+                                                LowEntropySpread::NoQuote => "NONE".to_string(),
+                                            },
+                                            l_skew, fill_prob
+                                        ),
+                                    });
+
+                                    let (low_spread_val, should_quote_low) = match l_spread {
+                                        LowEntropySpread::Value(v) => (*v, true),
+                                        LowEntropySpread::NoQuote => (5.0, false), // dummy value when not quoting
+                                    };
+
+                                    // Reload events (need fresh copy for each run)
+                                    let mut replay = ParquetReplay::new(replay_config.clone());
+                                    replay.load()
+                                        .context("Failed to load market data")?;
+                                    let events = replay.into_events();
+
+                                    // Create regime-specific parameters
+                                    let regime_params = RegimeParams {
+                                        high_entropy: RegimeConfig {
+                                            spread_bps: h_spread,
+                                            skew_factor: h_skew,
+                                            size_mult: 1.0,
+                                            should_quote: true,
+                                        },
+                                        medium_entropy: RegimeConfig {
+                                            spread_bps: m_spread,
+                                            skew_factor: m_skew,
+                                            size_mult: 0.7,
+                                            should_quote: true,
+                                        },
+                                        low_entropy: RegimeConfig {
+                                            spread_bps: low_spread_val,
+                                            skew_factor: l_skew,
+                                            size_mult: 0.3,
+                                            should_quote: should_quote_low,
+                                        },
+                                    };
+
+                                    let mm_config = MMConfig {
+                                        regime_params,
+                                        max_inventory: Decimal::from_f64_retain(params.max_inventory).unwrap_or(dec!(0.1)),
+                                        quote_size: Decimal::from_f64_retain(params.quote_size).unwrap_or(dec!(0.001)),
+                                        regime_thresholds: RegimeThresholds {
+                                            high_entropy_threshold: params.high_entropy,
+                                            low_entropy_threshold: params.low_entropy,
+                                        },
+                                        ..Default::default()
+                                    };
+
+                                    let config = BacktestConfig {
+                                        replay: replay_config.clone(),
+                                        mm: mm_config,
+                                        simulator: SimulatorConfig {
+                                            fee_rate: Decimal::from_f64_retain(params.fee_rate).unwrap_or(dec!(0.0001)),
+                                            ..Default::default()
+                                        },
+                                        fill_sim: FillSimulatorConfig {
+                                            base_fill_probability: fill_prob,
+                                            queue_position: params.queue_pos,
+                                            fee_rate: Decimal::from_f64_retain(params.fee_rate).unwrap_or(dec!(0.0001)),
+                                            ..Default::default()
+                                        },
+                                        verbose: false,
+                                        use_realistic_fills: !params.naive_fills,
+                                        ..Default::default()
+                                    };
+
+                                    // Create backtest engine with regime params
+                                    // BacktestEngine::new() creates default A-S algorithm which uses regime_params from MMConfig
+                                    let mut engine = BacktestEngine::new(config);
+                                    engine.load_data()
+                                        .context("Failed to load data")?;
+                                    let results = engine.run()
+                                        .context("Failed to run backtest")?;
+
+                                    let avg_trade_pnl = if results.metrics.num_trades > 0 {
+                                        results.metrics.total_return / results.metrics.num_trades as f64
+                                    } else {
+                                        0.0
+                                    };
+
+                                    let low_spread_opt = match l_spread {
+                                        LowEntropySpread::Value(v) => Some(*v),
+                                        LowEntropySpread::NoQuote => None,
+                                    };
+
+                                    let result = RegimeSearchResultItem {
+                                        high_spread: h_spread,
+                                        high_skew: h_skew,
+                                        med_spread: m_spread,
+                                        med_skew: m_skew,
+                                        low_spread: low_spread_opt,
+                                        low_skew: l_skew,
+                                        fill_prob,
+                                        sharpe: results.metrics.sharpe_ratio,
+                                        total_return: results.metrics.total_return,
+                                        max_drawdown: results.metrics.max_drawdown,
+                                        num_trades: results.metrics.num_trades,
+                                        win_rate: results.metrics.win_rate,
+                                        avg_trade_pnl,
+                                    };
+
+                                    // Send metric update with current best Sharpe
+                                    let current_best_sharpe = all_results
+                                        .iter()
+                                        .map(|r| r.sharpe)
+                                        .fold(f64::NEG_INFINITY, f64::max);
+                                    let new_best = result.sharpe > current_best_sharpe;
+
+                                    callback.on_event(ProgressEvent::Metric {
+                                        name: "sharpe_ratio".to_string(),
+                                        value: result.sharpe,
+                                    });
+
+                                    if new_best {
+                                        callback.on_event(ProgressEvent::Log {
+                                            level: LogLevel::Info,
+                                            message: format!(
+                                                "New best Sharpe: {:.2} (H({:.1},{:.1}) M({:.1},{:.1}) L({},{:.1}) fp={:.2})",
+                                                result.sharpe, h_spread, h_skew, m_spread, m_skew,
+                                                match low_spread_opt {
+                                                    Some(v) => format!("{:.1}", v),
+                                                    None => "NONE".to_string(),
+                                                },
+                                                l_skew, fill_prob
+                                            ),
+                                        });
+                                    }
+
+                                    all_results.push(result);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort by Sharpe ratio (descending)
+        all_results.sort_by(|a, b| b.sharpe.partial_cmp(&a.sharpe).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Calculate average Sharpe for quoting vs not quoting in low entropy
+        let with_low_quote: Vec<_> = all_results.iter().filter(|r| r.low_spread.is_some()).collect();
+        let without_low_quote: Vec<_> = all_results.iter().filter(|r| r.low_spread.is_none()).collect();
+
+        let avg_sharpe_with = if !with_low_quote.is_empty() {
+            Some(with_low_quote.iter().map(|r| r.sharpe).sum::<f64>() / with_low_quote.len() as f64)
+        } else {
+            None
+        };
+
+        let avg_sharpe_without = if !without_low_quote.is_empty() {
+            Some(without_low_quote.iter().map(|r| r.sharpe).sum::<f64>() / without_low_quote.len() as f64)
+        } else {
+            None
+        };
+
+        let best = all_results.first().cloned();
+
+        callback.on_event(ProgressEvent::Completed {
+            message: format!(
+                "Regime search completed: tested {} combinations, best Sharpe={:.2}",
+                total_combinations,
+                best.as_ref().map(|b| b.sharpe).unwrap_or(0.0)
+            ),
+        });
+
+        Ok(RegimeSearchResult {
+            algorithm: params.algorithm.clone(),
+            algorithm_name: algo_name,
+            all_results,
+            best,
+            total_combinations,
+            avg_sharpe_with_quote: avg_sharpe_with,
+            avg_sharpe_without_quote: avg_sharpe_without,
+        })
     }
 }
 
@@ -2300,6 +2642,396 @@ mod tests {
         assert!(result.best.is_some());
         assert_eq!(result.total_combinations, 1);
         assert_eq!(result.best.as_ref().unwrap().sharpe, 1.5);
+    }
+
+    // ============================================================================
+    // Regime Search Command Tests
+    // ============================================================================
+
+    #[test]
+    fn test_regime_search_result_item_structure() {
+        let item = RegimeSearchResultItem {
+            high_spread: 0.5,
+            high_skew: 0.2,
+            med_spread: 2.0,
+            med_skew: 0.4,
+            low_spread: Some(4.0),
+            low_skew: 0.8,
+            fill_prob: 0.10,
+            sharpe: 1.5,
+            total_return: 0.05,
+            max_drawdown: 0.02,
+            num_trades: 100,
+            win_rate: 0.55,
+            avg_trade_pnl: 0.0005,
+        };
+
+        assert_eq!(item.high_spread, 0.5);
+        assert_eq!(item.med_spread, 2.0);
+        assert_eq!(item.low_spread, Some(4.0));
+        assert_eq!(item.sharpe, 1.5);
+    }
+
+    #[test]
+    fn test_regime_search_result_item_no_quote() {
+        let item = RegimeSearchResultItem {
+            high_spread: 0.5,
+            high_skew: 0.2,
+            med_spread: 2.0,
+            med_skew: 0.4,
+            low_spread: None, // No quoting in low entropy
+            low_skew: 0.8,
+            fill_prob: 0.10,
+            sharpe: 1.5,
+            total_return: 0.05,
+            max_drawdown: 0.02,
+            num_trades: 100,
+            win_rate: 0.55,
+            avg_trade_pnl: 0.0005,
+        };
+
+        assert!(item.low_spread.is_none());
+    }
+
+    #[test]
+    fn test_regime_search_result_item_serialization() {
+        let item = RegimeSearchResultItem {
+            high_spread: 0.5,
+            high_skew: 0.2,
+            med_spread: 2.0,
+            med_skew: 0.4,
+            low_spread: Some(4.0),
+            low_skew: 0.8,
+            fill_prob: 0.10,
+            sharpe: 1.5,
+            total_return: 0.05,
+            max_drawdown: 0.02,
+            num_trades: 100,
+            win_rate: 0.55,
+            avg_trade_pnl: 0.0005,
+        };
+
+        let json = serde_json::to_string(&item).unwrap();
+        let deserialized: RegimeSearchResultItem = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(item.high_spread, deserialized.high_spread);
+        assert_eq!(item.low_spread, deserialized.low_spread);
+        assert_eq!(item.sharpe, deserialized.sharpe);
+    }
+
+    #[test]
+    fn test_regime_search_result_structure() {
+        let result = RegimeSearchResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            all_results: vec![
+                RegimeSearchResultItem {
+                    high_spread: 0.5,
+                    high_skew: 0.2,
+                    med_spread: 2.0,
+                    med_skew: 0.4,
+                    low_spread: Some(4.0),
+                    low_skew: 0.8,
+                    fill_prob: 0.10,
+                    sharpe: 1.5,
+                    total_return: 0.05,
+                    max_drawdown: 0.02,
+                    num_trades: 100,
+                    win_rate: 0.55,
+                    avg_trade_pnl: 0.0005,
+                },
+            ],
+            best: Some(RegimeSearchResultItem {
+                high_spread: 0.5,
+                high_skew: 0.2,
+                med_spread: 2.0,
+                med_skew: 0.4,
+                low_spread: Some(4.0),
+                low_skew: 0.8,
+                fill_prob: 0.10,
+                sharpe: 1.5,
+                total_return: 0.05,
+                max_drawdown: 0.02,
+                num_trades: 100,
+                win_rate: 0.55,
+                avg_trade_pnl: 0.0005,
+            }),
+            total_combinations: 1,
+            avg_sharpe_with_quote: Some(1.5),
+            avg_sharpe_without_quote: None,
+        };
+
+        assert_eq!(result.algorithm, "as");
+        assert_eq!(result.all_results.len(), 1);
+        assert!(result.best.is_some());
+        assert_eq!(result.total_combinations, 1);
+    }
+
+    #[test]
+    fn test_regime_search_result_empty_results() {
+        let result = RegimeSearchResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            all_results: vec![],
+            best: None,
+            total_combinations: 0,
+            avg_sharpe_with_quote: None,
+            avg_sharpe_without_quote: None,
+        };
+
+        assert_eq!(result.all_results.len(), 0);
+        assert!(result.best.is_none());
+        assert_eq!(result.total_combinations, 0);
+    }
+
+    #[test]
+    fn test_regime_search_result_serialization() {
+        let result = RegimeSearchResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            all_results: vec![
+                RegimeSearchResultItem {
+                    high_spread: 0.5,
+                    high_skew: 0.2,
+                    med_spread: 2.0,
+                    med_skew: 0.4,
+                    low_spread: Some(4.0),
+                    low_skew: 0.8,
+                    fill_prob: 0.10,
+                    sharpe: 1.5,
+                    total_return: 0.05,
+                    max_drawdown: 0.02,
+                    num_trades: 100,
+                    win_rate: 0.55,
+                    avg_trade_pnl: 0.0005,
+                },
+            ],
+            best: Some(RegimeSearchResultItem {
+                high_spread: 0.5,
+                high_skew: 0.2,
+                med_spread: 2.0,
+                med_skew: 0.4,
+                low_spread: Some(4.0),
+                low_skew: 0.8,
+                fill_prob: 0.10,
+                sharpe: 1.5,
+                total_return: 0.05,
+                max_drawdown: 0.02,
+                num_trades: 100,
+                win_rate: 0.55,
+                avg_trade_pnl: 0.0005,
+            }),
+            total_combinations: 1,
+            avg_sharpe_with_quote: Some(1.5),
+            avg_sharpe_without_quote: None,
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: RegimeSearchResult = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(result.algorithm, deserialized.algorithm);
+        assert_eq!(result.all_results.len(), deserialized.all_results.len());
+        assert_eq!(result.best.as_ref().unwrap().sharpe, deserialized.best.as_ref().unwrap().sharpe);
+    }
+
+    #[test]
+    fn test_regime_search_result_sorted_by_sharpe() {
+        let mut result = RegimeSearchResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            all_results: vec![
+                RegimeSearchResultItem {
+                    high_spread: 0.5,
+                    high_skew: 0.2,
+                    med_spread: 2.0,
+                    med_skew: 0.4,
+                    low_spread: Some(4.0),
+                    low_skew: 0.8,
+                    fill_prob: 0.10,
+                    sharpe: 0.5,
+                    total_return: 0.02,
+                    max_drawdown: 0.01,
+                    num_trades: 50,
+                    win_rate: 0.50,
+                    avg_trade_pnl: 0.0004,
+                },
+                RegimeSearchResultItem {
+                    high_spread: 0.5,
+                    high_skew: 0.2,
+                    med_spread: 2.0,
+                    med_skew: 0.4,
+                    low_spread: Some(4.0),
+                    low_skew: 0.8,
+                    fill_prob: 0.10,
+                    sharpe: 1.5,
+                    total_return: 0.05,
+                    max_drawdown: 0.02,
+                    num_trades: 100,
+                    win_rate: 0.55,
+                    avg_trade_pnl: 0.0005,
+                },
+                RegimeSearchResultItem {
+                    high_spread: 0.5,
+                    high_skew: 0.2,
+                    med_spread: 2.0,
+                    med_skew: 0.4,
+                    low_spread: Some(4.0),
+                    low_skew: 0.8,
+                    fill_prob: 0.10,
+                    sharpe: 1.0,
+                    total_return: 0.03,
+                    max_drawdown: 0.015,
+                    num_trades: 75,
+                    win_rate: 0.52,
+                    avg_trade_pnl: 0.0004,
+                },
+            ],
+            best: None,
+            total_combinations: 3,
+            avg_sharpe_with_quote: None,
+            avg_sharpe_without_quote: None,
+        };
+
+        // Sort by Sharpe (descending)
+        result.all_results.sort_by(|a, b| b.sharpe.partial_cmp(&a.sharpe).unwrap_or(std::cmp::Ordering::Equal));
+        result.best = result.all_results.first().cloned();
+
+        assert_eq!(result.all_results[0].sharpe, 1.5);
+        assert_eq!(result.all_results[1].sharpe, 1.0);
+        assert_eq!(result.all_results[2].sharpe, 0.5);
+        assert_eq!(result.best.as_ref().unwrap().sharpe, 1.5);
+    }
+
+    #[test]
+    fn test_regime_search_result_quote_comparison() {
+        let result = RegimeSearchResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            all_results: vec![
+                RegimeSearchResultItem {
+                    high_spread: 0.5,
+                    high_skew: 0.2,
+                    med_spread: 2.0,
+                    med_skew: 0.4,
+                    low_spread: Some(4.0), // With quote
+                    low_skew: 0.8,
+                    fill_prob: 0.10,
+                    sharpe: 1.0,
+                    total_return: 0.03,
+                    max_drawdown: 0.015,
+                    num_trades: 75,
+                    win_rate: 0.52,
+                    avg_trade_pnl: 0.0004,
+                },
+                RegimeSearchResultItem {
+                    high_spread: 0.5,
+                    high_skew: 0.2,
+                    med_spread: 2.0,
+                    med_skew: 0.4,
+                    low_spread: None, // Without quote
+                    low_skew: 0.8,
+                    fill_prob: 0.10,
+                    sharpe: 1.5,
+                    total_return: 0.05,
+                    max_drawdown: 0.02,
+                    num_trades: 100,
+                    win_rate: 0.55,
+                    avg_trade_pnl: 0.0005,
+                },
+            ],
+            best: None,
+            total_combinations: 2,
+            avg_sharpe_with_quote: Some(1.0),
+            avg_sharpe_without_quote: Some(1.5),
+        };
+
+        assert_eq!(result.avg_sharpe_with_quote, Some(1.0));
+        assert_eq!(result.avg_sharpe_without_quote, Some(1.5));
+    }
+
+    #[test]
+    fn test_regime_search_result_item_clone() {
+        let item1 = RegimeSearchResultItem {
+            high_spread: 0.5,
+            high_skew: 0.2,
+            med_spread: 2.0,
+            med_skew: 0.4,
+            low_spread: Some(4.0),
+            low_skew: 0.8,
+            fill_prob: 0.10,
+            sharpe: 1.5,
+            total_return: 0.05,
+            max_drawdown: 0.02,
+            num_trades: 100,
+            win_rate: 0.55,
+            avg_trade_pnl: 0.0005,
+        };
+
+        let item2 = item1.clone();
+        assert_eq!(item1.high_spread, item2.high_spread);
+        assert_eq!(item1.low_spread, item2.low_spread);
+        assert_eq!(item1.sharpe, item2.sharpe);
+    }
+
+    #[test]
+    fn test_regime_search_result_clone() {
+        let result1 = RegimeSearchResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            all_results: vec![],
+            best: None,
+            total_combinations: 0,
+            avg_sharpe_with_quote: None,
+            avg_sharpe_without_quote: None,
+        };
+
+        let result2 = result1.clone();
+        assert_eq!(result1.algorithm, result2.algorithm);
+        assert_eq!(result1.total_combinations, result2.total_combinations);
+    }
+
+    #[test]
+    fn test_regime_search_result_item_with_zero_trades() {
+        let item = RegimeSearchResultItem {
+            high_spread: 0.5,
+            high_skew: 0.2,
+            med_spread: 2.0,
+            med_skew: 0.4,
+            low_spread: Some(4.0),
+            low_skew: 0.8,
+            fill_prob: 0.10,
+            sharpe: 0.0,
+            total_return: 0.0,
+            max_drawdown: 0.0,
+            num_trades: 0,
+            win_rate: 0.0,
+            avg_trade_pnl: 0.0,
+        };
+
+        assert_eq!(item.num_trades, 0);
+        assert_eq!(item.avg_trade_pnl, 0.0);
+    }
+
+    #[test]
+    fn test_regime_search_result_item_negative_sharpe() {
+        let item = RegimeSearchResultItem {
+            high_spread: 0.5,
+            high_skew: 0.2,
+            med_spread: 2.0,
+            med_skew: 0.4,
+            low_spread: Some(4.0),
+            low_skew: 0.8,
+            fill_prob: 0.10,
+            sharpe: -0.5, // Negative Sharpe (losing strategy)
+            total_return: -0.02,
+            max_drawdown: 0.05,
+            num_trades: 50,
+            win_rate: 0.40,
+            avg_trade_pnl: -0.0004,
+        };
+
+        assert!(item.sharpe < 0.0);
+        assert!(item.total_return < 0.0);
     }
 }
 
