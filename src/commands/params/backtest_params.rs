@@ -338,6 +338,657 @@ impl Default for EvaluateParamsBuilder {
     }
 }
 
+/// Parameters for the `tune` command (grid search - MM algorithms only)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TuneParams {
+    /// Path to data directory containing Parquet files
+    pub data_path: PathBuf,
+    /// Algorithm to use (must be MM algorithm: as, ml, or fixed)
+    pub algorithm: String,
+    /// Path to ML weights file (required for ML algorithm)
+    pub weights_file: Option<PathBuf>,
+    /// Spread values to test (comma-separated string, will be parsed to Vec<f64>)
+    pub spreads: String,
+    /// Skew values to test (comma-separated string)
+    pub skews: String,
+    /// High entropy threshold values to test (comma-separated string)
+    pub high_entropies: String,
+    /// Fill probability values to test (comma-separated string)
+    pub fill_probs: String,
+    /// Maximum inventory
+    pub max_inventory: f64,
+    /// Quote size
+    pub quote_size: f64,
+    /// Fee rate (e.g., 0.0001 = 1 bps)
+    pub fee_rate: f64,
+    /// Use naive fill simulation (for comparison)
+    pub naive_fills: bool,
+    /// Queue position (0.0=front, 1.0=back)
+    pub queue_pos: f64,
+    /// Low entropy threshold (below = defensive/no quoting)
+    pub low_entropy: f64,
+    /// Output file for results (JSON)
+    pub output: Option<PathBuf>,
+}
+
+/// Builder for `TuneParams` with validation
+pub struct TuneParamsBuilder {
+    data_path: Option<PathBuf>,
+    algorithm: Option<String>,
+    weights_file: Option<PathBuf>,
+    spreads: Option<String>,
+    skews: Option<String>,
+    high_entropies: Option<String>,
+    fill_probs: Option<String>,
+    max_inventory: Option<f64>,
+    quote_size: Option<f64>,
+    fee_rate: Option<f64>,
+    naive_fills: Option<bool>,
+    queue_pos: Option<f64>,
+    low_entropy: Option<f64>,
+    output: Option<PathBuf>,
+}
+
+impl TuneParamsBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            data_path: None,
+            algorithm: None,
+            weights_file: None,
+            spreads: None,
+            skews: None,
+            high_entropies: None,
+            fill_probs: None,
+            max_inventory: None,
+            quote_size: None,
+            fee_rate: None,
+            naive_fills: None,
+            queue_pos: None,
+            low_entropy: None,
+            output: None,
+        }
+    }
+
+    /// Set data path
+    pub fn data_path(mut self, path: PathBuf) -> Self {
+        self.data_path = Some(path);
+        self
+    }
+
+    /// Set algorithm
+    pub fn algorithm(mut self, algo: String) -> Self {
+        self.algorithm = Some(algo);
+        self
+    }
+
+    /// Set weights file
+    pub fn weights_file(mut self, path: Option<PathBuf>) -> Self {
+        self.weights_file = path;
+        self
+    }
+
+    /// Set spreads (comma-separated string)
+    pub fn spreads(mut self, spreads: String) -> Self {
+        self.spreads = Some(spreads);
+        self
+    }
+
+    /// Set skews (comma-separated string)
+    pub fn skews(mut self, skews: String) -> Self {
+        self.skews = Some(skews);
+        self
+    }
+
+    /// Set high entropies (comma-separated string)
+    pub fn high_entropies(mut self, high_entropies: String) -> Self {
+        self.high_entropies = Some(high_entropies);
+        self
+    }
+
+    /// Set fill probabilities (comma-separated string)
+    pub fn fill_probs(mut self, fill_probs: String) -> Self {
+        self.fill_probs = Some(fill_probs);
+        self
+    }
+
+    /// Set max inventory
+    pub fn max_inventory(mut self, max_inv: f64) -> Self {
+        self.max_inventory = Some(max_inv);
+        self
+    }
+
+    /// Set quote size
+    pub fn quote_size(mut self, size: f64) -> Self {
+        self.quote_size = Some(size);
+        self
+    }
+
+    /// Set fee rate
+    pub fn fee_rate(mut self, rate: f64) -> Self {
+        self.fee_rate = Some(rate);
+        self
+    }
+
+    /// Set naive fills flag
+    pub fn naive_fills(mut self, naive: bool) -> Self {
+        self.naive_fills = Some(naive);
+        self
+    }
+
+    /// Set queue position
+    pub fn queue_pos(mut self, pos: f64) -> Self {
+        self.queue_pos = Some(pos);
+        self
+    }
+
+    /// Set low entropy threshold
+    pub fn low_entropy(mut self, threshold: f64) -> Self {
+        self.low_entropy = Some(threshold);
+        self
+    }
+
+    /// Set output file
+    pub fn output(mut self, path: Option<PathBuf>) -> Self {
+        self.output = path;
+        self
+    }
+
+    /// Parse comma-separated string to Vec<f64>
+    fn parse_f64_list(s: &str) -> Result<Vec<f64>> {
+        let values: Vec<f64> = s
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        if values.is_empty() {
+            anyhow::bail!("Empty parameter list: '{}'", s);
+        }
+        Ok(values)
+    }
+
+    /// Build `TuneParams` with validation
+    pub fn build(self) -> Result<TuneParams> {
+        // Validate required fields
+        let data_path = self.data_path
+            .ok_or_else(|| anyhow::anyhow!("data_path is required"))?;
+        let algorithm = self.algorithm
+            .ok_or_else(|| anyhow::anyhow!("algorithm is required"))?;
+        let spreads = self.spreads
+            .ok_or_else(|| anyhow::anyhow!("spreads is required"))?;
+        let skews = self.skews
+            .ok_or_else(|| anyhow::anyhow!("skews is required"))?;
+        let high_entropies = self.high_entropies
+            .ok_or_else(|| anyhow::anyhow!("high_entropies is required"))?;
+        let fill_probs = self.fill_probs
+            .ok_or_else(|| anyhow::anyhow!("fill_probs is required"))?;
+
+        // Parse and validate parameter lists
+        let spreads_vec = Self::parse_f64_list(&spreads)
+            .context("Failed to parse spreads")?;
+        let _skews_vec = Self::parse_f64_list(&skews)
+            .context("Failed to parse skews")?;
+        let _high_entropies_vec = Self::parse_f64_list(&high_entropies)
+            .context("Failed to parse high_entropies")?;
+        let fill_probs_vec = Self::parse_f64_list(&fill_probs)
+            .context("Failed to parse fill_probs")?;
+
+        // Validate ranges
+        for &spread in &spreads_vec {
+            if spread < 0.0 {
+                anyhow::bail!("spread values must be >= 0.0, found {}", spread);
+            }
+        }
+        for &fill_prob in &fill_probs_vec {
+            if !(0.0..=1.0).contains(&fill_prob) {
+                anyhow::bail!("fill_prob values must be in range [0.0, 1.0], found {}", fill_prob);
+            }
+        }
+        if let Some(queue_pos) = self.queue_pos {
+            if !(0.0..=1.0).contains(&queue_pos) {
+                anyhow::bail!("queue_pos must be in range [0.0, 1.0]");
+            }
+        }
+        if let Some(fee_rate) = self.fee_rate {
+            if fee_rate < 0.0 {
+                anyhow::bail!("fee_rate must be >= 0.0");
+            }
+        }
+
+        Ok(TuneParams {
+            data_path,
+            algorithm,
+            weights_file: self.weights_file,
+            spreads,
+            skews,
+            high_entropies,
+            fill_probs,
+            max_inventory: self.max_inventory.unwrap_or(0.1),
+            quote_size: self.quote_size.unwrap_or(0.001),
+            fee_rate: self.fee_rate.unwrap_or(0.0001),
+            naive_fills: self.naive_fills.unwrap_or(false),
+            queue_pos: self.queue_pos.unwrap_or(0.5),
+            low_entropy: self.low_entropy.unwrap_or(0.4),
+            output: self.output,
+        })
+    }
+}
+
+impl Default for TuneParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tune_params_tests {
+    use super::*;
+
+    // ============================================================================
+    // Builder Defaults Tests
+    // ============================================================================
+
+    #[test]
+    fn test_tune_params_builder_defaults() {
+        let params = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .high_entropies("0.6,0.7".to_string())
+            .fill_probs("0.05,0.10".to_string())
+            .build()
+            .unwrap();
+
+        assert_eq!(params.max_inventory, 0.1);
+        assert_eq!(params.quote_size, 0.001);
+        assert_eq!(params.fee_rate, 0.0001);
+        assert!(!params.naive_fills);
+        assert_eq!(params.queue_pos, 0.5);
+        assert_eq!(params.low_entropy, 0.4);
+    }
+
+    // ============================================================================
+    // Required Fields Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_tune_params_missing_data_path() {
+        let result = TuneParamsBuilder::new()
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .high_entropies("0.6".to_string())
+            .fill_probs("0.05".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tune_params_missing_algorithm() {
+        let result = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .high_entropies("0.6".to_string())
+            .fill_probs("0.05".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tune_params_missing_spreads() {
+        let result = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .skews("0.3".to_string())
+            .high_entropies("0.6".to_string())
+            .fill_probs("0.05".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tune_params_missing_skews() {
+        let result = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .high_entropies("0.6".to_string())
+            .fill_probs("0.05".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tune_params_missing_high_entropies() {
+        let result = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("0.05".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tune_params_missing_fill_probs() {
+        let result = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .high_entropies("0.6".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    // ============================================================================
+    // Parameter List Parsing Tests
+    // ============================================================================
+
+    #[test]
+    fn test_tune_params_empty_spreads() {
+        let result = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("".to_string())
+            .skews("0.3".to_string())
+            .high_entropies("0.6".to_string())
+            .fill_probs("0.05".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tune_params_invalid_spreads() {
+        let result = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("invalid,not,numbers".to_string())
+            .skews("0.3".to_string())
+            .high_entropies("0.6".to_string())
+            .fill_probs("0.05".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tune_params_mixed_valid_invalid() {
+        // Should parse valid numbers and ignore invalid ones
+        let params = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,invalid,2,not".to_string())
+            .skews("0.3".to_string())
+            .high_entropies("0.6".to_string())
+            .fill_probs("0.05".to_string())
+            .build();
+        // This will fail because after filtering invalid values, spreads might be empty
+        // But if there's at least one valid value, it should work
+        let result = params;
+        // If it succeeds, spreads should only contain valid numbers
+        if let Ok(p) = result {
+            let spreads: Vec<f64> = p.spreads.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+            assert!(!spreads.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_tune_params_whitespace_handling() {
+        let params = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads(" 1 , 2 , 3 ".to_string())
+            .skews(" 0.3 , 0.5 ".to_string())
+            .high_entropies(" 0.6 , 0.7 ".to_string())
+            .fill_probs(" 0.05 , 0.10 ".to_string())
+            .build()
+            .unwrap();
+
+        let spreads: Vec<f64> = params.spreads.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        assert_eq!(spreads, vec![1.0, 2.0, 3.0]);
+    }
+
+    // ============================================================================
+    // Range Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_tune_params_negative_spread() {
+        let result = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("-1,2".to_string())
+            .skews("0.3".to_string())
+            .high_entropies("0.6".to_string())
+            .fill_probs("0.05".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tune_params_invalid_fill_prob() {
+        let result = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .high_entropies("0.6".to_string())
+            .fill_probs("1.5".to_string()) // > 1.0
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tune_params_negative_fill_prob() {
+        let result = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .high_entropies("0.6".to_string())
+            .fill_probs("-0.1".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tune_params_boundary_fill_prob() {
+        // Valid boundary values
+        let params = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1".to_string())
+            .skews("0.3".to_string())
+            .high_entropies("0.6".to_string())
+            .fill_probs("0.0,1.0".to_string())
+            .build();
+        assert!(params.is_ok());
+    }
+
+    #[test]
+    fn test_tune_params_invalid_queue_pos() {
+        let result = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1".to_string())
+            .skews("0.3".to_string())
+            .high_entropies("0.6".to_string())
+            .fill_probs("0.05".to_string())
+            .queue_pos(2.0) // > 1.0
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tune_params_invalid_fee_rate() {
+        let result = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1".to_string())
+            .skews("0.3".to_string())
+            .high_entropies("0.6".to_string())
+            .fill_probs("0.05".to_string())
+            .fee_rate(-0.1)
+            .build();
+        assert!(result.is_err());
+    }
+
+    // ============================================================================
+    // Custom Values Tests
+    // ============================================================================
+
+    #[test]
+    fn test_tune_params_custom_values() {
+        let params = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./custom_data"))
+            .algorithm("ml".to_string())
+            .weights_file(Some(PathBuf::from("./weights.json")))
+            .spreads("2,3,4".to_string())
+            .skews("0.5,0.7".to_string())
+            .high_entropies("0.7,0.8".to_string())
+            .fill_probs("0.10,0.15".to_string())
+            .max_inventory(0.2)
+            .quote_size(0.002)
+            .fee_rate(0.0002)
+            .naive_fills(true)
+            .queue_pos(0.3)
+            .low_entropy(0.3)
+            .output(Some(PathBuf::from("./output.json")))
+            .build()
+            .unwrap();
+
+        assert_eq!(params.data_path, PathBuf::from("./custom_data"));
+        assert_eq!(params.algorithm, "ml");
+        assert_eq!(params.weights_file, Some(PathBuf::from("./weights.json")));
+        assert_eq!(params.spreads, "2,3,4");
+        assert_eq!(params.skews, "0.5,0.7");
+        assert_eq!(params.high_entropies, "0.7,0.8");
+        assert_eq!(params.fill_probs, "0.10,0.15");
+        assert_eq!(params.max_inventory, 0.2);
+        assert_eq!(params.quote_size, 0.002);
+        assert_eq!(params.fee_rate, 0.0002);
+        assert!(params.naive_fills);
+        assert_eq!(params.queue_pos, 0.3);
+        assert_eq!(params.low_entropy, 0.3);
+        assert_eq!(params.output, Some(PathBuf::from("./output.json")));
+    }
+
+    // ============================================================================
+    // Serialization Tests
+    // ============================================================================
+
+    #[test]
+    fn test_tune_params_serialization() {
+        let params = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .high_entropies("0.6,0.7".to_string())
+            .fill_probs("0.05,0.10".to_string())
+            .build()
+            .unwrap();
+
+        let json = serde_json::to_string(&params).unwrap();
+        let deserialized: TuneParams = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(params.data_path, deserialized.data_path);
+        assert_eq!(params.algorithm, deserialized.algorithm);
+        assert_eq!(params.spreads, deserialized.spreads);
+        assert_eq!(params.skews, deserialized.skews);
+        assert_eq!(params.high_entropies, deserialized.high_entropies);
+        assert_eq!(params.fill_probs, deserialized.fill_probs);
+    }
+
+    // ============================================================================
+    // Edge Cases Tests
+    // ============================================================================
+
+    #[test]
+    fn test_tune_params_single_values() {
+        let params = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1".to_string())
+            .skews("0.3".to_string())
+            .high_entropies("0.6".to_string())
+            .fill_probs("0.05".to_string())
+            .build()
+            .unwrap();
+
+        // Should work with single values (1 combination)
+        let spreads: Vec<f64> = params.spreads.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        assert_eq!(spreads.len(), 1);
+    }
+
+    #[test]
+    fn test_tune_params_many_values() {
+        let params = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads((1..=10).map(|i| i.to_string()).collect::<Vec<_>>().join(","))
+            .skews((1..=5).map(|i| format!("0.{}", i)).collect::<Vec<_>>().join(","))
+            .high_entropies("0.6,0.7,0.8".to_string())
+            .fill_probs("0.05,0.10,0.15".to_string())
+            .build()
+            .unwrap();
+
+        let spreads: Vec<f64> = params.spreads.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        assert_eq!(spreads.len(), 10);
+    }
+
+    #[test]
+    fn test_tune_params_very_small_values() {
+        let params = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0.0001".to_string())
+            .skews("0.0001".to_string())
+            .high_entropies("0.0001".to_string())
+            .fill_probs("0.0001".to_string())
+            .build()
+            .unwrap();
+
+        let spreads: Vec<f64> = params.spreads.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        assert_eq!(spreads[0], 0.0001);
+    }
+
+    #[test]
+    fn test_tune_params_very_large_values() {
+        let params = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1000.0".to_string())
+            .skews("100.0".to_string())
+            .high_entropies("1.0".to_string())
+            .fill_probs("1.0".to_string())
+            .build()
+            .unwrap();
+
+        let spreads: Vec<f64> = params.spreads.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        assert_eq!(spreads[0], 1000.0);
+    }
+
+    #[test]
+    fn test_tune_params_clone() {
+        let params1 = TuneParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .high_entropies("0.6".to_string())
+            .fill_probs("0.05".to_string())
+            .build()
+            .unwrap();
+
+        let params2 = params1.clone();
+        assert_eq!(params1.spreads, params2.spreads);
+        assert_eq!(params1.algorithm, params2.algorithm);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

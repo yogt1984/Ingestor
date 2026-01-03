@@ -63,7 +63,7 @@ use ingestor::strategies::{
 };
 use ingestor::commands::{
     BacktestCommands,
-    params::backtest_params::EvaluateParamsBuilder,
+    params::backtest_params::{EvaluateParamsBuilder, TuneParamsBuilder},
 };
 use ingestor::commands::common::{NoOpCallback, ProgressCallback};
 use std::sync::Arc;
@@ -640,7 +640,7 @@ fn main() -> Result<()> {
             show_info(&cli)?;
         }
         Some(Commands::Tune { spreads, skews, high_entropies, fill_probs, output }) => {
-            run_grid_search(&cli, spreads, skews, high_entropies, fill_probs, output.clone())?;
+            run_tune(&cli, spreads, skews, high_entropies, fill_probs, output.clone())?;
         }
         Some(Commands::RegimeSearch { high_spreads, med_spreads, low_spreads, high_skews, med_skews, low_skews, fill_probs, output }) => {
             run_regime_search(&cli, high_spreads, med_spreads, low_spreads, high_skews, med_skews, low_skews, fill_probs, output.clone())?;
@@ -1245,7 +1245,7 @@ struct GridSearchResult {
     avg_trade_pnl: f64,
 }
 
-fn run_grid_search(
+fn run_tune(
     cli: &Cli,
     spreads_str: &str,
     skews_str: &str,
@@ -1253,131 +1253,58 @@ fn run_grid_search(
     fill_probs_str: &str,
     output: Option<PathBuf>,
 ) -> Result<()> {
-    use ingestor::backtest::replay::ParquetReplay;
-    use ingestor::backtest::harness::BacktestEngine;
+    // Build TuneParams from CLI
+    let tune_params = TuneParamsBuilder::new()
+        .data_path(cli.data.clone())
+        .algorithm(cli.algorithm.clone())
+        .weights_file(cli.weights_file.clone())
+        .spreads(spreads_str.to_string())
+        .skews(skews_str.to_string())
+        .high_entropies(high_entropies_str.to_string())
+        .fill_probs(fill_probs_str.to_string())
+        .max_inventory(cli.max_inventory)
+        .quote_size(cli.quote_size)
+        .fee_rate(cli.fee_rate)
+        .naive_fills(cli.naive_fills)
+        .queue_pos(cli.queue_pos)
+        .low_entropy(cli.low_entropy)
+        .output(output.clone())
+        .build()?;
 
-    // Parse algorithm type early to fail fast on invalid algorithm
+    // Parse algorithm type for display
     let (algo_type, algo_name) = parse_algorithm_type(&cli.algorithm)?;
-    let ml_weights = load_ml_weights_if_needed(algo_type, cli.weights_file.as_deref())?;
 
-    let spreads: Vec<f64> = spreads_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
-    let skews: Vec<f64> = skews_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
-    let high_entropies: Vec<f64> = high_entropies_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
-    let fill_probs: Vec<f64> = fill_probs_str.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    // Run grid search using extracted command
+    let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+    let result = BacktestCommands::tune(tune_params.clone(), callback)?;
 
-    let total_combinations = spreads.len() * skews.len() * high_entropies.len() * fill_probs.len();
-
+    // Display results
     println!("═══════════════════════════════════════════════════════");
     println!("           EXTENDED GRID SEARCH                        ");
     println!("═══════════════════════════════════════════════════════");
     println!();
     println!("Algorithm: {} ({})", algo_name, algo_type.as_str());
+    println!("Total combinations tested: {}", result.total_combinations);
+    println!();
+
+    // Parse parameter lists for display
+    let spreads: Vec<f64> = tune_params.spreads.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    let skews: Vec<f64> = tune_params.skews.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    let high_entropies: Vec<f64> = tune_params.high_entropies.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    let fill_probs: Vec<f64> = tune_params.fill_probs.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+
     println!("Parameter Space:");
     println!("  Spreads:          {:?}", spreads);
     println!("  Skews:            {:?}", skews);
     println!("  High Entropies:   {:?}", high_entropies);
     println!("  Fill Probs:       {:?}", fill_probs);
     println!();
-    println!("Total combinations: {}", total_combinations);
-    println!();
 
-    let replay_config = ReplayConfig {
-        data_dir: cli.data.clone(),
-        ..Default::default()
-    };
-
-    let mut all_results: Vec<GridSearchResult> = Vec::new();
-    let mut count = 0;
-
-    for &spread in &spreads {
-        for &skew in &skews {
-            for &high_entropy in &high_entropies {
-                for &fill_prob in &fill_probs {
-                    count += 1;
-
-                    // Reload events (need fresh copy for each run)
-                    let mut replay = ParquetReplay::new(replay_config.clone());
-                    replay.load()?;
-                    let events = replay.into_events();
-
-                    // Create algorithm with grid parameters
-                    let mut params = BacktestAlgorithmParams::new(
-                        Decimal::from_f64_retain(cli.max_inventory).unwrap_or(dec!(0.1)),
-                        Decimal::from_f64_retain(cli.quote_size).unwrap_or(dec!(0.001)),
-                        spread,
-                        skew,
-                    );
-                    if let Some(ref weights) = ml_weights {
-                        params = params.with_ml_weights(weights.clone());
-                    }
-
-                    let algorithm = AlgorithmRegistry::create_for_backtest(algo_type, &params)
-                        .map_err(|e| anyhow::anyhow!("Failed to create algorithm '{}': {}", algo_name, e))?;
-
-                    let config = BacktestConfig {
-                        replay: replay_config.clone(),
-                        mm: MMConfig::default(),
-                        simulator: SimulatorConfig {
-                            fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
-                            ..Default::default()
-                        },
-                        fill_sim: ingestor::backtest::FillSimulatorConfig {
-                            base_fill_probability: fill_prob,
-                            queue_position: cli.queue_pos,
-                            fee_rate: Decimal::from_f64_retain(cli.fee_rate).unwrap_or(dec!(0.0001)),
-                            ..Default::default()
-                        },
-                        verbose: false,
-                        use_realistic_fills: !cli.naive_fills,
-                        ..Default::default()
-                    };
-
-                    let mut engine = BacktestEngine::from_events_with_algorithm(config, events, algorithm);
-                    let results = engine.run()?;
-
-                    let avg_trade_pnl = if results.metrics.num_trades > 0 {
-                        results.metrics.total_return / results.metrics.num_trades as f64
-                    } else {
-                        0.0
-                    };
-
-                    let grid_result = GridSearchResult {
-                        spread,
-                        skew,
-                        high_entropy_threshold: high_entropy,
-                        fill_prob,
-                        sharpe: results.metrics.sharpe_ratio,
-                        total_return: results.metrics.total_return,
-                        max_drawdown: results.metrics.max_drawdown,
-                        num_trades: results.metrics.num_trades,
-                        win_rate: results.metrics.win_rate,
-                        avg_trade_pnl,
-                    };
-
-                    println!(
-                        "[{:>4}/{}] s={:.1} k={:.1} ent={:.1} fp={:.2} => Sharpe={:+.2} Ret={:+.2}% Tr={}",
-                        count, total_combinations,
-                        spread, skew, high_entropy, fill_prob,
-                        grid_result.sharpe,
-                        grid_result.total_return * 100.0,
-                        grid_result.num_trades,
-                    );
-
-                    all_results.push(grid_result);
-                }
-            }
-        }
-    }
-
-    // Sort by Sharpe ratio
-    all_results.sort_by(|a, b| b.sharpe.partial_cmp(&a.sharpe).unwrap_or(std::cmp::Ordering::Equal));
-
-    println!();
     println!("═══════════════════════════════════════════════════════");
     println!("TOP 10 PARAMETER SETS (by Sharpe):");
     println!("═══════════════════════════════════════════════════════");
 
-    for (i, r) in all_results.iter().take(10).enumerate() {
+    for (i, r) in result.all_results.iter().take(10).enumerate() {
         println!(
             "{:>2}. Spread={:.1} Skew={:.1} Entropy={:.1} FillP={:.2}",
             i + 1, r.spread, r.skew, r.high_entropy_threshold, r.fill_prob
@@ -1389,7 +1316,7 @@ fn run_grid_search(
     }
 
     // Best overall
-    if let Some(best) = all_results.first() {
+    if let Some(ref best) = result.best {
         println!();
         println!("═══════════════════════════════════════════════════════");
         println!("RECOMMENDED PARAMETERS:");
@@ -1409,7 +1336,7 @@ fn run_grid_search(
     }
 
     if let Some(ref output_path) = output {
-        let json = serde_json::to_string_pretty(&all_results)?;
+        let json = serde_json::to_string_pretty(&result.all_results)?;
         std::fs::write(output_path, json)?;
         println!();
         println!("Full results saved to: {:?}", output_path);
