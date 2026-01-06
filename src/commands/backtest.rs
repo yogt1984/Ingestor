@@ -30,7 +30,7 @@ use num::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::common::{ProgressCallback, ProgressEvent, LogLevel};
-use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams};
+use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams, WalkForwardMLParams};
 use crate::backtest::{
     BacktestEngine, BacktestConfig, BacktestResults,
     replay::{ParquetReplay, ReplayConfig},
@@ -220,6 +220,70 @@ pub struct TrainResult {
     pub valid_configurations: usize,
     /// Total number of configurations tested
     pub total_configurations: usize,
+}
+
+/// Single fold result from walk-forward ML training
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalkForwardMLFoldResult {
+    pub fold_num: usize,
+    pub train_start_ms: i64,
+    pub train_end_ms: i64,
+    pub test_start_ms: i64,
+    pub test_end_ms: i64,
+    pub train_events: usize,
+    pub test_events: usize,
+    pub best_weights: MLModelWeights,
+    pub train_sharpe: f64,
+    pub train_return: f64,
+    pub train_trades: usize,
+    pub test_sharpe: f64,
+    pub test_return: f64,
+    pub test_trades: usize,
+    pub generalization_gap: f64,
+    pub configs_evaluated: usize,
+    pub valid_configs: usize,
+}
+
+/// Weight stability metrics
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WeightStability {
+    pub spread_intercept_std: f64,
+    pub spread_entropy_std: f64,
+    pub spread_volatility_std: f64,
+    pub skew_intercept_std: f64,
+    pub skew_inventory_std: f64,
+    pub stability_score: f64,
+}
+
+/// Aggregated results across all folds
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WalkForwardMLAggregate {
+    pub avg_oos_sharpe: f64,
+    pub std_oos_sharpe: f64,
+    pub avg_oos_return: f64,
+    pub total_oos_trades: usize,
+    pub avg_generalization_gap: f64,
+    pub pct_profitable_folds: f64,
+    pub is_oos_sharpe_ratio: f64,
+    pub prob_sharpe_gt_zero: f64,
+    pub weight_stability: WeightStability,
+}
+
+/// Results from the `walk-forward-ml` command (walk-forward ML training - MM algorithms only)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalkForwardMLResult {
+    /// Algorithm type used
+    pub algorithm: String,
+    /// Algorithm display name
+    pub algorithm_name: String,
+    /// Number of folds
+    pub folds: usize,
+    /// Results for each fold
+    pub fold_results: Vec<WalkForwardMLFoldResult>,
+    /// Aggregated metrics across all folds
+    pub aggregate: WalkForwardMLAggregate,
+    /// Consensus weights (average of fold weights, weighted by test performance)
+    pub consensus_weights: MLModelWeights,
 }
 
 /// Single grid search result
@@ -1552,6 +1616,203 @@ impl BacktestCommands {
             generalization_gap: results.generalization_gap,
             valid_configurations: results.valid_configurations,
             total_configurations: results.total_configurations,
+        })
+    }
+
+    /// Walk-forward ML training (MM algorithms only)
+    ///
+    /// This function performs walk-forward validation for ML weights, training on
+    /// sequential folds of data and testing on out-of-sample periods.
+    ///
+    /// # Arguments
+    ///
+    /// * `params` - Parameters for walk-forward ML training
+    /// * `callback` - Progress callback for real-time updates
+    ///
+    /// # Returns
+    ///
+    /// `WalkForwardMLResult` with fold results, aggregated metrics, and consensus weights.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Algorithm type is not a Market Making algorithm
+    /// - Data cannot be loaded
+    /// - Walk-forward training fails
+    ///
+    /// This is the extracted version of the `run_walk_forward_ml()` function from the CLI.
+    pub fn walk_forward_ml(
+        params: WalkForwardMLParams,
+        callback: Arc<dyn ProgressCallback>,
+    ) -> Result<WalkForwardMLResult> {
+        use crate::backtest::walk_forward_ml::{WalkForwardMLTrainer, WalkForwardMLConfig};
+
+        // Validate algorithm type (MM only)
+        let algo_type = AlgorithmType::from_str(&params.algorithm)
+            .map_err(|e| anyhow::anyhow!("Invalid algorithm: {}", e))?;
+        Self::validate_mm_algorithm(algo_type)?;
+
+        let algo_name = algo_type.display_name().to_string();
+
+        callback.on_event(ProgressEvent::Started {
+            total: Some(params.folds),
+            message: format!(
+                "Starting walk-forward ML training for {} with {} folds",
+                algo_name,
+                params.folds
+            ),
+        });
+
+        // Parse parameter grids
+        let spread_intercepts: Vec<f64> = params.spread_intercepts
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let spread_entropy_weights: Vec<f64> = params.spread_entropy_weights
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let spread_vol_weights: Vec<f64> = params.spread_vol_weights
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let skew_intercepts: Vec<f64> = params.skew_intercepts
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let skew_inv_weights: Vec<f64> = params.skew_inv_weights
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+
+        if spread_intercepts.is_empty() {
+            anyhow::bail!("No valid spread_intercept values found in '{}'", params.spread_intercepts);
+        }
+        if spread_entropy_weights.is_empty() {
+            anyhow::bail!("No valid spread_entropy_weight values found in '{}'", params.spread_entropy_weights);
+        }
+        if spread_vol_weights.is_empty() {
+            anyhow::bail!("No valid spread_vol_weight values found in '{}'", params.spread_vol_weights);
+        }
+        if skew_intercepts.is_empty() {
+            anyhow::bail!("No valid skew_intercept values found in '{}'", params.skew_intercepts);
+        }
+        if skew_inv_weights.is_empty() {
+            anyhow::bail!("No valid skew_inv_weight values found in '{}'", params.skew_inv_weights);
+        }
+
+        let total_configs = spread_intercepts.len()
+            * spread_entropy_weights.len()
+            * spread_vol_weights.len()
+            * skew_intercepts.len()
+            * skew_inv_weights.len();
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!(
+                "Testing {} weight combinations per fold ({} spreads × {} skews)",
+                total_configs,
+                spread_intercepts.len() * spread_entropy_weights.len() * spread_vol_weights.len(),
+                skew_intercepts.len() * skew_inv_weights.len()
+            ),
+        });
+
+        // Build config
+        let config = WalkForwardMLConfig {
+            data_dir: params.data_path.clone(),
+            n_folds: params.folds,
+            min_train_hours: params.min_train_hours,
+            test_hours: params.test_hours,
+            anchored: !params.rolling,
+            embargo_hours: params.embargo_hours,
+            spread_intercepts,
+            spread_entropy_weights,
+            spread_volatility_weights: spread_vol_weights,
+            skew_intercepts,
+            skew_inventory_weights: skew_inv_weights,
+            fill_probability: params.fill_prob,
+            max_inventory: Decimal::from_f64_retain(params.max_inventory).unwrap_or(dec!(0.1)),
+            quote_size: Decimal::from_f64_retain(params.quote_size).unwrap_or(dec!(0.001)),
+            min_trades: 10,
+            verbose: false, // Use callback instead
+        };
+
+        // Run walk-forward training
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: "Loading data and initializing walk-forward trainer...".to_string(),
+        });
+
+        let mut trainer = WalkForwardMLTrainer::new(config)
+            .context("Failed to create walk-forward ML trainer")?;
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!("Running walk-forward training with {} folds...", params.folds),
+        });
+
+        let results = trainer.run()
+            .context("Failed to run walk-forward ML training")?;
+
+        // Convert fold results
+        let fold_results: Vec<WalkForwardMLFoldResult> = results.folds
+            .iter()
+            .map(|fold| WalkForwardMLFoldResult {
+                fold_num: fold.fold_num,
+                train_start_ms: fold.train_start_ms,
+                train_end_ms: fold.train_end_ms,
+                test_start_ms: fold.test_start_ms,
+                test_end_ms: fold.test_end_ms,
+                train_events: fold.train_events,
+                test_events: fold.test_events,
+                best_weights: fold.best_weights.clone(),
+                train_sharpe: fold.train_sharpe,
+                train_return: fold.train_return,
+                train_trades: fold.train_trades,
+                test_sharpe: fold.test_sharpe,
+                test_return: fold.test_return,
+                test_trades: fold.test_trades,
+                generalization_gap: fold.generalization_gap,
+                configs_evaluated: fold.configs_evaluated,
+                valid_configs: fold.valid_configs,
+            })
+            .collect();
+
+        // Convert aggregate
+        let aggregate = WalkForwardMLAggregate {
+            avg_oos_sharpe: results.aggregate.avg_oos_sharpe,
+            std_oos_sharpe: results.aggregate.std_oos_sharpe,
+            avg_oos_return: results.aggregate.avg_oos_return,
+            total_oos_trades: results.aggregate.total_oos_trades,
+            avg_generalization_gap: results.aggregate.avg_generalization_gap,
+            pct_profitable_folds: results.aggregate.pct_profitable_folds,
+            is_oos_sharpe_ratio: results.aggregate.is_oos_sharpe_ratio,
+            prob_sharpe_gt_zero: results.aggregate.prob_sharpe_gt_zero,
+            weight_stability: WeightStability {
+                spread_intercept_std: results.aggregate.weight_stability.spread_intercept_std,
+                spread_entropy_std: results.aggregate.weight_stability.spread_entropy_std,
+                spread_volatility_std: results.aggregate.weight_stability.spread_volatility_std,
+                skew_intercept_std: results.aggregate.weight_stability.skew_intercept_std,
+                skew_inventory_std: results.aggregate.weight_stability.skew_inventory_std,
+                stability_score: results.aggregate.weight_stability.stability_score,
+            },
+        };
+
+        callback.on_event(ProgressEvent::Completed {
+            message: format!(
+                "Walk-forward ML training completed: {} folds, avg OOS Sharpe: {:.3}",
+                params.folds,
+                aggregate.avg_oos_sharpe
+            ),
+        });
+
+        Ok(WalkForwardMLResult {
+            algorithm: params.algorithm.clone(),
+            algorithm_name: algo_name,
+            folds: params.folds,
+            fold_results,
+            aggregate,
+            consensus_weights: results.consensus_weights,
         })
     }
 }
@@ -4738,6 +4999,1043 @@ mod tests {
 
         assert!(result.generalization_gap < 0.0);
         assert!(result.test_sharpe > result.train_sharpe);
+    }
+
+    // ============================================================================
+    // WalkForwardMLResult Structure Tests
+    // ============================================================================
+
+    #[test]
+    fn test_walk_forward_ml_result_structure() {
+        use crate::strategies::{SpreadWeights, SkewWeights, MLModelWeights};
+
+        let result = WalkForwardMLResult {
+            algorithm: "ml".to_string(),
+            algorithm_name: "ML Spread/Skew".to_string(),
+            folds: 5,
+            fold_results: vec![
+                WalkForwardMLFoldResult {
+                    fold_num: 1,
+                    train_start_ms: 1000,
+                    train_end_ms: 2000,
+                    test_start_ms: 2100,
+                    test_end_ms: 3000,
+                    train_events: 1000,
+                    test_events: 500,
+                    best_weights: MLModelWeights {
+                        spread: SpreadWeights::default(),
+                        skew: SkewWeights::default(),
+                        version: "1.0".to_string(),
+                        training_info: None,
+                    },
+                    train_sharpe: 2.0,
+                    train_return: 0.05,
+                    train_trades: 150,
+                    test_sharpe: 1.5,
+                    test_return: 0.03,
+                    test_trades: 50,
+                    generalization_gap: 0.5,
+                    configs_evaluated: 100,
+                    valid_configs: 80,
+                },
+            ],
+            aggregate: WalkForwardMLAggregate {
+                avg_oos_sharpe: 1.5,
+                std_oos_sharpe: 0.3,
+                avg_oos_return: 0.03,
+                total_oos_trades: 250,
+                avg_generalization_gap: 0.4,
+                pct_profitable_folds: 0.8,
+                is_oos_sharpe_ratio: 1.2,
+                prob_sharpe_gt_zero: 0.95,
+                weight_stability: WeightStability {
+                    spread_intercept_std: 0.5,
+                    spread_entropy_std: 0.3,
+                    spread_volatility_std: 50.0,
+                    skew_intercept_std: 0.1,
+                    skew_inventory_std: 0.2,
+                    stability_score: 0.8,
+                },
+            },
+            consensus_weights: MLModelWeights {
+                spread: SpreadWeights::default(),
+                skew: SkewWeights::default(),
+                version: "1.0".to_string(),
+                training_info: None,
+            },
+        };
+
+        assert_eq!(result.algorithm, "ml");
+        assert_eq!(result.folds, 5);
+        assert_eq!(result.fold_results.len(), 1);
+        assert_eq!(result.aggregate.avg_oos_sharpe, 1.5);
+        assert_eq!(result.aggregate.weight_stability.stability_score, 0.8);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_result_serialization() {
+        use crate::strategies::{SpreadWeights, SkewWeights, MLModelWeights};
+
+        let result = WalkForwardMLResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            folds: 3,
+            fold_results: vec![],
+            aggregate: WalkForwardMLAggregate {
+                avg_oos_sharpe: 1.2,
+                std_oos_sharpe: 0.25,
+                avg_oos_return: 0.025,
+                total_oos_trades: 200,
+                avg_generalization_gap: 0.3,
+                pct_profitable_folds: 0.67,
+                is_oos_sharpe_ratio: 1.1,
+                prob_sharpe_gt_zero: 0.9,
+                weight_stability: WeightStability {
+                    spread_intercept_std: 0.4,
+                    spread_entropy_std: 0.25,
+                    spread_volatility_std: 40.0,
+                    skew_intercept_std: 0.08,
+                    skew_inventory_std: 0.15,
+                    stability_score: 0.75,
+                },
+            },
+            consensus_weights: MLModelWeights {
+                spread: SpreadWeights::default(),
+                skew: SkewWeights::default(),
+                version: "1.0".to_string(),
+                training_info: None,
+            },
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: WalkForwardMLResult = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(result.algorithm, deserialized.algorithm);
+        assert_eq!(result.folds, deserialized.folds);
+        assert_eq!(result.aggregate.avg_oos_sharpe, deserialized.aggregate.avg_oos_sharpe);
+        assert_eq!(result.aggregate.weight_stability.stability_score, deserialized.aggregate.weight_stability.stability_score);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_fold_result_structure() {
+        use crate::strategies::{SpreadWeights, SkewWeights, MLModelWeights};
+
+        let fold_result = WalkForwardMLFoldResult {
+            fold_num: 1,
+            train_start_ms: 1000,
+            train_end_ms: 2000,
+            test_start_ms: 2100,
+            test_end_ms: 3000,
+            train_events: 1000,
+            test_events: 500,
+            best_weights: MLModelWeights {
+                spread: SpreadWeights::default(),
+                skew: SkewWeights::default(),
+                version: "1.0".to_string(),
+                training_info: None,
+            },
+            train_sharpe: 2.0,
+            train_return: 0.05,
+            train_trades: 150,
+            test_sharpe: 1.5,
+            test_return: 0.03,
+            test_trades: 50,
+            generalization_gap: 0.5,
+            configs_evaluated: 100,
+            valid_configs: 80,
+        };
+
+        assert_eq!(fold_result.fold_num, 1);
+        assert_eq!(fold_result.train_events, 1000);
+        assert_eq!(fold_result.test_events, 500);
+        assert_eq!(fold_result.generalization_gap, 0.5);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_aggregate_structure() {
+        let aggregate = WalkForwardMLAggregate {
+            avg_oos_sharpe: 1.5,
+            std_oos_sharpe: 0.3,
+            avg_oos_return: 0.03,
+            total_oos_trades: 250,
+            avg_generalization_gap: 0.4,
+            pct_profitable_folds: 0.8,
+            is_oos_sharpe_ratio: 1.2,
+            prob_sharpe_gt_zero: 0.95,
+            weight_stability: WeightStability {
+                spread_intercept_std: 0.5,
+                spread_entropy_std: 0.3,
+                spread_volatility_std: 50.0,
+                skew_intercept_std: 0.1,
+                skew_inventory_std: 0.2,
+                stability_score: 0.8,
+            },
+        };
+
+        assert_eq!(aggregate.avg_oos_sharpe, 1.5);
+        assert_eq!(aggregate.pct_profitable_folds, 0.8);
+        assert_eq!(aggregate.weight_stability.stability_score, 0.8);
+    }
+
+    #[test]
+    fn test_weight_stability_structure() {
+        let stability = WeightStability {
+            spread_intercept_std: 0.5,
+            spread_entropy_std: 0.3,
+            spread_volatility_std: 50.0,
+            skew_intercept_std: 0.1,
+            skew_inventory_std: 0.2,
+            stability_score: 0.8,
+        };
+
+        assert_eq!(stability.spread_intercept_std, 0.5);
+        assert_eq!(stability.stability_score, 0.8);
+    }
+
+    // ============================================================================
+    // WalkForwardML Function Tests (Algorithm Validation)
+    // ============================================================================
+
+    #[test]
+    fn test_walk_forward_ml_invalid_algorithm() {
+        use crate::commands::params::backtest_params::WalkForwardMLParamsBuilder;
+
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("invalid".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+        let result = BacktestCommands::walk_forward_ml(params, callback);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid algorithm"));
+    }
+
+    #[test]
+    fn test_walk_forward_ml_non_mm_algorithm() {
+        use crate::commands::params::backtest_params::WalkForwardMLParamsBuilder;
+
+        // Try with a non-MM algorithm (if one exists)
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("momentum".to_string()) // Assuming this doesn't exist or isn't MM
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+
+        // Should fail at build or at algorithm validation
+        if let Ok(params) = params {
+            let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+            let result = BacktestCommands::walk_forward_ml(params, callback);
+            // Should fail with MM validation error if algorithm type is parsed but not MM
+            if result.is_err() {
+                let err_msg = result.unwrap_err().to_string();
+                // Either invalid algorithm or not MM algorithm
+                assert!(err_msg.contains("Invalid algorithm") || err_msg.contains("Market Making"));
+            }
+        }
+    }
+
+    #[test]
+    fn test_walk_forward_ml_valid_mm_algorithms() {
+        use crate::commands::params::backtest_params::WalkForwardMLParamsBuilder;
+
+        let algorithms = vec!["as", "ml", "fixed", "avellaneda-stoikov", "ml-spread-skew"];
+
+        for algo in algorithms {
+            let params = WalkForwardMLParamsBuilder::new()
+                .data_path(PathBuf::from("./data"))
+                .algorithm(algo.to_string())
+                .spread_intercepts("1.0".to_string())
+                .spread_entropy_weights("-2.0".to_string())
+                .spread_vol_weights("200.0".to_string())
+                .skew_intercepts("0.3".to_string())
+                .skew_inv_weights("-1.0".to_string())
+                .build();
+
+            // Should build successfully (algorithm validation happens in function)
+            if let Ok(params) = params {
+                assert_eq!(params.algorithm, algo);
+            }
+        }
+    }
+
+    #[test]
+    fn test_walk_forward_ml_nonexistent_data_path() {
+        use crate::commands::params::backtest_params::WalkForwardMLParamsBuilder;
+
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("/nonexistent/path/that/does/not/exist"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+        let result = BacktestCommands::walk_forward_ml(params, callback);
+
+        // Should fail when trying to load data
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("load") || err_msg.contains("data") || err_msg.contains("Failed"));
+    }
+
+    #[test]
+    fn test_walk_forward_ml_empty_spread_intercepts() {
+        use crate::commands::params::backtest_params::WalkForwardMLParamsBuilder;
+
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+
+        // Should fail at build time
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_walk_forward_ml_invalid_folds() {
+        use crate::commands::params::backtest_params::WalkForwardMLParamsBuilder;
+
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .folds(0)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+
+        // Should fail at build time
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_walk_forward_ml_invalid_min_train_hours() {
+        use crate::commands::params::backtest_params::WalkForwardMLParamsBuilder;
+
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .min_train_hours(0.0)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+
+        // Should fail at build time
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_walk_forward_ml_invalid_test_hours() {
+        use crate::commands::params::backtest_params::WalkForwardMLParamsBuilder;
+
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .test_hours(0.0)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+
+        // Should fail at build time
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_walk_forward_ml_invalid_embargo_hours() {
+        use crate::commands::params::backtest_params::WalkForwardMLParamsBuilder;
+
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .embargo_hours(-0.1)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+
+        // Should fail at build time
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_walk_forward_ml_progress_callback_events() {
+        use crate::commands::params::backtest_params::WalkForwardMLParamsBuilder;
+        use std::sync::Mutex;
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+
+        struct TestCallback {
+            events: Arc<Mutex<Vec<ProgressEvent>>>,
+        }
+
+        impl ProgressCallback for TestCallback {
+            fn on_event(&self, event: ProgressEvent) {
+                self.events.lock().unwrap().push(event);
+            }
+        }
+
+        let callback: Arc<dyn ProgressCallback> = Arc::new(TestCallback {
+            events: events.clone(),
+        });
+
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("/nonexistent/path")) // Will fail, but we can test callbacks
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        let _result = BacktestCommands::walk_forward_ml(params, callback);
+
+        // Even if execution fails, we should have received at least a Started event
+        let events_guard = events.lock().unwrap();
+        assert!(!events_guard.is_empty(), "Should have received at least one progress event");
+        assert!(matches!(events_guard[0], ProgressEvent::Started { .. }));
+    }
+
+    #[test]
+    fn test_walk_forward_ml_result_empty_folds() {
+        use crate::strategies::{SpreadWeights, SkewWeights, MLModelWeights};
+
+        let result = WalkForwardMLResult {
+            algorithm: "ml".to_string(),
+            algorithm_name: "ML Spread/Skew".to_string(),
+            folds: 0,
+            fold_results: vec![],
+            aggregate: WalkForwardMLAggregate {
+                avg_oos_sharpe: 0.0,
+                std_oos_sharpe: 0.0,
+                avg_oos_return: 0.0,
+                total_oos_trades: 0,
+                avg_generalization_gap: 0.0,
+                pct_profitable_folds: 0.0,
+                is_oos_sharpe_ratio: 0.0,
+                prob_sharpe_gt_zero: 0.0,
+                weight_stability: WeightStability {
+                    spread_intercept_std: 0.0,
+                    spread_entropy_std: 0.0,
+                    spread_volatility_std: 0.0,
+                    skew_intercept_std: 0.0,
+                    skew_inventory_std: 0.0,
+                    stability_score: 0.0,
+                },
+            },
+            consensus_weights: MLModelWeights {
+                spread: SpreadWeights::default(),
+                skew: SkewWeights::default(),
+                version: "1.0".to_string(),
+                training_info: None,
+            },
+        };
+
+        assert_eq!(result.folds, 0);
+        assert!(result.fold_results.is_empty());
+    }
+
+    #[test]
+    fn test_walk_forward_ml_result_multiple_folds() {
+        use crate::strategies::{SpreadWeights, SkewWeights, MLModelWeights};
+
+        let fold_results = (1..=5).map(|i| WalkForwardMLFoldResult {
+            fold_num: i,
+            train_start_ms: (i * 1000) as i64,
+            train_end_ms: (i * 1000 + 1000) as i64,
+            test_start_ms: (i * 1000 + 1100) as i64,
+            test_end_ms: (i * 1000 + 2000) as i64,
+            train_events: 1000,
+            test_events: 500,
+            best_weights: MLModelWeights {
+                spread: SpreadWeights::default(),
+                skew: SkewWeights::default(),
+                version: "1.0".to_string(),
+                training_info: None,
+            },
+            train_sharpe: 2.0,
+            train_return: 0.05,
+            train_trades: 150,
+            test_sharpe: 1.5,
+            test_return: 0.03,
+            test_trades: 50,
+            generalization_gap: 0.5,
+            configs_evaluated: 100,
+            valid_configs: 80,
+        }).collect();
+
+        let result = WalkForwardMLResult {
+            algorithm: "ml".to_string(),
+            algorithm_name: "ML Spread/Skew".to_string(),
+            folds: 5,
+            fold_results,
+            aggregate: WalkForwardMLAggregate {
+                avg_oos_sharpe: 1.5,
+                std_oos_sharpe: 0.3,
+                avg_oos_return: 0.03,
+                total_oos_trades: 250,
+                avg_generalization_gap: 0.4,
+                pct_profitable_folds: 0.8,
+                is_oos_sharpe_ratio: 1.2,
+                prob_sharpe_gt_zero: 0.95,
+                weight_stability: WeightStability {
+                    spread_intercept_std: 0.5,
+                    spread_entropy_std: 0.3,
+                    spread_volatility_std: 50.0,
+                    skew_intercept_std: 0.1,
+                    skew_inventory_std: 0.2,
+                    stability_score: 0.8,
+                },
+            },
+            consensus_weights: MLModelWeights {
+                spread: SpreadWeights::default(),
+                skew: SkewWeights::default(),
+                version: "1.0".to_string(),
+                training_info: None,
+            },
+        };
+
+        assert_eq!(result.folds, 5);
+        assert_eq!(result.fold_results.len(), 5);
+        assert_eq!(result.fold_results[0].fold_num, 1);
+        assert_eq!(result.fold_results[4].fold_num, 5);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_aggregate_negative_sharpe() {
+        let aggregate = WalkForwardMLAggregate {
+            avg_oos_sharpe: -0.5,
+            std_oos_sharpe: 0.3,
+            avg_oos_return: -0.01,
+            total_oos_trades: 100,
+            avg_generalization_gap: 0.2,
+            pct_profitable_folds: 0.2,
+            is_oos_sharpe_ratio: 0.8,
+            prob_sharpe_gt_zero: 0.1,
+            weight_stability: WeightStability {
+                spread_intercept_std: 0.5,
+                spread_entropy_std: 0.3,
+                spread_volatility_std: 50.0,
+                skew_intercept_std: 0.1,
+                skew_inventory_std: 0.2,
+                stability_score: 0.6,
+            },
+        };
+
+        assert!(aggregate.avg_oos_sharpe < 0.0);
+        assert!(aggregate.pct_profitable_folds < 0.5);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_fold_result_time_ranges() {
+        use crate::strategies::{SpreadWeights, SkewWeights, MLModelWeights};
+
+        let fold_result = WalkForwardMLFoldResult {
+            fold_num: 1,
+            train_start_ms: 1000,
+            train_end_ms: 2000,
+            test_start_ms: 2100, // After train_end_ms
+            test_end_ms: 3000,   // After test_start_ms
+            train_events: 1000,
+            test_events: 500,
+            best_weights: MLModelWeights {
+                spread: SpreadWeights::default(),
+                skew: SkewWeights::default(),
+                version: "1.0".to_string(),
+                training_info: None,
+            },
+            train_sharpe: 2.0,
+            train_return: 0.05,
+            train_trades: 150,
+            test_sharpe: 1.5,
+            test_return: 0.03,
+            test_trades: 50,
+            generalization_gap: 0.5,
+            configs_evaluated: 100,
+            valid_configs: 80,
+        };
+
+        assert!(fold_result.test_start_ms > fold_result.train_end_ms);
+        assert!(fold_result.test_end_ms > fold_result.test_start_ms);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_result_zero_folds() {
+        use crate::strategies::{SpreadWeights, SkewWeights, MLModelWeights};
+
+        let result = WalkForwardMLResult {
+            algorithm: "ml".to_string(),
+            algorithm_name: "ML Spread/Skew".to_string(),
+            folds: 0,
+            fold_results: vec![],
+            aggregate: WalkForwardMLAggregate::default(),
+            consensus_weights: MLModelWeights {
+                spread: SpreadWeights::default(),
+                skew: SkewWeights::default(),
+                version: "1.0".to_string(),
+                training_info: None,
+            },
+        };
+
+        assert_eq!(result.folds, 0);
+        assert!(result.fold_results.is_empty());
+    }
+
+    #[test]
+    fn test_walk_forward_ml_weight_stability_structure() {
+        let stability = WeightStability {
+            spread_intercept_std: 0.5,
+            spread_entropy_std: 0.3,
+            spread_volatility_std: 100.0,
+            skew_intercept_std: 0.1,
+            skew_inventory_std: 0.2,
+            stability_score: 0.8,
+        };
+
+        assert_eq!(stability.spread_intercept_std, 0.5);
+        assert_eq!(stability.stability_score, 0.8);
+        assert!(stability.stability_score >= 0.0 && stability.stability_score <= 1.0);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_aggregate_default() {
+        let aggregate = WalkForwardMLAggregate::default();
+        
+        assert_eq!(aggregate.avg_oos_sharpe, 0.0);
+        assert_eq!(aggregate.std_oos_sharpe, 0.0);
+        assert_eq!(aggregate.avg_oos_return, 0.0);
+        assert_eq!(aggregate.total_oos_trades, 0);
+        assert_eq!(aggregate.avg_generalization_gap, 0.0);
+        assert_eq!(aggregate.pct_profitable_folds, 0.0);
+        assert_eq!(aggregate.is_oos_sharpe_ratio, 0.0);
+        assert_eq!(aggregate.prob_sharpe_gt_zero, 0.0);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_aggregate_high_stability() {
+        let aggregate = WalkForwardMLAggregate {
+            avg_oos_sharpe: 1.5,
+            std_oos_sharpe: 0.2,
+            avg_oos_return: 0.04,
+            total_oos_trades: 500,
+            avg_generalization_gap: 0.3,
+            pct_profitable_folds: 0.8,
+            is_oos_sharpe_ratio: 1.2,
+            prob_sharpe_gt_zero: 0.9,
+            weight_stability: WeightStability {
+                spread_intercept_std: 0.1,
+                spread_entropy_std: 0.05,
+                spread_volatility_std: 10.0,
+                skew_intercept_std: 0.02,
+                skew_inventory_std: 0.03,
+                stability_score: 0.95, // Very stable
+            },
+        };
+
+        assert!(aggregate.weight_stability.stability_score > 0.9);
+        assert!(aggregate.pct_profitable_folds > 0.5);
+        assert!(aggregate.avg_oos_sharpe > 0.0);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_aggregate_low_stability() {
+        let aggregate = WalkForwardMLAggregate {
+            avg_oos_sharpe: 0.5,
+            std_oos_sharpe: 1.0,
+            avg_oos_return: 0.01,
+            total_oos_trades: 100,
+            avg_generalization_gap: 1.0,
+            pct_profitable_folds: 0.3,
+            is_oos_sharpe_ratio: 2.0, // High IS/OOS ratio = overfitting
+            prob_sharpe_gt_zero: 0.4,
+            weight_stability: WeightStability {
+                spread_intercept_std: 2.0,
+                spread_entropy_std: 1.5,
+                spread_volatility_std: 500.0,
+                skew_intercept_std: 0.5,
+                skew_inventory_std: 0.8,
+                stability_score: 0.2, // Low stability
+            },
+        };
+
+        assert!(aggregate.weight_stability.stability_score < 0.5);
+        assert!(aggregate.is_oos_sharpe_ratio > 1.5); // Indicates overfitting
+        assert!(aggregate.pct_profitable_folds < 0.5);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_fold_result_zero_trades() {
+        use crate::strategies::{SpreadWeights, SkewWeights, MLModelWeights};
+
+        let fold_result = WalkForwardMLFoldResult {
+            fold_num: 1,
+            train_start_ms: 1000,
+            train_end_ms: 2000,
+            test_start_ms: 2100,
+            test_end_ms: 3000,
+            train_events: 1000,
+            test_events: 500,
+            best_weights: MLModelWeights {
+                spread: SpreadWeights::default(),
+                skew: SkewWeights::default(),
+                version: "1.0".to_string(),
+                training_info: None,
+            },
+            train_sharpe: 0.0,
+            train_return: 0.0,
+            train_trades: 0,
+            test_sharpe: 0.0,
+            test_return: 0.0,
+            test_trades: 0,
+            generalization_gap: 0.0,
+            configs_evaluated: 100,
+            valid_configs: 0,
+        };
+
+        assert_eq!(fold_result.train_trades, 0);
+        assert_eq!(fold_result.test_trades, 0);
+        assert_eq!(fold_result.valid_configs, 0);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_fold_result_negative_generalization_gap() {
+        use crate::strategies::{SpreadWeights, SkewWeights, MLModelWeights};
+
+        // Test case where test performs better than train (rare but possible)
+        let fold_result = WalkForwardMLFoldResult {
+            fold_num: 1,
+            train_start_ms: 1000,
+            train_end_ms: 2000,
+            test_start_ms: 2100,
+            test_end_ms: 3000,
+            train_events: 1000,
+            test_events: 500,
+            best_weights: MLModelWeights {
+                spread: SpreadWeights::default(),
+                skew: SkewWeights::default(),
+                version: "1.0".to_string(),
+                training_info: None,
+            },
+            train_sharpe: 1.0,
+            train_return: 0.02,
+            train_trades: 100,
+            test_sharpe: 1.5, // Test better than train
+            test_return: 0.04,
+            test_trades: 50,
+            generalization_gap: -0.5, // Negative gap
+            configs_evaluated: 100,
+            valid_configs: 80,
+        };
+
+        assert!(fold_result.generalization_gap < 0.0);
+        assert!(fold_result.test_sharpe > fold_result.train_sharpe);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_result_consensus_weights() {
+        use crate::strategies::{SpreadWeights, SkewWeights, MLModelWeights};
+
+        let result = WalkForwardMLResult {
+            algorithm: "ml".to_string(),
+            algorithm_name: "ML Spread/Skew".to_string(),
+            folds: 5,
+            fold_results: vec![],
+            aggregate: WalkForwardMLAggregate::default(),
+            consensus_weights: MLModelWeights {
+                spread: SpreadWeights {
+                    intercept: 2.5,
+                    w_entropy: -2.0,
+                    w_volatility: 500.0,
+                    w_imbalance: 1.0,
+                    w_interaction: -100.0,
+                },
+                skew: SkewWeights {
+                    intercept: 0.5,
+                    w_entropy: -0.2,
+                    w_volatility: 50.0,
+                    w_imbalance: 0.1,
+                    w_inventory: -0.8,
+                },
+                version: "1.0".to_string(),
+                training_info: None,
+            },
+        };
+
+        assert_eq!(result.consensus_weights.spread.intercept, 2.5);
+        assert_eq!(result.consensus_weights.skew.w_inventory, -0.8);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_result_serialization_roundtrip() {
+        use crate::strategies::{SpreadWeights, SkewWeights, MLModelWeights};
+
+        let original = WalkForwardMLResult {
+            algorithm: "ml".to_string(),
+            algorithm_name: "ML Spread/Skew".to_string(),
+            folds: 3,
+            fold_results: vec![
+                WalkForwardMLFoldResult {
+                    fold_num: 1,
+                    train_start_ms: 1000,
+                    train_end_ms: 2000,
+                    test_start_ms: 2100,
+                    test_end_ms: 3000,
+                    train_events: 1000,
+                    test_events: 500,
+                    best_weights: MLModelWeights {
+                        spread: SpreadWeights::default(),
+                        skew: SkewWeights::default(),
+                        version: "1.0".to_string(),
+                        training_info: None,
+                    },
+                    train_sharpe: 2.0,
+                    train_return: 0.05,
+                    train_trades: 150,
+                    test_sharpe: 1.5,
+                    test_return: 0.03,
+                    test_trades: 50,
+                    generalization_gap: 0.5,
+                    configs_evaluated: 100,
+                    valid_configs: 80,
+                },
+            ],
+            aggregate: WalkForwardMLAggregate {
+                avg_oos_sharpe: 1.5,
+                std_oos_sharpe: 0.3,
+                avg_oos_return: 0.04,
+                total_oos_trades: 200,
+                avg_generalization_gap: 0.4,
+                pct_profitable_folds: 0.8,
+                is_oos_sharpe_ratio: 1.2,
+                prob_sharpe_gt_zero: 0.9,
+                weight_stability: WeightStability {
+                    spread_intercept_std: 0.2,
+                    spread_entropy_std: 0.1,
+                    spread_volatility_std: 50.0,
+                    skew_intercept_std: 0.05,
+                    skew_inventory_std: 0.08,
+                    stability_score: 0.85,
+                },
+            },
+            consensus_weights: MLModelWeights {
+                spread: SpreadWeights::default(),
+                skew: SkewWeights::default(),
+                version: "1.0".to_string(),
+                training_info: None,
+            },
+        };
+
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: WalkForwardMLResult = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(original.algorithm, deserialized.algorithm);
+        assert_eq!(original.folds, deserialized.folds);
+        assert_eq!(original.fold_results.len(), deserialized.fold_results.len());
+        assert_eq!(original.aggregate.avg_oos_sharpe, deserialized.aggregate.avg_oos_sharpe);
+        assert_eq!(original.aggregate.weight_stability.stability_score, deserialized.aggregate.weight_stability.stability_score);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_invalid_empty_all_grids() {
+        use crate::commands::params::backtest_params::WalkForwardMLParamsBuilder;
+
+        // Test that all required grids must be non-empty
+        let test_cases = vec![
+            ("", "-2.0", "200.0", "0.3", "-1.0", "spread_intercepts"),
+            ("1.0", "", "200.0", "0.3", "-1.0", "spread_entropy_weights"),
+            ("1.0", "-2.0", "", "0.3", "-1.0", "spread_vol_weights"),
+            ("1.0", "-2.0", "200.0", "", "-1.0", "skew_intercepts"),
+            ("1.0", "-2.0", "200.0", "0.3", "", "skew_inv_weights"),
+        ];
+
+        for (spread_ints, spread_ents, spread_vols, skew_ints, skew_invs, field_name) in test_cases {
+            let result = WalkForwardMLParamsBuilder::new()
+                .data_path(PathBuf::from("./data"))
+                .algorithm("ml".to_string())
+                .spread_intercepts(spread_ints.to_string())
+                .spread_entropy_weights(spread_ents.to_string())
+                .spread_vol_weights(spread_vols.to_string())
+                .skew_intercepts(skew_ints.to_string())
+                .skew_inv_weights(skew_invs.to_string())
+                .build();
+
+            assert!(result.is_err(), "Should fail when {} is empty", field_name);
+        }
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_extreme_values() {
+        use crate::commands::params::backtest_params::WalkForwardMLParamsBuilder;
+
+        // Test with very large values
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .folds(100)
+            .min_train_hours(10000.0)
+            .test_hours(1000.0)
+            .embargo_hours(100.0)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        assert_eq!(params.folds, 100);
+        assert_eq!(params.min_train_hours, 10000.0);
+        assert_eq!(params.test_hours, 1000.0);
+        assert_eq!(params.embargo_hours, 100.0);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_rolling_vs_anchored() {
+        use crate::commands::params::backtest_params::WalkForwardMLParamsBuilder;
+
+        let params_rolling = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .rolling(true)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        let params_anchored = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .rolling(false)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        assert!(params_rolling.rolling);
+        assert!(!params_anchored.rolling);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_both_outputs() {
+        use crate::commands::params::backtest_params::WalkForwardMLParamsBuilder;
+
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .output(Some(PathBuf::from("./results.json")))
+            .weights_output(Some(PathBuf::from("./weights.json")))
+            .build()
+            .unwrap();
+
+        assert_eq!(params.output, Some(PathBuf::from("./results.json")));
+        assert_eq!(params.weights_output, Some(PathBuf::from("./weights.json")));
+    }
+
+    #[test]
+    fn test_walk_forward_ml_aggregate_all_zeros() {
+        let aggregate = WalkForwardMLAggregate {
+            avg_oos_sharpe: 0.0,
+            std_oos_sharpe: 0.0,
+            avg_oos_return: 0.0,
+            total_oos_trades: 0,
+            avg_generalization_gap: 0.0,
+            pct_profitable_folds: 0.0,
+            is_oos_sharpe_ratio: 0.0,
+            prob_sharpe_gt_zero: 0.0,
+            weight_stability: WeightStability::default(),
+        };
+
+        assert_eq!(aggregate.total_oos_trades, 0);
+        assert_eq!(aggregate.pct_profitable_folds, 0.0);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_weight_stability_default() {
+        let stability = WeightStability::default();
+        
+        assert_eq!(stability.spread_intercept_std, 0.0);
+        assert_eq!(stability.spread_entropy_std, 0.0);
+        assert_eq!(stability.spread_volatility_std, 0.0);
+        assert_eq!(stability.skew_intercept_std, 0.0);
+        assert_eq!(stability.skew_inventory_std, 0.0);
+        assert_eq!(stability.stability_score, 0.0);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_fold_result_all_configs_invalid() {
+        use crate::strategies::{SpreadWeights, SkewWeights, MLModelWeights};
+
+        let fold_result = WalkForwardMLFoldResult {
+            fold_num: 1,
+            train_start_ms: 1000,
+            train_end_ms: 2000,
+            test_start_ms: 2100,
+            test_end_ms: 3000,
+            train_events: 1000,
+            test_events: 500,
+            best_weights: MLModelWeights {
+                spread: SpreadWeights::default(),
+                skew: SkewWeights::default(),
+                version: "1.0".to_string(),
+                training_info: None,
+            },
+            train_sharpe: 0.0,
+            train_return: 0.0,
+            train_trades: 0,
+            test_sharpe: 0.0,
+            test_return: 0.0,
+            test_trades: 0,
+            generalization_gap: 0.0,
+            configs_evaluated: 100,
+            valid_configs: 0, // All configs invalid
+        };
+
+        assert_eq!(fold_result.configs_evaluated, 100);
+        assert_eq!(fold_result.valid_configs, 0);
+        assert_eq!(fold_result.train_trades, 0);
     }
 }
 

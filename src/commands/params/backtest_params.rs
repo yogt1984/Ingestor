@@ -4925,6 +4925,1158 @@ mod train_params_tests {
     }
 }
 
+#[cfg(test)]
+mod walk_forward_ml_params_tests {
+    use super::*;
+
+    // ============================================================================
+    // Builder Defaults Tests
+    // ============================================================================
+
+    #[test]
+    fn test_walk_forward_ml_params_builder_defaults() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0,2.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        assert_eq!(params.folds, 5);
+        assert_eq!(params.min_train_hours, 100.0);
+        assert_eq!(params.test_hours, 24.0);
+        assert!(!params.rolling);
+        assert_eq!(params.embargo_hours, 1.0);
+        assert_eq!(params.max_inventory, 0.1);
+        assert_eq!(params.quote_size, 0.001);
+        assert_eq!(params.fill_prob, 0.10);
+        assert_eq!(params.fee_rate, 0.0001);
+        assert!(!params.naive_fills);
+        assert_eq!(params.queue_pos, 0.5);
+    }
+
+    // ============================================================================
+    // Required Fields Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_walk_forward_ml_params_missing_data_path() {
+        let result = WalkForwardMLParamsBuilder::new()
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("data_path"));
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_missing_algorithm() {
+        let result = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("algorithm"));
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_missing_spread_intercepts() {
+        let result = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("spread_intercepts"));
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_missing_all_required() {
+        let result = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .build();
+        assert!(result.is_err());
+    }
+
+    // ============================================================================
+    // Parameter Parsing Tests
+    // ============================================================================
+
+    #[test]
+    fn test_walk_forward_ml_params_parse_spread_intercepts() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0,2.0,3.0,4.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        let intercepts: Vec<f64> = params.spread_intercepts
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        assert_eq!(intercepts, vec![1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_parse_all_grids() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0,2.0".to_string())
+            .spread_entropy_weights("-3.0,-2.0,-1.0".to_string())
+            .spread_vol_weights("200.0,400.0,600.0".to_string())
+            .skew_intercepts("0.3,0.5,0.7".to_string())
+            .skew_inv_weights("-1.0,-0.8,-0.6".to_string())
+            .build()
+            .unwrap();
+
+        let spread_ints: Vec<f64> = params.spread_intercepts.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        let spread_ents: Vec<f64> = params.spread_entropy_weights.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        let spread_vols: Vec<f64> = params.spread_vol_weights.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        let skew_ints: Vec<f64> = params.skew_intercepts.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        let skew_invs: Vec<f64> = params.skew_inv_weights.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+
+        assert_eq!(spread_ints, vec![1.0, 2.0]);
+        assert_eq!(spread_ents, vec![-3.0, -2.0, -1.0]);
+        assert_eq!(spread_vols, vec![200.0, 400.0, 600.0]);
+        assert_eq!(skew_ints, vec![0.3, 0.5, 0.7]);
+        assert_eq!(skew_invs, vec![-1.0, -0.8, -0.6]);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_parse_with_whitespace() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts(" 1.0 , 2.0 , 3.0 ".to_string())
+            .spread_entropy_weights(" -2.0 , -1.0 ".to_string())
+            .spread_vol_weights(" 200.0 , 400.0 ".to_string())
+            .skew_intercepts(" 0.3 , 0.5 ".to_string())
+            .skew_inv_weights(" -1.0 , -0.8 ".to_string())
+            .build()
+            .unwrap();
+
+        let intercepts: Vec<f64> = params.spread_intercepts
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        assert_eq!(intercepts, vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_empty_spread_intercepts() {
+        let result = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_invalid_spread_intercepts() {
+        let result = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("abc,def".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    // ============================================================================
+    // Range Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_walk_forward_ml_params_folds_validation() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .folds(1)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+        assert_eq!(params.folds, 1);
+
+        let result = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .folds(0)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_min_train_hours_validation() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .min_train_hours(50.0)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+        assert_eq!(params.min_train_hours, 50.0);
+
+        let result = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .min_train_hours(0.0)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_test_hours_validation() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .test_hours(12.0)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+        assert_eq!(params.test_hours, 12.0);
+
+        let result = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .test_hours(0.0)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_embargo_hours_validation() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .embargo_hours(0.0)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+        assert_eq!(params.embargo_hours, 0.0);
+
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .embargo_hours(5.0)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+        assert_eq!(params.embargo_hours, 5.0);
+
+        let result = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .embargo_hours(-0.1)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_rolling_flag() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .rolling(true)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+        assert!(params.rolling);
+
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .rolling(false)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+        assert!(!params.rolling);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_fill_prob_range() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .fill_prob(0.0)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+        assert_eq!(params.fill_prob, 0.0);
+
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .fill_prob(1.0)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+        assert_eq!(params.fill_prob, 1.0);
+
+        let result = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .fill_prob(1.5)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_queue_pos_range() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .queue_pos(0.0)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+        assert_eq!(params.queue_pos, 0.0);
+
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .queue_pos(1.0)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+        assert_eq!(params.queue_pos, 1.0);
+
+        let result = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .queue_pos(1.5)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_fee_rate_validation() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .fee_rate(0.0)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+        assert_eq!(params.fee_rate, 0.0);
+
+        let result = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .fee_rate(-0.1)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_max_inventory_validation() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .max_inventory(0.01)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+        assert_eq!(params.max_inventory, 0.01);
+
+        let result = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .max_inventory(0.0)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_quote_size_validation() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .quote_size(0.0001)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+        assert_eq!(params.quote_size, 0.0001);
+
+        let result = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .quote_size(0.0)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    // ============================================================================
+    // Custom Values Tests
+    // ============================================================================
+
+    #[test]
+    fn test_walk_forward_ml_params_custom_values() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data/custom"))
+            .algorithm("as".to_string())
+            .folds(10)
+            .min_train_hours(200.0)
+            .test_hours(48.0)
+            .rolling(true)
+            .embargo_hours(2.0)
+            .spread_intercepts("1.5,2.5,3.5".to_string())
+            .spread_entropy_weights("-2.5,-1.5".to_string())
+            .spread_vol_weights("300.0,500.0".to_string())
+            .skew_intercepts("0.4,0.6".to_string())
+            .skew_inv_weights("-0.9,-0.7".to_string())
+            .max_inventory(0.2)
+            .quote_size(0.002)
+            .fill_prob(0.15)
+            .fee_rate(0.0002)
+            .naive_fills(true)
+            .queue_pos(0.3)
+            .output(Some(PathBuf::from("./output.json")))
+            .weights_output(Some(PathBuf::from("./weights.json")))
+            .build()
+            .unwrap();
+
+        assert_eq!(params.data_path, PathBuf::from("./data/custom"));
+        assert_eq!(params.algorithm, "as");
+        assert_eq!(params.folds, 10);
+        assert_eq!(params.min_train_hours, 200.0);
+        assert_eq!(params.test_hours, 48.0);
+        assert!(params.rolling);
+        assert_eq!(params.embargo_hours, 2.0);
+        assert_eq!(params.max_inventory, 0.2);
+        assert_eq!(params.quote_size, 0.002);
+        assert_eq!(params.fill_prob, 0.15);
+        assert_eq!(params.fee_rate, 0.0002);
+        assert!(params.naive_fills);
+        assert_eq!(params.queue_pos, 0.3);
+        assert_eq!(params.output, Some(PathBuf::from("./output.json")));
+        assert_eq!(params.weights_output, Some(PathBuf::from("./weights.json")));
+    }
+
+    // ============================================================================
+    // Serialization/Deserialization Tests
+    // ============================================================================
+
+    #[test]
+    fn test_walk_forward_ml_params_serialization() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .folds(5)
+            .min_train_hours(100.0)
+            .test_hours(24.0)
+            .rolling(false)
+            .embargo_hours(1.0)
+            .spread_intercepts("1.0,2.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .fill_prob(0.12)
+            .build()
+            .unwrap();
+
+        let json = serde_json::to_string(&params).unwrap();
+        let deserialized: WalkForwardMLParams = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(params.data_path, deserialized.data_path);
+        assert_eq!(params.algorithm, deserialized.algorithm);
+        assert_eq!(params.folds, deserialized.folds);
+        assert_eq!(params.min_train_hours, deserialized.min_train_hours);
+        assert_eq!(params.test_hours, deserialized.test_hours);
+        assert_eq!(params.rolling, deserialized.rolling);
+        assert_eq!(params.fill_prob, deserialized.fill_prob);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_roundtrip_serialization() {
+        let original = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .folds(10)
+            .min_train_hours(200.0)
+            .test_hours(48.0)
+            .rolling(true)
+            .embargo_hours(2.0)
+            .spread_intercepts("1.5,2.5,3.5".to_string())
+            .spread_entropy_weights("-2.5,-1.5".to_string())
+            .spread_vol_weights("300.0,500.0".to_string())
+            .skew_intercepts("0.4,0.6".to_string())
+            .skew_inv_weights("-0.9,-0.7".to_string())
+            .max_inventory(0.15)
+            .quote_size(0.0015)
+            .fill_prob(0.12)
+            .fee_rate(0.00015)
+            .naive_fills(true)
+            .queue_pos(0.4)
+            .output(Some(PathBuf::from("./results.json")))
+            .weights_output(Some(PathBuf::from("./weights.json")))
+            .build()
+            .unwrap();
+
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: WalkForwardMLParams = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(original.data_path, deserialized.data_path);
+        assert_eq!(original.algorithm, deserialized.algorithm);
+        assert_eq!(original.folds, deserialized.folds);
+        assert_eq!(original.min_train_hours, deserialized.min_train_hours);
+        assert_eq!(original.test_hours, deserialized.test_hours);
+        assert_eq!(original.rolling, deserialized.rolling);
+        assert_eq!(original.embargo_hours, deserialized.embargo_hours);
+        assert_eq!(original.spread_intercepts, deserialized.spread_intercepts);
+        assert_eq!(original.spread_entropy_weights, deserialized.spread_entropy_weights);
+        assert_eq!(original.spread_vol_weights, deserialized.spread_vol_weights);
+        assert_eq!(original.skew_intercepts, deserialized.skew_intercepts);
+        assert_eq!(original.skew_inv_weights, deserialized.skew_inv_weights);
+        assert_eq!(original.max_inventory, deserialized.max_inventory);
+        assert_eq!(original.quote_size, deserialized.quote_size);
+        assert_eq!(original.fill_prob, deserialized.fill_prob);
+        assert_eq!(original.fee_rate, deserialized.fee_rate);
+        assert_eq!(original.naive_fills, deserialized.naive_fills);
+        assert_eq!(original.queue_pos, deserialized.queue_pos);
+        assert_eq!(original.output, deserialized.output);
+        assert_eq!(original.weights_output, deserialized.weights_output);
+    }
+
+    // ============================================================================
+    // Edge Cases Tests
+    // ============================================================================
+
+    #[test]
+    fn test_walk_forward_ml_params_single_value_lists() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("2.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("400.0".to_string())
+            .skew_intercepts("0.5".to_string())
+            .skew_inv_weights("-0.8".to_string())
+            .build()
+            .unwrap();
+
+        let intercepts: Vec<f64> = params.spread_intercepts
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        assert_eq!(intercepts, vec![2.0]);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_large_lists() {
+        let spread_intercepts_str = (1..=50).map(|i| (i as f64).to_string()).collect::<Vec<_>>().join(",");
+        let spread_entropy_weights_str = (-10..=0).map(|i| (i as f64).to_string()).collect::<Vec<_>>().join(",");
+
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts(spread_intercepts_str.clone())
+            .spread_entropy_weights(spread_entropy_weights_str.clone())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        assert_eq!(params.spread_intercepts, spread_intercepts_str);
+        assert_eq!(params.spread_entropy_weights, spread_entropy_weights_str);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_path_handling() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("/absolute/path/to/data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .output(Some(PathBuf::from("/absolute/path/to/output.json")))
+            .weights_output(Some(PathBuf::from("/absolute/path/to/weights.json")))
+            .build()
+            .unwrap();
+
+        assert_eq!(params.data_path, PathBuf::from("/absolute/path/to/data"));
+        assert_eq!(params.output, Some(PathBuf::from("/absolute/path/to/output.json")));
+        assert_eq!(params.weights_output, Some(PathBuf::from("/absolute/path/to/weights.json")));
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_none_outputs() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .output(None)
+            .weights_output(None)
+            .build()
+            .unwrap();
+
+        assert_eq!(params.output, None);
+        assert_eq!(params.weights_output, None);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_negative_weights() {
+        // Negative weights are valid for entropy and inventory weights
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-5.0,-4.0,-3.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-2.0,-1.5,-1.0".to_string())
+            .build()
+            .unwrap();
+
+        let entropy_weights: Vec<f64> = params.spread_entropy_weights
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        assert_eq!(entropy_weights, vec![-5.0, -4.0, -3.0]);
+
+        let inv_weights: Vec<f64> = params.skew_inv_weights
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        assert_eq!(inv_weights, vec![-2.0, -1.5, -1.0]);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_mixed_valid_invalid() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spread_intercepts("1.0,invalid,2.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        // Should parse only valid values
+        let intercepts: Vec<f64> = params.spread_intercepts
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        assert_eq!(intercepts, vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_large_folds() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .folds(100)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        assert_eq!(params.folds, 100);
+    }
+
+    #[test]
+    fn test_walk_forward_ml_params_large_hours() {
+        let params = WalkForwardMLParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .min_train_hours(1000.0)
+            .test_hours(100.0)
+            .spread_intercepts("1.0".to_string())
+            .spread_entropy_weights("-2.0".to_string())
+            .spread_vol_weights("200.0".to_string())
+            .skew_intercepts("0.3".to_string())
+            .skew_inv_weights("-1.0".to_string())
+            .build()
+            .unwrap();
+
+        assert_eq!(params.min_train_hours, 1000.0);
+        assert_eq!(params.test_hours, 100.0);
+    }
+}
+
+/// Parameters for the `walk-forward-ml` command (walk-forward ML training - MM algorithms only)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalkForwardMLParams {
+    /// Path to data directory containing Parquet files
+    pub data_path: PathBuf,
+    /// Algorithm to use (must be MM algorithm: as, ml, or fixed)
+    pub algorithm: String,
+    /// Number of folds (train/test splits)
+    pub folds: usize,
+    /// Minimum training period in hours
+    pub min_train_hours: f64,
+    /// Test period in hours per fold
+    pub test_hours: f64,
+    /// Use rolling window (false = anchored/expanding window)
+    pub rolling: bool,
+    /// Gap between train and test to prevent lookahead (hours)
+    pub embargo_hours: f64,
+    /// Spread intercept values to test (comma-separated string)
+    pub spread_intercepts: String,
+    /// Spread entropy weight values to test (comma-separated string)
+    pub spread_entropy_weights: String,
+    /// Spread volatility weight values to test (comma-separated string)
+    pub spread_vol_weights: String,
+    /// Skew intercept values to test (comma-separated string)
+    pub skew_intercepts: String,
+    /// Skew inventory weight values to test (comma-separated string)
+    pub skew_inv_weights: String,
+    /// Maximum inventory
+    pub max_inventory: f64,
+    /// Quote size
+    pub quote_size: f64,
+    /// Fill probability (0.0-1.0) for simulation
+    pub fill_prob: f64,
+    /// Fee rate (e.g., 0.0001 = 1 bps)
+    pub fee_rate: f64,
+    /// Use naive fill simulation (for comparison)
+    pub naive_fills: bool,
+    /// Queue position (0.0=front, 1.0=back)
+    pub queue_pos: f64,
+    /// Output file for full results (JSON)
+    pub output: Option<PathBuf>,
+    /// Output file for consensus weights (JSON)
+    pub weights_output: Option<PathBuf>,
+}
+
+/// Builder for `WalkForwardMLParams` with validation
+pub struct WalkForwardMLParamsBuilder {
+    data_path: Option<PathBuf>,
+    algorithm: Option<String>,
+    folds: Option<usize>,
+    min_train_hours: Option<f64>,
+    test_hours: Option<f64>,
+    rolling: Option<bool>,
+    embargo_hours: Option<f64>,
+    spread_intercepts: Option<String>,
+    spread_entropy_weights: Option<String>,
+    spread_vol_weights: Option<String>,
+    skew_intercepts: Option<String>,
+    skew_inv_weights: Option<String>,
+    max_inventory: Option<f64>,
+    quote_size: Option<f64>,
+    fill_prob: Option<f64>,
+    fee_rate: Option<f64>,
+    naive_fills: Option<bool>,
+    queue_pos: Option<f64>,
+    output: Option<PathBuf>,
+    weights_output: Option<PathBuf>,
+}
+
+impl WalkForwardMLParamsBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            data_path: None,
+            algorithm: None,
+            folds: None,
+            min_train_hours: None,
+            test_hours: None,
+            rolling: None,
+            embargo_hours: None,
+            spread_intercepts: None,
+            spread_entropy_weights: None,
+            spread_vol_weights: None,
+            skew_intercepts: None,
+            skew_inv_weights: None,
+            max_inventory: None,
+            quote_size: None,
+            fill_prob: None,
+            fee_rate: None,
+            naive_fills: None,
+            queue_pos: None,
+            output: None,
+            weights_output: None,
+        }
+    }
+
+    /// Set data path
+    pub fn data_path(mut self, path: PathBuf) -> Self {
+        self.data_path = Some(path);
+        self
+    }
+
+    /// Set algorithm
+    pub fn algorithm(mut self, algo: String) -> Self {
+        self.algorithm = Some(algo);
+        self
+    }
+
+    /// Set number of folds
+    pub fn folds(mut self, folds: usize) -> Self {
+        self.folds = Some(folds);
+        self
+    }
+
+    /// Set minimum train hours
+    pub fn min_train_hours(mut self, hours: f64) -> Self {
+        self.min_train_hours = Some(hours);
+        self
+    }
+
+    /// Set test hours
+    pub fn test_hours(mut self, hours: f64) -> Self {
+        self.test_hours = Some(hours);
+        self
+    }
+
+    /// Set rolling window flag
+    pub fn rolling(mut self, rolling: bool) -> Self {
+        self.rolling = Some(rolling);
+        self
+    }
+
+    /// Set embargo hours
+    pub fn embargo_hours(mut self, hours: f64) -> Self {
+        self.embargo_hours = Some(hours);
+        self
+    }
+
+    /// Set spread intercepts (comma-separated string)
+    pub fn spread_intercepts(mut self, intercepts: String) -> Self {
+        self.spread_intercepts = Some(intercepts);
+        self
+    }
+
+    /// Set spread entropy weights (comma-separated string)
+    pub fn spread_entropy_weights(mut self, weights: String) -> Self {
+        self.spread_entropy_weights = Some(weights);
+        self
+    }
+
+    /// Set spread volatility weights (comma-separated string)
+    pub fn spread_vol_weights(mut self, weights: String) -> Self {
+        self.spread_vol_weights = Some(weights);
+        self
+    }
+
+    /// Set skew intercepts (comma-separated string)
+    pub fn skew_intercepts(mut self, intercepts: String) -> Self {
+        self.skew_intercepts = Some(intercepts);
+        self
+    }
+
+    /// Set skew inventory weights (comma-separated string)
+    pub fn skew_inv_weights(mut self, weights: String) -> Self {
+        self.skew_inv_weights = Some(weights);
+        self
+    }
+
+    /// Set max inventory
+    pub fn max_inventory(mut self, max_inv: f64) -> Self {
+        self.max_inventory = Some(max_inv);
+        self
+    }
+
+    /// Set quote size
+    pub fn quote_size(mut self, size: f64) -> Self {
+        self.quote_size = Some(size);
+        self
+    }
+
+    /// Set fill probability
+    pub fn fill_prob(mut self, prob: f64) -> Self {
+        self.fill_prob = Some(prob);
+        self
+    }
+
+    /// Set fee rate
+    pub fn fee_rate(mut self, rate: f64) -> Self {
+        self.fee_rate = Some(rate);
+        self
+    }
+
+    /// Set naive fills flag
+    pub fn naive_fills(mut self, naive: bool) -> Self {
+        self.naive_fills = Some(naive);
+        self
+    }
+
+    /// Set queue position
+    pub fn queue_pos(mut self, pos: f64) -> Self {
+        self.queue_pos = Some(pos);
+        self
+    }
+
+    /// Set output file
+    pub fn output(mut self, path: Option<PathBuf>) -> Self {
+        self.output = path;
+        self
+    }
+
+    /// Set weights output file
+    pub fn weights_output(mut self, path: Option<PathBuf>) -> Self {
+        self.weights_output = path;
+        self
+    }
+
+    /// Parse comma-separated string to Vec<f64>
+    fn parse_f64_list(s: &str) -> Result<Vec<f64>> {
+        let values: Vec<f64> = s
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        if values.is_empty() {
+            anyhow::bail!("No valid numeric values found in parameter list: '{}'", s);
+        }
+        Ok(values)
+    }
+
+    /// Build `WalkForwardMLParams` with validation
+    pub fn build(self) -> Result<WalkForwardMLParams> {
+        // Validate required fields
+        let data_path = self.data_path
+            .ok_or_else(|| anyhow::anyhow!("data_path is required"))?;
+        let algorithm = self.algorithm
+            .ok_or_else(|| anyhow::anyhow!("algorithm is required"))?;
+        let spread_intercepts = self.spread_intercepts
+            .ok_or_else(|| anyhow::anyhow!("spread_intercepts is required"))?;
+        let spread_entropy_weights = self.spread_entropy_weights
+            .ok_or_else(|| anyhow::anyhow!("spread_entropy_weights is required"))?;
+        let spread_vol_weights = self.spread_vol_weights
+            .ok_or_else(|| anyhow::anyhow!("spread_vol_weights is required"))?;
+        let skew_intercepts = self.skew_intercepts
+            .ok_or_else(|| anyhow::anyhow!("skew_intercepts is required"))?;
+        let skew_inv_weights = self.skew_inv_weights
+            .ok_or_else(|| anyhow::anyhow!("skew_inv_weights is required"))?;
+
+        // Parse and validate parameter lists
+        let _spread_intercepts_vec = Self::parse_f64_list(&spread_intercepts)
+            .context("Failed to parse spread_intercepts")?;
+        let _spread_entropy_weights_vec = Self::parse_f64_list(&spread_entropy_weights)
+            .context("Failed to parse spread_entropy_weights")?;
+        let _spread_vol_weights_vec = Self::parse_f64_list(&spread_vol_weights)
+            .context("Failed to parse spread_vol_weights")?;
+        let _skew_intercepts_vec = Self::parse_f64_list(&skew_intercepts)
+            .context("Failed to parse skew_intercepts")?;
+        let _skew_inv_weights_vec = Self::parse_f64_list(&skew_inv_weights)
+            .context("Failed to parse skew_inv_weights")?;
+
+        // Validate folds
+        if let Some(folds) = self.folds {
+            if folds == 0 {
+                anyhow::bail!("folds must be > 0");
+            }
+        }
+
+        // Validate hours
+        if let Some(min_train_hours) = self.min_train_hours {
+            if min_train_hours <= 0.0 {
+                anyhow::bail!("min_train_hours must be > 0.0");
+            }
+        }
+        if let Some(test_hours) = self.test_hours {
+            if test_hours <= 0.0 {
+                anyhow::bail!("test_hours must be > 0.0");
+            }
+        }
+        if let Some(embargo_hours) = self.embargo_hours {
+            if embargo_hours < 0.0 {
+                anyhow::bail!("embargo_hours must be >= 0.0");
+            }
+        }
+
+        // Validate fill_prob
+        let fill_prob = self.fill_prob.unwrap_or(0.10);
+        if !(0.0..=1.0).contains(&fill_prob) {
+            anyhow::bail!("fill_prob must be in range [0.0, 1.0], found {}", fill_prob);
+        }
+
+        // Validate other ranges
+        if let Some(queue_pos) = self.queue_pos {
+            if !(0.0..=1.0).contains(&queue_pos) {
+                anyhow::bail!("queue_pos must be in range [0.0, 1.0]");
+            }
+        }
+        if let Some(fee_rate) = self.fee_rate {
+            if fee_rate < 0.0 {
+                anyhow::bail!("fee_rate must be >= 0.0");
+            }
+        }
+        if let Some(max_inventory) = self.max_inventory {
+            if max_inventory <= 0.0 {
+                anyhow::bail!("max_inventory must be > 0.0");
+            }
+        }
+        if let Some(quote_size) = self.quote_size {
+            if quote_size <= 0.0 {
+                anyhow::bail!("quote_size must be > 0.0");
+            }
+        }
+
+        Ok(WalkForwardMLParams {
+            data_path,
+            algorithm,
+            folds: self.folds.unwrap_or(5),
+            min_train_hours: self.min_train_hours.unwrap_or(100.0),
+            test_hours: self.test_hours.unwrap_or(24.0),
+            rolling: self.rolling.unwrap_or(false),
+            embargo_hours: self.embargo_hours.unwrap_or(1.0),
+            spread_intercepts,
+            spread_entropy_weights,
+            spread_vol_weights,
+            skew_intercepts,
+            skew_inv_weights,
+            max_inventory: self.max_inventory.unwrap_or(0.1),
+            quote_size: self.quote_size.unwrap_or(0.001),
+            fill_prob,
+            fee_rate: self.fee_rate.unwrap_or(0.0001),
+            naive_fills: self.naive_fills.unwrap_or(false),
+            queue_pos: self.queue_pos.unwrap_or(0.5),
+            output: self.output,
+            weights_output: self.weights_output,
+        })
+    }
+}
+
+impl Default for WalkForwardMLParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Parameters for the `train` command (ML weight training - ML Spread/Skew algorithm only)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrainParams {
