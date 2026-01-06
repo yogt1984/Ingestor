@@ -273,46 +273,215 @@ Tasks are organized by:
 
 ---
 
-### T-1.10: Extract Remaining Backtest Commands
+### T-1.10: Extract Backtest Sweep Command
 **Priority:** 🔴 Critical  
 **Dependencies:** T-1.1, T-1.2  
-**Estimated Time:** 20 hours
+**Estimated Time:** 3 hours
 
-**Description:** Extract all remaining backtest commands.
+**Description:** Extract `sweep` command - parameter sweep (both algorithm types).
 
-**Commands to extract:**
-- [ ] `sweep` - Parameter sweep (both algorithm types)
-- [ ] `walk-forward` - Walk-forward validation (both)
-- [ ] `oos-validate` - Out-of-sample validation (both)
-- [ ] `simulate` - Campaign simulation (both)
-- [ ] `grid` - Grid search (MM only)
-- [ ] `campaign` - Validation campaign (both)
-- [ ] `paper` - Paper trading (both)
-- [ ] `list_algorithms` - List algorithms (info only)
-
-**For each command:**
-- [ ] Define parameter struct with ALL options
-- [ ] Create parameter builder with validation
-- [ ] Add algorithm type validation if MM-only
-- [ ] Extract command logic from CLI
-- [ ] Create function in `BacktestCommands`
+**Tasks:**
+- [ ] Define `SweepParams` struct with ALL options
+- [ ] Create `SweepParamsBuilder` with validation
+- [ ] Extract sweep logic from CLI
+- [ ] Create `sweep()` function in `BacktestCommands`
 - [ ] Add progress callback support
-- [ ] Define result struct
-- [ ] Update CLI binary
+- [ ] Define `SweepResult` struct
+- [ ] Update CLI binary to use extracted command
 - [ ] Write unit tests
-- [ ] Ensure existing tests pass
+- [ ] Ensure existing tests still pass
 
 **Acceptance Criteria:**
-- [ ] All 8 remaining commands extracted
-- [ ] All CLI options mapped to parameters
-- [ ] Algorithm type validation where needed
-- [ ] All commands execute correctly
+- [ ] All CLI options mapped to `SweepParams`
+- [ ] Command executes correctly
 - [ ] Results match original CLI output
 - [ ] All tests pass
 
 ---
 
-### T-1.11: Extract Research Commands
+### T-1.11: Extract Backtest Walk-Forward Command
+**Priority:** 🔴 Critical  
+**Dependencies:** T-1.1, T-1.2  
+**Estimated Time:** 3 hours
+
+**Description:** Extract `walk-forward` command - walk-forward validation (both algorithm types).
+
+**Tasks:**
+- [ ] Define `WalkForwardParams` struct with ALL options
+- [ ] Create `WalkForwardParamsBuilder` with validation
+- [ ] Extract walk-forward logic from CLI
+- [ ] Create `walk_forward()` function in `BacktestCommands`
+- [ ] Add progress callback support (fold updates)
+- [ ] Define `WalkForwardResult` struct
+- [ ] Update CLI binary to use extracted command
+- [ ] Write unit tests
+- [ ] Ensure existing tests still pass
+
+**Acceptance Criteria:**
+- [ ] All CLI options mapped to `WalkForwardParams`
+- [ ] Command executes correctly
+- [ ] Results match original CLI output
+- [ ] All tests pass
+
+---
+
+### T-1.12: Extract Backtest OOS-Validate Command
+**Priority:** 🔴 Critical  
+**Dependencies:** T-1.1, T-1.2  
+**Estimated Time:** 3 hours
+
+**Description:** Extract `oos-validate` command - out-of-sample validation (both algorithm types).
+
+**Tasks:**
+- [ ] Define `OOSValidateParams` struct with ALL options
+- [ ] Create `OOSValidateParamsBuilder` with validation
+- [ ] Extract OOS validation logic from CLI
+- [ ] Create `oos_validate()` function in `BacktestCommands`
+- [ ] Add progress callback support
+- [ ] Define `OOSValidateResult` struct
+- [ ] Update CLI binary to use extracted command
+- [ ] Write unit tests
+- [ ] Ensure existing tests still pass
+
+**Acceptance Criteria:**
+- [ ] All CLI options mapped to `OOSValidateParams`
+- [ ] Command executes correctly
+- [ ] Results match original CLI output
+- [ ] All tests pass
+
+---
+
+### T-1.13: Extract Backtest Simulate Command
+**Priority:** 🔴 Critical  
+**Dependencies:** T-1.1, T-1.2  
+**Estimated Time:** 3 hours
+
+**Description:** Extract `simulate` command - campaign simulation (both algorithm types).
+
+**Tasks:**
+- [ ] Define `SimulateParams` struct with ALL options
+- [ ] Create `SimulateParamsBuilder` with validation
+- [ ] Extract simulation logic from CLI
+- [ ] Create `simulate()` function in `BacktestCommands`
+- [ ] Add progress callback support
+- [ ] Define `SimulateResult` struct
+- [ ] Update CLI binary to use extracted command
+- [ ] Write unit tests
+- [ ] Ensure existing tests still pass
+
+**Acceptance Criteria:**
+- [ ] All CLI options mapped to `SimulateParams`
+- [ ] Command executes correctly
+- [ ] Results match original CLI output
+- [ ] All tests pass
+
+---
+
+### T-1.14: Extract Backtest Grid Command (MM Only)
+**Priority:** 🔴 Critical  
+**Dependencies:** T-1.1, T-1.2  
+**Estimated Time:** 3 hours
+
+**Description:** Extract `grid` command - grid search (MM algorithms only).
+
+**Tasks:**
+- [ ] Define `GridParams` struct with ALL options
+- [ ] Create `GridParamsBuilder` with validation
+- [ ] Add algorithm type validation (must be MM algorithm)
+- [ ] Extract grid search logic from CLI
+- [ ] Create `grid()` function in `BacktestCommands`
+- [ ] Add progress callback support
+- [ ] Define `GridResult` struct
+- [ ] Update CLI binary to use extracted command
+- [ ] Write unit tests
+- [ ] Ensure existing tests still pass
+
+**Acceptance Criteria:**
+- [ ] All CLI options mapped to `GridParams`
+- [ ] Algorithm type validation works (rejects non-MM)
+- [ ] Grid search executes correctly
+- [ ] Results match original CLI output
+- [ ] All tests pass
+
+---
+
+### T-1.15: Extract Backtest Campaign Command
+**Priority:** 🔴 Critical  
+**Dependencies:** T-1.1, T-1.2  
+**Estimated Time:** 3 hours
+
+**Description:** Extract `campaign` command - validation campaign (both algorithm types).
+
+**Tasks:**
+- [ ] Define `CampaignParams` struct with ALL options
+- [ ] Create `CampaignParamsBuilder` with validation
+- [ ] Extract campaign logic from CLI
+- [ ] Create `campaign()` function in `BacktestCommands`
+- [ ] Add progress callback support
+- [ ] Define `CampaignResult` struct
+- [ ] Update CLI binary to use extracted command
+- [ ] Write unit tests
+- [ ] Ensure existing tests still pass
+
+**Acceptance Criteria:**
+- [ ] All CLI options mapped to `CampaignParams`
+- [ ] Command executes correctly
+- [ ] Results match original CLI output
+- [ ] All tests pass
+
+---
+
+### T-1.16: Extract Backtest Paper Command
+**Priority:** 🔴 Critical  
+**Dependencies:** T-1.1, T-1.2  
+**Estimated Time:** 3 hours
+
+**Description:** Extract `paper` command - paper trading (both algorithm types).
+
+**Tasks:**
+- [ ] Define `PaperParams` struct with ALL options
+- [ ] Create `PaperParamsBuilder` with validation
+- [ ] Extract paper trading logic from CLI
+- [ ] Create `paper()` function in `BacktestCommands`
+- [ ] Add progress callback support
+- [ ] Define `PaperResult` struct
+- [ ] Update CLI binary to use extracted command
+- [ ] Write unit tests
+- [ ] Ensure existing tests still pass
+
+**Acceptance Criteria:**
+- [ ] All CLI options mapped to `PaperParams`
+- [ ] Command executes correctly
+- [ ] Results match original CLI output
+- [ ] All tests pass
+
+---
+
+### T-1.17: Extract Backtest List Algorithms Command
+**Priority:** 🔴 Critical  
+**Dependencies:** T-1.1, T-1.2  
+**Estimated Time:** 1 hour
+
+**Description:** Extract `list_algorithms` command - list algorithms (info only).
+
+**Tasks:**
+- [ ] Define `ListAlgorithmsParams` struct (if needed, may be empty)
+- [ ] Create `ListAlgorithmsParamsBuilder` (if needed)
+- [ ] Extract list algorithms logic from CLI
+- [ ] Create `list_algorithms()` function in `BacktestCommands`
+- [ ] Define `ListAlgorithmsResult` struct
+- [ ] Update CLI binary to use extracted command
+- [ ] Write unit tests
+- [ ] Ensure existing tests still pass
+
+**Acceptance Criteria:**
+- [ ] Command executes correctly
+- [ ] Results match original CLI output
+- [ ] All tests pass
+
+---
+
+### T-1.18: Extract Research Commands
 **Priority:** 🔴 Critical  
 **Dependencies:** T-1.1, T-1.2  
 **Estimated Time:** 8 hours
@@ -342,7 +511,7 @@ Tasks are organized by:
 
 ---
 
-### T-1.12: Extract Validate Commands
+### T-1.19: Extract Validate Commands
 **Priority:** 🔴 Critical  
 **Dependencies:** T-1.1, T-1.2  
 **Estimated Time:** 10 hours
@@ -374,7 +543,7 @@ Tasks are organized by:
 
 ---
 
-### T-1.13: Extract Algorithm Commands
+### T-1.20: Extract Algorithm Commands
 **Priority:** 🔴 Critical  
 **Dependencies:** T-1.1, T-1.2  
 **Estimated Time:** 8 hours
@@ -404,7 +573,7 @@ Tasks are organized by:
 
 ---
 
-### T-1.14: Refactor All CLI Binaries
+### T-1.21: Refactor All CLI Binaries
 **Priority:** 🔴 Critical  
 **Dependencies:** T-1.3 through T-1.13  
 **Estimated Time:** 12 hours
@@ -1232,14 +1401,14 @@ Tasks are organized by:
 
 ## Summary
 
-### Total Tasks: 46
-- **Phase 1:** 14 tasks (Command Execution Layer)
+### Total Tasks: 53
+- **Phase 1:** 21 tasks (Command Execution Layer)
 - **Phase 2:** 12 tasks (Visual Parameter Configuration)
 - **Phase 3:** 8 tasks (Visual Results Display)
 - **Phase 4:** 6 tasks (TUI Integration)
 - **Testing:** 6 tasks (integrated throughout)
 
-### Estimated Time: ~280 hours (~7 weeks @ 40 hours/week)
+### Estimated Time: ~300 hours (~7.5 weeks @ 40 hours/week)
 
 ### Critical Path:
 1. Phase 1 (Command Execution Layer) - Must complete first
