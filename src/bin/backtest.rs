@@ -63,7 +63,7 @@ use ingestor::strategies::{
 };
 use ingestor::commands::{
     BacktestCommands,
-    params::backtest_params::{EvaluateParamsBuilder, TuneParamsBuilder, RegimeSearchParamsBuilder, MultiObjectiveParamsBuilder, RegimeOptimizeParamsBuilder, TrainParamsBuilder, WalkForwardMLParamsBuilder, SweepParamsBuilder},
+    params::backtest_params::{EvaluateParamsBuilder, TuneParamsBuilder, RegimeSearchParamsBuilder, MultiObjectiveParamsBuilder, RegimeOptimizeParamsBuilder, TrainParamsBuilder, WalkForwardMLParamsBuilder, SweepParamsBuilder, WalkForwardParamsBuilder},
 };
 use ingestor::commands::common::{NoOpCallback, ProgressCallback};
 use std::sync::Arc;
@@ -701,7 +701,141 @@ fn main() -> Result<()> {
             }
         }
         Some(Commands::WalkForward { folds, test_hours, rolling, output }) => {
-            run_walk_forward(&cli, *folds, *test_hours, *rolling, output.clone())?;
+            // Build WalkForwardParams from CLI
+            let walk_forward_params = WalkForwardParamsBuilder::new()
+                .data_path(cli.data.clone())
+                .algorithm(cli.algorithm.clone())
+                .weights_file(cli.weights_file.clone())
+                .folds(*folds)
+                .test_hours(*test_hours)
+                .rolling(*rolling)
+                .spreads("1,2,3,4,5".to_string()) // Default param grid
+                .skews("0.3,0.5,0.7".to_string())
+                .fill_probs("0.05,0.10,0.15".to_string())
+                .max_inventory(cli.max_inventory)
+                .quote_size(cli.quote_size)
+                .fee_rate(cli.fee_rate)
+                .naive_fills(cli.naive_fills)
+                .queue_pos(cli.queue_pos)
+                .output(output.clone())
+                .quiet(cli.quiet)
+                .build()
+                .context("Failed to build walk-forward parameters")?;
+
+            // Execute walk-forward command
+            let callback = Arc::new(NoOpCallback);
+            let result = BacktestCommands::walk_forward(walk_forward_params, callback)
+                .context("Failed to execute walk-forward command")?;
+
+            // Print results
+            if !cli.quiet {
+                println!("═══════════════════════════════════════════════════════");
+                println!("           WALK-FORWARD VALIDATION                     ");
+                println!("═══════════════════════════════════════════════════════");
+                println!();
+                println!("Configuration:");
+                println!("  Data:          {:?}", cli.data);
+                println!("  Folds:         {}", result.folds);
+                println!("  Test Period:   {} hours per fold", result.fold_results.first().map(|_| 24.0).unwrap_or(0.0));
+                println!("  Mode:          {}", if result.fold_results.first().map(|_| false).unwrap_or(false) { "Rolling" } else { "Anchored (expanding)" });
+                println!();
+
+                // Print fold results
+                for fold in &result.fold_results {
+                    println!(
+                        "Fold {}: Train Sharpe={:.2}, Test Sharpe={:.2}, Return={:.2}%, Trades={}",
+                        fold.fold_num,
+                        fold.train_metrics.sharpe,
+                        fold.test_metrics.sharpe,
+                        fold.test_metrics.total_return * 100.0,
+                        fold.test_metrics.num_trades,
+                    );
+                }
+
+                // Print aggregate results
+                println!();
+                println!("═══════════════════════════════════════════════════════");
+                println!("AGGREGATE RESULTS:");
+                println!("  Avg OOS Sharpe:     {:.3}", result.aggregate.avg_oos_sharpe);
+                println!("  Std OOS Sharpe:     {:.3}", result.aggregate.std_oos_sharpe);
+                println!("  Avg OOS Return:     {:.2}%", result.aggregate.avg_oos_return * 100.0);
+                println!("  Total OOS Trades:   {}", result.aggregate.total_oos_trades);
+                println!("  Avg Win Rate:       {:.1}%", result.aggregate.avg_win_rate * 100.0);
+                println!("  Profitable Folds:   {:.1}%", result.aggregate.pct_profitable_folds * 100.0);
+                println!("  IS/OOS Sharpe:      {:.3}", result.aggregate.is_oos_sharpe_ratio);
+                println!("  Prob Sharpe > 0:    {:.3}", result.aggregate.prob_sharpe_gt_zero);
+                println!("═══════════════════════════════════════════════════════");
+            }
+
+            // Save results if output specified
+            if let Some(ref output_path) = output {
+                // Save using the original WalkForwardResults format for compatibility
+                use ingestor::backtest::walk_forward::{WalkForwardResults, WalkForwardConfig, ParamGrid, FoldResult, OptimizedParams, FoldMetrics, AggregateResults};
+                
+                let original_results = WalkForwardResults {
+                    config: WalkForwardConfig {
+                        n_folds: result.folds,
+                        min_train_hours: 100.0,
+                        test_hours: 24.0,
+                        anchored: true,
+                        embargo_hours: 1.0,
+                        param_grid: ParamGrid {
+                            spreads: vec![1.0, 2.0, 3.0, 4.0, 5.0],
+                            skews: vec![0.3, 0.5, 0.7],
+                            fill_probs: vec![0.05, 0.10, 0.15],
+                        },
+                        data_dir: cli.data.clone(),
+                        verbose: !cli.quiet,
+                    },
+                    folds: result.fold_results.iter().map(|fold| {
+                        FoldResult {
+                            fold_num: fold.fold_num,
+                            train_start_ms: fold.train_start_ms,
+                            train_end_ms: fold.train_end_ms,
+                            test_start_ms: fold.test_start_ms,
+                            test_end_ms: fold.test_end_ms,
+                            best_params: OptimizedParams {
+                                spread: fold.best_params.spread,
+                                skew: fold.best_params.skew,
+                                fill_prob: fold.best_params.fill_prob,
+                                train_sharpe: fold.best_params.train_sharpe,
+                            },
+                            train_metrics: FoldMetrics {
+                                sharpe: fold.train_metrics.sharpe,
+                                total_return: fold.train_metrics.total_return,
+                                max_drawdown: fold.train_metrics.max_drawdown,
+                                num_trades: fold.train_metrics.num_trades,
+                                win_rate: fold.train_metrics.win_rate,
+                                profit_factor: fold.train_metrics.profit_factor,
+                            },
+                            test_metrics: FoldMetrics {
+                                sharpe: fold.test_metrics.sharpe,
+                                total_return: fold.test_metrics.total_return,
+                                max_drawdown: fold.test_metrics.max_drawdown,
+                                num_trades: fold.test_metrics.num_trades,
+                                win_rate: fold.test_metrics.win_rate,
+                                profit_factor: fold.test_metrics.profit_factor,
+                            },
+                        }
+                    }).collect(),
+                    aggregate: AggregateResults {
+                        avg_oos_sharpe: result.aggregate.avg_oos_sharpe,
+                        std_oos_sharpe: result.aggregate.std_oos_sharpe,
+                        avg_oos_return: result.aggregate.avg_oos_return,
+                        total_oos_trades: result.aggregate.total_oos_trades,
+                        avg_win_rate: result.aggregate.avg_win_rate,
+                        pct_profitable_folds: result.aggregate.pct_profitable_folds,
+                        is_oos_sharpe_ratio: result.aggregate.is_oos_sharpe_ratio,
+                        prob_sharpe_gt_zero: result.aggregate.prob_sharpe_gt_zero,
+                    },
+                };
+
+                original_results.save_json(output_path.to_str().unwrap())?;
+                if !cli.quiet {
+                    println!();
+                    println!("Results saved to: {:?}", output_path);
+                }
+            }
         }
         Some(Commands::ValidateData { output }) => {
             run_validate(&cli, output.clone())?;

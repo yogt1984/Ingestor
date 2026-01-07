@@ -30,7 +30,7 @@ use num::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::common::{ProgressCallback, ProgressEvent, LogLevel};
-use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams, WalkForwardMLParams, SweepParams};
+use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams, WalkForwardMLParams, SweepParams, WalkForwardParams};
 use crate::backtest::{
     BacktestEngine, BacktestConfig, BacktestResults,
     replay::{ParquetReplay, ReplayConfig},
@@ -341,6 +341,78 @@ pub struct SweepResult {
     pub best: Option<SweepResultItem>,
     /// Total number of combinations tested
     pub total_combinations: usize,
+}
+
+/// Results from the `walk-forward` command (walk-forward validation)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalkForwardResult {
+    /// Algorithm type used
+    pub algorithm: String,
+    /// Algorithm display name
+    pub algorithm_name: String,
+    /// Number of folds
+    pub folds: usize,
+    /// Results for each fold
+    pub fold_results: Vec<WalkForwardFoldResult>,
+    /// Aggregated metrics across all folds
+    pub aggregate: WalkForwardAggregate,
+}
+
+/// Single fold result from walk-forward validation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalkForwardFoldResult {
+    pub fold_num: usize,
+    pub train_start_ms: i64,
+    pub train_end_ms: i64,
+    pub test_start_ms: i64,
+    pub test_end_ms: i64,
+    /// Best parameters found in training
+    pub best_params: WalkForwardOptimizedParams,
+    /// Training set performance (in-sample)
+    pub train_metrics: WalkForwardFoldMetrics,
+    /// Test set performance (out-of-sample)
+    pub test_metrics: WalkForwardFoldMetrics,
+}
+
+/// Optimized parameters from training
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalkForwardOptimizedParams {
+    pub spread: f64,
+    pub skew: f64,
+    pub fill_prob: f64,
+    pub train_sharpe: f64,
+}
+
+/// Summary metrics for a fold
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WalkForwardFoldMetrics {
+    pub sharpe: f64,
+    pub total_return: f64,
+    pub max_drawdown: f64,
+    pub num_trades: usize,
+    pub win_rate: f64,
+    pub profit_factor: f64,
+}
+
+/// Aggregated results across all folds
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WalkForwardAggregate {
+    /// Average out-of-sample Sharpe
+    pub avg_oos_sharpe: f64,
+    /// Std dev of out-of-sample Sharpe
+    pub std_oos_sharpe: f64,
+    /// Average out-of-sample return
+    pub avg_oos_return: f64,
+    /// Total out-of-sample trades
+    pub total_oos_trades: usize,
+    /// Average win rate
+    pub avg_win_rate: f64,
+    /// Percentage of folds profitable
+    pub pct_profitable_folds: f64,
+    /// In-sample vs out-of-sample Sharpe ratio (overfitting indicator)
+    pub is_oos_sharpe_ratio: f64,
+    /// Probability Sharpe Ratio > 0 (statistical significance)
+    pub prob_sharpe_gt_zero: f64,
 }
 
 /// Results from the `evaluate` command
@@ -2031,6 +2103,187 @@ impl BacktestCommands {
             all_results,
             best,
             total_combinations,
+        })
+    }
+
+    /// Run walk-forward validation
+    ///
+    /// This is the extracted version of the `run_walk_forward()` function from the CLI.
+    /// It supports progress callbacks for real-time updates during execution.
+    ///
+    /// Returns `WalkForwardResult` with fold results and aggregated metrics.
+    pub fn walk_forward(
+        params: WalkForwardParams,
+        callback: Arc<dyn ProgressCallback>,
+    ) -> Result<WalkForwardResult> {
+        use crate::backtest::walk_forward::{WalkForwardEngine, WalkForwardConfig, ParamGrid};
+
+        // Parse algorithm type early to fail fast on invalid algorithm
+        let algo_type = AlgorithmType::from_str(&params.algorithm)
+            .map_err(|_| anyhow::anyhow!(
+                "Unknown algorithm '{}'. Valid options: {}",
+                params.algorithm,
+                AlgorithmRegistry::all_type_strings().join(", ")
+            ))?;
+
+        let algo_name = algo_type.display_name().to_string();
+
+        // Parse parameter lists
+        let spreads: Vec<f64> = params.spreads
+            .split(',')
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    trimmed.parse().ok()
+                }
+            })
+            .collect();
+
+        let skews: Vec<f64> = params.skews
+            .split(',')
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    trimmed.parse().ok()
+                }
+            })
+            .collect();
+
+        let fill_probs: Vec<f64> = params.fill_probs
+            .split(',')
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    trimmed.parse().ok()
+                }
+            })
+            .collect();
+
+        callback.on_event(ProgressEvent::Started {
+            total: Some(params.folds),
+            message: format!(
+                "Starting walk-forward validation with algorithm: {} ({} folds, {} mode)",
+                algo_name,
+                params.folds,
+                if params.rolling { "rolling" } else { "anchored" }
+            ),
+        });
+
+        // Build WalkForwardConfig
+        let config = WalkForwardConfig {
+            n_folds: params.folds,
+            min_train_hours: params.min_train_hours,
+            test_hours: params.test_hours,
+            anchored: !params.rolling,
+            embargo_hours: params.embargo_hours,
+            param_grid: ParamGrid {
+                spreads,
+                skews,
+                fill_probs,
+            },
+            data_dir: params.data_path.clone(),
+            verbose: !params.quiet,
+        };
+
+        let mut engine = WalkForwardEngine::new(config);
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: "Loading market data...".to_string(),
+        });
+
+        let num_events = engine.load_data()
+            .context("Failed to load market data")?;
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!("Loaded {} events", num_events),
+        });
+
+        // Run walk-forward validation
+        let results = engine.run()
+            .context("Failed to run walk-forward validation")?;
+
+        // Convert fold results
+        let fold_results: Vec<WalkForwardFoldResult> = results.folds
+            .iter()
+            .map(|fold| {
+                callback.on_event(ProgressEvent::Progress {
+                    current: fold.fold_num,
+                    total: Some(params.folds),
+                    message: format!(
+                        "Fold {}/{}: Train Sharpe={:.2}, Test Sharpe={:.2}",
+                        fold.fold_num,
+                        params.folds,
+                        fold.train_metrics.sharpe,
+                        fold.test_metrics.sharpe
+                    ),
+                });
+
+                WalkForwardFoldResult {
+                    fold_num: fold.fold_num,
+                    train_start_ms: fold.train_start_ms,
+                    train_end_ms: fold.train_end_ms,
+                    test_start_ms: fold.test_start_ms,
+                    test_end_ms: fold.test_end_ms,
+                    best_params: WalkForwardOptimizedParams {
+                        spread: fold.best_params.spread,
+                        skew: fold.best_params.skew,
+                        fill_prob: fold.best_params.fill_prob,
+                        train_sharpe: fold.best_params.train_sharpe,
+                    },
+                    train_metrics: WalkForwardFoldMetrics {
+                        sharpe: fold.train_metrics.sharpe,
+                        total_return: fold.train_metrics.total_return,
+                        max_drawdown: fold.train_metrics.max_drawdown,
+                        num_trades: fold.train_metrics.num_trades,
+                        win_rate: fold.train_metrics.win_rate,
+                        profit_factor: fold.train_metrics.profit_factor,
+                    },
+                    test_metrics: WalkForwardFoldMetrics {
+                        sharpe: fold.test_metrics.sharpe,
+                        total_return: fold.test_metrics.total_return,
+                        max_drawdown: fold.test_metrics.max_drawdown,
+                        num_trades: fold.test_metrics.num_trades,
+                        win_rate: fold.test_metrics.win_rate,
+                        profit_factor: fold.test_metrics.profit_factor,
+                    },
+                }
+            })
+            .collect();
+
+        // Convert aggregate
+        let aggregate = WalkForwardAggregate {
+            avg_oos_sharpe: results.aggregate.avg_oos_sharpe,
+            std_oos_sharpe: results.aggregate.std_oos_sharpe,
+            avg_oos_return: results.aggregate.avg_oos_return,
+            total_oos_trades: results.aggregate.total_oos_trades,
+            avg_win_rate: results.aggregate.avg_win_rate,
+            pct_profitable_folds: results.aggregate.pct_profitable_folds,
+            is_oos_sharpe_ratio: results.aggregate.is_oos_sharpe_ratio,
+            prob_sharpe_gt_zero: results.aggregate.prob_sharpe_gt_zero,
+        };
+
+        callback.on_event(ProgressEvent::Completed {
+            message: format!(
+                "Walk-forward validation completed: {} folds, avg OOS Sharpe: {:.3}",
+                params.folds,
+                aggregate.avg_oos_sharpe
+            ),
+        });
+
+        Ok(WalkForwardResult {
+            algorithm: params.algorithm.clone(),
+            algorithm_name: algo_name,
+            folds: params.folds,
+            fold_results,
+            aggregate,
         })
     }
 }
