@@ -6919,6 +6919,137 @@ mod tests {
         assert!(item.sharpe < 0.0);
         assert!(item.total_return < 0.0);
     }
+
+    // ============================================================================
+    // WalkForwardResult Tests
+    // ============================================================================
+
+    #[test]
+    fn test_walk_forward_result_creation() {
+        let result = WalkForwardResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            folds: 5,
+            fold_results: vec![
+                WalkForwardFoldResult {
+                    fold_num: 1,
+                    train_start_ms: 1000,
+                    train_end_ms: 2000,
+                    test_start_ms: 2100,
+                    test_end_ms: 3000,
+                    best_params: WalkForwardOptimizedParams {
+                        spread: 2.0,
+                        skew: 0.5,
+                        fill_prob: 0.10,
+                        train_sharpe: 1.5,
+                    },
+                    train_metrics: WalkForwardFoldMetrics {
+                        sharpe: 1.5,
+                        total_return: 0.05,
+                        max_drawdown: 0.02,
+                        num_trades: 100,
+                        win_rate: 0.55,
+                        profit_factor: 1.2,
+                    },
+                    test_metrics: WalkForwardFoldMetrics {
+                        sharpe: 1.2,
+                        total_return: 0.03,
+                        max_drawdown: 0.03,
+                        num_trades: 50,
+                        win_rate: 0.50,
+                        profit_factor: 1.1,
+                    },
+                },
+            ],
+            aggregate: WalkForwardAggregate {
+                avg_oos_sharpe: 1.2,
+                std_oos_sharpe: 0.1,
+                avg_oos_return: 0.03,
+                total_oos_trades: 50,
+                avg_win_rate: 0.50,
+                pct_profitable_folds: 0.80,
+                is_oos_sharpe_ratio: 0.80,
+                prob_sharpe_gt_zero: 0.95,
+            },
+        };
+
+        assert_eq!(result.algorithm, "as");
+        assert_eq!(result.folds, 5);
+        assert_eq!(result.fold_results.len(), 1);
+        assert_eq!(result.aggregate.avg_oos_sharpe, 1.2);
+    }
+
+    #[test]
+    fn test_walk_forward_result_serialization() {
+        let result = WalkForwardResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            folds: 3,
+            fold_results: vec![],
+            aggregate: WalkForwardAggregate::default(),
+        };
+
+        let json = serde_json::to_string(&result).expect("Should serialize");
+        let deserialized: WalkForwardResult = serde_json::from_str(&json).expect("Should deserialize");
+
+        assert_eq!(deserialized.algorithm, result.algorithm);
+        assert_eq!(deserialized.folds, result.folds);
+        assert_eq!(deserialized.fold_results.len(), result.fold_results.len());
+    }
+
+    #[test]
+    fn test_walk_forward_fold_result_creation() {
+        let fold = WalkForwardFoldResult {
+            fold_num: 1,
+            train_start_ms: 1000,
+            train_end_ms: 2000,
+            test_start_ms: 2100,
+            test_end_ms: 3000,
+            best_params: WalkForwardOptimizedParams {
+                spread: 2.0,
+                skew: 0.5,
+                fill_prob: 0.10,
+                train_sharpe: 1.5,
+            },
+            train_metrics: WalkForwardFoldMetrics::default(),
+            test_metrics: WalkForwardFoldMetrics::default(),
+        };
+
+        assert_eq!(fold.fold_num, 1);
+        assert_eq!(fold.best_params.spread, 2.0);
+        assert_eq!(fold.best_params.train_sharpe, 1.5);
+    }
+
+    #[test]
+    fn test_walk_forward_aggregate_default() {
+        let aggregate = WalkForwardAggregate::default();
+        assert_eq!(aggregate.avg_oos_sharpe, 0.0);
+        assert_eq!(aggregate.total_oos_trades, 0);
+        assert_eq!(aggregate.pct_profitable_folds, 0.0);
+    }
+
+    #[test]
+    fn test_walk_forward_fold_metrics_default() {
+        let metrics = WalkForwardFoldMetrics::default();
+        assert_eq!(metrics.sharpe, 0.0);
+        assert_eq!(metrics.num_trades, 0);
+        assert_eq!(metrics.win_rate, 0.0);
+    }
+
+    #[test]
+    fn test_walk_forward_optimized_params_creation() {
+        let params = WalkForwardOptimizedParams {
+            spread: 2.0,
+            skew: 0.5,
+            fill_prob: 0.10,
+            train_sharpe: 1.5,
+        };
+
+        assert_eq!(params.spread, 2.0);
+        assert_eq!(params.skew, 0.5);
+        assert_eq!(params.fill_prob, 0.10);
+        assert_eq!(params.train_sharpe, 1.5);
+    }
 }
 
 
