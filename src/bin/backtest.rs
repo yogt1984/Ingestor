@@ -44,7 +44,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
-use anyhow::Result;
+use anyhow::{Result, Context};
 
 use ingestor::backtest::{BacktestEngine, BacktestConfig};
 use ingestor::backtest::replay::ReplayConfig;
@@ -63,7 +63,7 @@ use ingestor::strategies::{
 };
 use ingestor::commands::{
     BacktestCommands,
-    params::backtest_params::{EvaluateParamsBuilder, TuneParamsBuilder, RegimeSearchParamsBuilder, MultiObjectiveParamsBuilder, RegimeOptimizeParamsBuilder, TrainParamsBuilder, WalkForwardMLParamsBuilder},
+    params::backtest_params::{EvaluateParamsBuilder, TuneParamsBuilder, RegimeSearchParamsBuilder, MultiObjectiveParamsBuilder, RegimeOptimizeParamsBuilder, TrainParamsBuilder, WalkForwardMLParamsBuilder, SweepParamsBuilder},
 };
 use ingestor::commands::common::{NoOpCallback, ProgressCallback};
 use std::sync::Arc;
@@ -628,7 +628,77 @@ fn main() -> Result<()> {
             show_algorithms(algo.clone(), *json)?;
         }
         Some(Commands::Sweep { spreads, skews }) => {
-            run_sweep(&cli, spreads, skews)?;
+            // Build SweepParams from CLI
+            let sweep_params = SweepParamsBuilder::new()
+                .data_path(cli.data.clone())
+                .algorithm(cli.algorithm.clone())
+                .weights_file(cli.weights_file.clone())
+                .spreads(spreads.clone())
+                .skews(skews.clone())
+                .max_inventory(cli.max_inventory)
+                .quote_size(cli.quote_size)
+                .fee_rate(cli.fee_rate)
+                .naive_fills(cli.naive_fills)
+                .fill_prob(cli.fill_prob)
+                .queue_pos(cli.queue_pos)
+                .output(cli.output.clone())
+                .quiet(cli.quiet)
+                .build()
+                .context("Failed to build sweep parameters")?;
+
+            // Execute sweep command
+            let callback = Arc::new(NoOpCallback);
+            let result = BacktestCommands::sweep(sweep_params, callback)
+                .context("Failed to execute sweep command")?;
+
+            // Print results
+            if !cli.quiet {
+                println!("═══════════════════════════════════════════════════════");
+                println!("           PARAMETER SWEEP                              ");
+                println!("═══════════════════════════════════════════════════════");
+                println!();
+                println!("Algorithm: {} ({})", result.algorithm_name, result.algorithm);
+                println!("Total combinations: {}", result.total_combinations);
+                println!();
+
+                // Print all results
+                for item in &result.all_results {
+                    println!(
+                        "Spread={:.1}, Skew={:.1} => Sharpe={:+.2}, Return={:+.2}%, DD={:.2}%, Trades={}",
+                        item.spread,
+                        item.skew,
+                        item.sharpe,
+                        item.total_return * 100.0,
+                        item.max_drawdown * 100.0,
+                        item.num_trades,
+                    );
+                }
+
+                // Print best result
+                if let Some(ref best) = result.best {
+                    println!();
+                    println!("═══════════════════════════════════════════════════════");
+                    println!("BEST PARAMETERS (by Sharpe):");
+                    println!("  Algorithm:  {} ({})", result.algorithm_name, result.algorithm);
+                    println!("  Spread:     {} bps", best.spread);
+                    println!("  Skew:       {}", best.skew);
+                    println!("  Sharpe:     {:.2}", best.sharpe);
+                    println!("  Return:     {:.2}%", best.total_return * 100.0);
+                    println!("  Max DD:     {:.2}%", best.max_drawdown * 100.0);
+                    println!("  Win Rate:   {:.1}%", best.win_rate * 100.0);
+                    println!("═══════════════════════════════════════════════════════");
+                }
+            }
+
+            // Save results if output specified
+            if let Some(ref output) = cli.output {
+                let json = serde_json::to_string_pretty(&result)?;
+                std::fs::write(output, json)?;
+                if !cli.quiet {
+                    println!();
+                    println!("Results saved to: {:?}", output);
+                }
+            }
         }
         Some(Commands::WalkForward { folds, test_hours, rolling, output }) => {
             run_walk_forward(&cli, *folds, *test_hours, *rolling, output.clone())?;
