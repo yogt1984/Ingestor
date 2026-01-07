@@ -30,7 +30,7 @@ use num::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::common::{ProgressCallback, ProgressEvent, LogLevel};
-use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams, WalkForwardMLParams, SweepParams, WalkForwardParams};
+use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams, WalkForwardMLParams, SweepParams, WalkForwardParams, OOSValidateParams};
 use crate::backtest::{
     BacktestEngine, BacktestConfig, BacktestResults,
     replay::{ParquetReplay, ReplayConfig},
@@ -413,6 +413,111 @@ pub struct WalkForwardAggregate {
     pub is_oos_sharpe_ratio: f64,
     /// Probability Sharpe Ratio > 0 (statistical significance)
     pub prob_sharpe_gt_zero: f64,
+}
+
+/// Results from the `oos-validate` command (out-of-sample validation)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OOSValidateResult {
+    /// Algorithm type used
+    pub algorithm: String,
+    /// Algorithm display name
+    pub algorithm_name: String,
+    /// Holdout fraction used
+    pub holdout: f64,
+    /// Embargo hours used
+    pub embargo_hours: f64,
+    /// All validation reports (sorted by OOS Sharpe, descending)
+    pub all_reports: Vec<OOSValidateReport>,
+    /// Best configuration (by OOS Sharpe)
+    pub best: Option<OOSValidateReport>,
+    /// Total number of combinations tested
+    pub total_combinations: usize,
+    /// Verdict distribution summary
+    pub verdict_summary: OOSValidateVerdictSummary,
+}
+
+/// Single validation report from OOS validation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OOSValidateReport {
+    /// Parameters tested
+    pub params_tested: OOSValidateTestedParams,
+    /// Performance comparison
+    pub comparison: OOSValidatePerformanceComparison,
+    /// Overfitting verdict
+    pub overfit_verdict: OOSValidateOverfitVerdict,
+    /// Recommendation
+    pub recommendation: OOSValidateRecommendation,
+    /// In-sample metrics
+    pub in_sample_metrics: OOSValidateSampleMetrics,
+    /// Out-of-sample metrics
+    pub out_of_sample_metrics: OOSValidateSampleMetrics,
+}
+
+/// Parameters that were tested
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OOSValidateTestedParams {
+    pub spread_bps: f64,
+    pub skew_factor: f64,
+    pub fill_probability: f64,
+    pub high_entropy_threshold: f64,
+}
+
+/// Performance comparison between in-sample and out-of-sample
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OOSValidatePerformanceComparison {
+    /// Ratio of OOS/IS Sharpe (closer to 1.0 = less overfit)
+    pub sharpe_degradation: f64,
+    /// Ratio of OOS/IS return (closer to 1.0 = less overfit)
+    pub return_degradation: f64,
+    /// Difference in win rate (IS - OOS)
+    pub win_rate_drop: f64,
+    /// Ratio of OOS/IS trades (measures consistency)
+    pub trade_frequency_ratio: f64,
+}
+
+/// Overfitting verdict
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OOSValidateOverfitVerdict {
+    Robust,
+    MildOverfit,
+    ModerateOverfit,
+    SevereOverfit,
+    Inconclusive,
+}
+
+/// Recommendation based on validation results
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OOSValidateRecommendation {
+    ReadyForPaperTrading,
+    NeedsMoreData,
+    SimplifyStrategy,
+    ReconsiderApproach,
+    StatisticallyInsignificant,
+}
+
+/// Summary metrics for a sample (IS or OOS)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OOSValidateSampleMetrics {
+    pub sharpe_ratio: f64,
+    pub total_return: f64,
+    pub max_drawdown: f64,
+    pub num_trades: usize,
+    pub win_rate: f64,
+    pub profit_factor: f64,
+    pub avg_trade_pnl: f64,
+    pub time_span_hours: f64,
+    pub num_events: usize,
+}
+
+/// Verdict distribution summary
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OOSValidateVerdictSummary {
+    pub robust_count: usize,
+    pub mild_overfit_count: usize,
+    pub moderate_overfit_count: usize,
+    pub severe_overfit_count: usize,
+    pub inconclusive_count: usize,
+    pub total_count: usize,
 }
 
 /// Results from the `evaluate` command
@@ -2284,6 +2389,243 @@ impl BacktestCommands {
             folds: params.folds,
             fold_results,
             aggregate,
+        })
+    }
+
+    /// Run out-of-sample validation
+    ///
+    /// This is the extracted version of the `run_oos_validation()` function from the CLI.
+    /// It supports progress callbacks for real-time updates during execution.
+    ///
+    /// Returns `OOSValidateResult` with all validation reports sorted by OOS Sharpe.
+    pub fn oos_validate(
+        params: OOSValidateParams,
+        callback: Arc<dyn ProgressCallback>,
+    ) -> Result<OOSValidateResult> {
+        use crate::backtest::oos_validation::{OOSValidator, OOSConfig, OverfitVerdict, ValidationRecommendation};
+
+        // Parse algorithm type early to fail fast on invalid algorithm
+        let algo_type = AlgorithmType::from_str(&params.algorithm)
+            .map_err(|_| anyhow::anyhow!(
+                "Unknown algorithm '{}'. Valid options: {}",
+                params.algorithm,
+                AlgorithmRegistry::all_type_strings().join(", ")
+            ))?;
+
+        let algo_name = algo_type.display_name().to_string();
+
+        // Parse parameter lists
+        let spreads: Vec<f64> = params.spreads
+            .split(',')
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    trimmed.parse().ok()
+                }
+            })
+            .collect();
+
+        let skews: Vec<f64> = params.skews
+            .split(',')
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    trimmed.parse().ok()
+                }
+            })
+            .collect();
+
+        let fill_probs: Vec<f64> = params.fill_probs
+            .split(',')
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    trimmed.parse().ok()
+                }
+            })
+            .collect();
+
+        let total_combinations = spreads.len() * skews.len() * fill_probs.len();
+
+        callback.on_event(ProgressEvent::Started {
+            total: Some(total_combinations),
+            message: format!(
+                "Starting out-of-sample validation with algorithm: {} ({} combinations, {:.0}% holdout)",
+                algo_name,
+                total_combinations,
+                params.holdout * 100.0
+            ),
+        });
+
+        // Build OOSConfig
+        let config = OOSConfig {
+            holdout_fraction: params.holdout,
+            embargo_hours: params.embargo_hours,
+            data_dir: params.data_path.clone(),
+            verbose: !params.quiet,
+            ..Default::default()
+        };
+
+        let mut validator = OOSValidator::new(config);
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: "Loading market data...".to_string(),
+        });
+
+        let num_events = validator.load_data()
+            .context("Failed to load market data")?;
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!("Loaded {} events", num_events),
+        });
+
+        // Run validation grid
+        let reports = validator.validate_grid(&spreads, &skews, &fill_probs)
+            .context("Failed to run OOS validation grid")?;
+
+        if reports.is_empty() {
+            callback.on_event(ProgressEvent::Error {
+                message: "No valid results - check data availability".to_string(),
+            });
+            return Ok(OOSValidateResult {
+                algorithm: params.algorithm.clone(),
+                algorithm_name: algo_name,
+                holdout: params.holdout,
+                embargo_hours: params.embargo_hours,
+                all_reports: vec![],
+                best: None,
+                total_combinations,
+                verdict_summary: OOSValidateVerdictSummary::default(),
+            });
+        }
+
+        // Convert reports
+        let mut all_reports: Vec<OOSValidateReport> = Vec::new();
+        let mut current = 0;
+
+        for report in &reports {
+            current += 1;
+
+            callback.on_event(ProgressEvent::Progress {
+                current,
+                total: Some(total_combinations),
+                message: format!(
+                    "Spread={:.1}, Skew={:.1}, FillP={:.0}% => IS Sharpe={:+.2}, OOS Sharpe={:+.2}",
+                    report.params_tested.spread_bps,
+                    report.params_tested.skew_factor,
+                    report.params_tested.fill_probability * 100.0,
+                    report.comparison.in_sample.sharpe_ratio,
+                    report.comparison.out_of_sample.sharpe_ratio,
+                ),
+            });
+
+            let oos_report = OOSValidateReport {
+                params_tested: OOSValidateTestedParams {
+                    spread_bps: report.params_tested.spread_bps,
+                    skew_factor: report.params_tested.skew_factor,
+                    fill_probability: report.params_tested.fill_probability,
+                    high_entropy_threshold: report.params_tested.high_entropy_threshold,
+                },
+                comparison: OOSValidatePerformanceComparison {
+                    sharpe_degradation: report.comparison.sharpe_degradation,
+                    return_degradation: report.comparison.return_degradation,
+                    win_rate_drop: report.comparison.win_rate_drop,
+                    trade_frequency_ratio: report.comparison.trade_frequency_ratio,
+                },
+                overfit_verdict: match report.overfit_verdict {
+                    OverfitVerdict::Robust => OOSValidateOverfitVerdict::Robust,
+                    OverfitVerdict::MildOverfit => OOSValidateOverfitVerdict::MildOverfit,
+                    OverfitVerdict::ModerateOverfit => OOSValidateOverfitVerdict::ModerateOverfit,
+                    OverfitVerdict::SevereOverfit => OOSValidateOverfitVerdict::SevereOverfit,
+                    OverfitVerdict::Inconclusive => OOSValidateOverfitVerdict::Inconclusive,
+                },
+                recommendation: match report.recommendation {
+                    ValidationRecommendation::ReadyForPaperTrading => OOSValidateRecommendation::ReadyForPaperTrading,
+                    ValidationRecommendation::NeedsMoreData => OOSValidateRecommendation::NeedsMoreData,
+                    ValidationRecommendation::SimplifyStrategy => OOSValidateRecommendation::SimplifyStrategy,
+                    ValidationRecommendation::ReconsiderApproach => OOSValidateRecommendation::ReconsiderApproach,
+                    ValidationRecommendation::StatisticallyInsignificant => OOSValidateRecommendation::StatisticallyInsignificant,
+                },
+                in_sample_metrics: OOSValidateSampleMetrics {
+                    sharpe_ratio: report.comparison.in_sample.sharpe_ratio,
+                    total_return: report.comparison.in_sample.total_return,
+                    max_drawdown: report.comparison.in_sample.max_drawdown,
+                    num_trades: report.comparison.in_sample.num_trades,
+                    win_rate: report.comparison.in_sample.win_rate,
+                    profit_factor: report.comparison.in_sample.profit_factor,
+                    avg_trade_pnl: report.comparison.in_sample.avg_trade_pnl,
+                    time_span_hours: report.comparison.in_sample.time_span_hours,
+                    num_events: report.comparison.in_sample.num_events,
+                },
+                out_of_sample_metrics: OOSValidateSampleMetrics {
+                    sharpe_ratio: report.comparison.out_of_sample.sharpe_ratio,
+                    total_return: report.comparison.out_of_sample.total_return,
+                    max_drawdown: report.comparison.out_of_sample.max_drawdown,
+                    num_trades: report.comparison.out_of_sample.num_trades,
+                    win_rate: report.comparison.out_of_sample.win_rate,
+                    profit_factor: report.comparison.out_of_sample.profit_factor,
+                    avg_trade_pnl: report.comparison.out_of_sample.avg_trade_pnl,
+                    time_span_hours: report.comparison.out_of_sample.time_span_hours,
+                    num_events: report.comparison.out_of_sample.num_events,
+                },
+            };
+
+            callback.on_event(ProgressEvent::Metric {
+                name: "current_oos_sharpe".to_string(),
+                value: oos_report.out_of_sample_metrics.sharpe_ratio,
+            });
+
+            all_reports.push(oos_report);
+        }
+
+        // Find best by OOS Sharpe
+        let best = all_reports.iter()
+            .max_by(|a, b| {
+                a.out_of_sample_metrics.sharpe_ratio
+                    .partial_cmp(&b.out_of_sample_metrics.sharpe_ratio)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .cloned();
+
+        // Calculate verdict summary
+        let mut verdict_summary = OOSValidateVerdictSummary::default();
+        verdict_summary.total_count = all_reports.len();
+
+        for report in &all_reports {
+            match report.overfit_verdict {
+                OOSValidateOverfitVerdict::Robust => verdict_summary.robust_count += 1,
+                OOSValidateOverfitVerdict::MildOverfit => verdict_summary.mild_overfit_count += 1,
+                OOSValidateOverfitVerdict::ModerateOverfit => verdict_summary.moderate_overfit_count += 1,
+                OOSValidateOverfitVerdict::SevereOverfit => verdict_summary.severe_overfit_count += 1,
+                OOSValidateOverfitVerdict::Inconclusive => verdict_summary.inconclusive_count += 1,
+            }
+        }
+
+        callback.on_event(ProgressEvent::Completed {
+            message: format!(
+                "Out-of-sample validation completed: {} combinations tested, best OOS Sharpe: {:.2}",
+                total_combinations,
+                best.as_ref().map(|b| b.out_of_sample_metrics.sharpe_ratio).unwrap_or(0.0)
+            ),
+        });
+
+        Ok(OOSValidateResult {
+            algorithm: params.algorithm.clone(),
+            algorithm_name: algo_name,
+            holdout: params.holdout,
+            embargo_hours: params.embargo_hours,
+            all_reports,
+            best,
+            total_combinations,
+            verdict_summary,
         })
     }
 }
@@ -7049,6 +7391,565 @@ mod tests {
         assert_eq!(params.skew, 0.5);
         assert_eq!(params.fill_prob, 0.10);
         assert_eq!(params.train_sharpe, 1.5);
+    }
+
+    // ============================================================================
+    // OOSValidateResult Tests
+    // ============================================================================
+
+    #[test]
+    fn test_oos_validate_result_creation() {
+        let result = OOSValidateResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            holdout: 0.20,
+            embargo_hours: 1.0,
+            all_reports: vec![
+                OOSValidateReport {
+                    params_tested: OOSValidateTestedParams {
+                        spread_bps: 2.0,
+                        skew_factor: 0.5,
+                        fill_probability: 0.10,
+                        high_entropy_threshold: 0.7,
+                    },
+                    comparison: OOSValidatePerformanceComparison {
+                        sharpe_degradation: 0.8,
+                        return_degradation: 0.75,
+                        win_rate_drop: 0.05,
+                        trade_frequency_ratio: 0.9,
+                    },
+                    overfit_verdict: OOSValidateOverfitVerdict::Robust,
+                    recommendation: OOSValidateRecommendation::ReadyForPaperTrading,
+                    in_sample_metrics: OOSValidateSampleMetrics {
+                        sharpe_ratio: 1.5,
+                        total_return: 0.05,
+                        max_drawdown: 0.02,
+                        num_trades: 100,
+                        win_rate: 0.55,
+                        profit_factor: 1.2,
+                        avg_trade_pnl: 0.001,
+                        time_span_hours: 100.0,
+                        num_events: 10000,
+                    },
+                    out_of_sample_metrics: OOSValidateSampleMetrics {
+                        sharpe_ratio: 1.2,
+                        total_return: 0.0375,
+                        max_drawdown: 0.03,
+                        num_trades: 50,
+                        win_rate: 0.50,
+                        profit_factor: 1.1,
+                        avg_trade_pnl: 0.0008,
+                        time_span_hours: 25.0,
+                        num_events: 2500,
+                    },
+                },
+            ],
+            best: Some(OOSValidateReport {
+                params_tested: OOSValidateTestedParams {
+                    spread_bps: 2.0,
+                    skew_factor: 0.5,
+                    fill_probability: 0.10,
+                    high_entropy_threshold: 0.7,
+                },
+                comparison: OOSValidatePerformanceComparison {
+                    sharpe_degradation: 0.8,
+                    return_degradation: 0.75,
+                    win_rate_drop: 0.05,
+                    trade_frequency_ratio: 0.9,
+                },
+                overfit_verdict: OOSValidateOverfitVerdict::Robust,
+                recommendation: OOSValidateRecommendation::ReadyForPaperTrading,
+                in_sample_metrics: OOSValidateSampleMetrics {
+                    sharpe_ratio: 1.5,
+                    total_return: 0.05,
+                    max_drawdown: 0.02,
+                    num_trades: 100,
+                    win_rate: 0.55,
+                    profit_factor: 1.2,
+                    avg_trade_pnl: 0.001,
+                    time_span_hours: 100.0,
+                    num_events: 10000,
+                },
+                out_of_sample_metrics: OOSValidateSampleMetrics {
+                    sharpe_ratio: 1.2,
+                    total_return: 0.0375,
+                    max_drawdown: 0.03,
+                    num_trades: 50,
+                    win_rate: 0.50,
+                    profit_factor: 1.1,
+                    avg_trade_pnl: 0.0008,
+                    time_span_hours: 25.0,
+                    num_events: 2500,
+                },
+            }),
+            total_combinations: 1,
+            verdict_summary: OOSValidateVerdictSummary {
+                robust_count: 1,
+                mild_overfit_count: 0,
+                moderate_overfit_count: 0,
+                severe_overfit_count: 0,
+                inconclusive_count: 0,
+                total_count: 1,
+            },
+        };
+
+        assert_eq!(result.algorithm, "as");
+        assert_eq!(result.holdout, 0.20);
+        assert_eq!(result.all_reports.len(), 1);
+        assert_eq!(result.verdict_summary.robust_count, 1);
+    }
+
+    #[test]
+    fn test_oos_validate_result_serialization() {
+        let result = OOSValidateResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            holdout: 0.20,
+            embargo_hours: 1.0,
+            all_reports: vec![],
+            best: None,
+            total_combinations: 0,
+            verdict_summary: OOSValidateVerdictSummary::default(),
+        };
+
+        let json = serde_json::to_string(&result).expect("Should serialize");
+        let deserialized: OOSValidateResult = serde_json::from_str(&json).expect("Should deserialize");
+
+        assert_eq!(deserialized.algorithm, result.algorithm);
+        assert_eq!(deserialized.holdout, result.holdout);
+        assert_eq!(deserialized.all_reports.len(), result.all_reports.len());
+    }
+
+    #[test]
+    fn test_oos_validate_result_with_no_best() {
+        let result = OOSValidateResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            holdout: 0.20,
+            embargo_hours: 1.0,
+            all_reports: vec![],
+            best: None,
+            total_combinations: 0,
+            verdict_summary: OOSValidateVerdictSummary::default(),
+        };
+
+        assert!(result.best.is_none());
+        assert_eq!(result.all_reports.len(), 0);
+    }
+
+    #[test]
+    fn test_oos_validate_report_creation() {
+        let report = OOSValidateReport {
+            params_tested: OOSValidateTestedParams {
+                spread_bps: 2.0,
+                skew_factor: 0.5,
+                fill_probability: 0.10,
+                high_entropy_threshold: 0.7,
+            },
+            comparison: OOSValidatePerformanceComparison {
+                sharpe_degradation: 0.8,
+                return_degradation: 0.75,
+                win_rate_drop: 0.05,
+                trade_frequency_ratio: 0.9,
+            },
+            overfit_verdict: OOSValidateOverfitVerdict::Robust,
+            recommendation: OOSValidateRecommendation::ReadyForPaperTrading,
+            in_sample_metrics: OOSValidateSampleMetrics {
+                sharpe_ratio: 1.5,
+                total_return: 0.05,
+                max_drawdown: 0.02,
+                num_trades: 100,
+                win_rate: 0.55,
+                profit_factor: 1.2,
+                avg_trade_pnl: 0.001,
+                time_span_hours: 100.0,
+                num_events: 10000,
+            },
+            out_of_sample_metrics: OOSValidateSampleMetrics {
+                sharpe_ratio: 1.2,
+                total_return: 0.0375,
+                max_drawdown: 0.03,
+                num_trades: 50,
+                win_rate: 0.50,
+                profit_factor: 1.1,
+                avg_trade_pnl: 0.0008,
+                time_span_hours: 25.0,
+                num_events: 2500,
+            },
+        };
+
+        assert_eq!(report.params_tested.spread_bps, 2.0);
+        assert_eq!(report.comparison.sharpe_degradation, 0.8);
+        assert_eq!(report.in_sample_metrics.sharpe_ratio, 1.5);
+        assert_eq!(report.out_of_sample_metrics.sharpe_ratio, 1.2);
+    }
+
+    #[test]
+    fn test_oos_validate_tested_params_creation() {
+        let params = OOSValidateTestedParams {
+            spread_bps: 2.0,
+            skew_factor: 0.5,
+            fill_probability: 0.10,
+            high_entropy_threshold: 0.7,
+        };
+
+        assert_eq!(params.spread_bps, 2.0);
+        assert_eq!(params.skew_factor, 0.5);
+        assert_eq!(params.fill_probability, 0.10);
+        assert_eq!(params.high_entropy_threshold, 0.7);
+    }
+
+    #[test]
+    fn test_oos_validate_performance_comparison_creation() {
+        let comparison = OOSValidatePerformanceComparison {
+            sharpe_degradation: 0.8,
+            return_degradation: 0.75,
+            win_rate_drop: 0.05,
+            trade_frequency_ratio: 0.9,
+        };
+
+        assert_eq!(comparison.sharpe_degradation, 0.8);
+        assert_eq!(comparison.return_degradation, 0.75);
+        assert_eq!(comparison.win_rate_drop, 0.05);
+        assert_eq!(comparison.trade_frequency_ratio, 0.9);
+    }
+
+    #[test]
+    fn test_oos_validate_overfit_verdict_all_variants() {
+        let verdicts = vec![
+            OOSValidateOverfitVerdict::Robust,
+            OOSValidateOverfitVerdict::MildOverfit,
+            OOSValidateOverfitVerdict::ModerateOverfit,
+            OOSValidateOverfitVerdict::SevereOverfit,
+            OOSValidateOverfitVerdict::Inconclusive,
+        ];
+
+        assert_eq!(verdicts.len(), 5);
+    }
+
+    #[test]
+    fn test_oos_validate_overfit_verdict_equality() {
+        let v1 = OOSValidateOverfitVerdict::Robust;
+        let v2 = OOSValidateOverfitVerdict::Robust;
+        let v3 = OOSValidateOverfitVerdict::MildOverfit;
+
+        assert_eq!(v1, v2);
+        assert_ne!(v1, v3);
+    }
+
+    #[test]
+    fn test_oos_validate_recommendation_all_variants() {
+        let recommendations = vec![
+            OOSValidateRecommendation::ReadyForPaperTrading,
+            OOSValidateRecommendation::NeedsMoreData,
+            OOSValidateRecommendation::SimplifyStrategy,
+            OOSValidateRecommendation::ReconsiderApproach,
+            OOSValidateRecommendation::StatisticallyInsignificant,
+        ];
+
+        assert_eq!(recommendations.len(), 5);
+    }
+
+    #[test]
+    fn test_oos_validate_sample_metrics_creation() {
+        let metrics = OOSValidateSampleMetrics {
+            sharpe_ratio: 1.5,
+            total_return: 0.05,
+            max_drawdown: 0.02,
+            num_trades: 100,
+            win_rate: 0.55,
+            profit_factor: 1.2,
+            avg_trade_pnl: 0.001,
+            time_span_hours: 100.0,
+            num_events: 10000,
+        };
+
+        assert_eq!(metrics.sharpe_ratio, 1.5);
+        assert_eq!(metrics.num_trades, 100);
+        assert_eq!(metrics.time_span_hours, 100.0);
+    }
+
+    #[test]
+    fn test_oos_validate_verdict_summary_default() {
+        let summary = OOSValidateVerdictSummary::default();
+        assert_eq!(summary.robust_count, 0);
+        assert_eq!(summary.total_count, 0);
+    }
+
+    #[test]
+    fn test_oos_validate_verdict_summary_calculation() {
+        let mut summary = OOSValidateVerdictSummary::default();
+        summary.robust_count = 5;
+        summary.mild_overfit_count = 3;
+        summary.moderate_overfit_count = 2;
+        summary.severe_overfit_count = 1;
+        summary.inconclusive_count = 1;
+        summary.total_count = 12;
+
+        assert_eq!(summary.robust_count, 5);
+        assert_eq!(summary.total_count, 12);
+    }
+
+    #[test]
+    fn test_oos_validate_result_with_multiple_reports() {
+        let result = OOSValidateResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            holdout: 0.20,
+            embargo_hours: 1.0,
+            all_reports: vec![
+                OOSValidateReport {
+                    params_tested: OOSValidateTestedParams {
+                        spread_bps: 1.0,
+                        skew_factor: 0.3,
+                        fill_probability: 0.05,
+                        high_entropy_threshold: 0.7,
+                    },
+                    comparison: OOSValidatePerformanceComparison {
+                        sharpe_degradation: 0.9,
+                        return_degradation: 0.85,
+                        win_rate_drop: 0.02,
+                        trade_frequency_ratio: 0.95,
+                    },
+                    overfit_verdict: OOSValidateOverfitVerdict::Robust,
+                    recommendation: OOSValidateRecommendation::ReadyForPaperTrading,
+                    in_sample_metrics: OOSValidateSampleMetrics {
+                        sharpe_ratio: 1.0,
+                        total_return: 0.03,
+                        max_drawdown: 0.02,
+                        num_trades: 80,
+                        win_rate: 0.52,
+                        profit_factor: 1.1,
+                        avg_trade_pnl: 0.0008,
+                        time_span_hours: 100.0,
+                        num_events: 10000,
+                    },
+                    out_of_sample_metrics: OOSValidateSampleMetrics {
+                        sharpe_ratio: 0.9,
+                        total_return: 0.0255,
+                        max_drawdown: 0.025,
+                        num_trades: 40,
+                        win_rate: 0.50,
+                        profit_factor: 1.05,
+                        avg_trade_pnl: 0.0007,
+                        time_span_hours: 25.0,
+                        num_events: 2500,
+                    },
+                },
+                OOSValidateReport {
+                    params_tested: OOSValidateTestedParams {
+                        spread_bps: 2.0,
+                        skew_factor: 0.5,
+                        fill_probability: 0.10,
+                        high_entropy_threshold: 0.7,
+                    },
+                    comparison: OOSValidatePerformanceComparison {
+                        sharpe_degradation: 0.3,
+                        return_degradation: 0.2,
+                        win_rate_drop: 0.15,
+                        trade_frequency_ratio: 0.5,
+                    },
+                    overfit_verdict: OOSValidateOverfitVerdict::SevereOverfit,
+                    recommendation: OOSValidateRecommendation::SimplifyStrategy,
+                    in_sample_metrics: OOSValidateSampleMetrics {
+                        sharpe_ratio: 2.0,
+                        total_return: 0.10,
+                        max_drawdown: 0.01,
+                        num_trades: 150,
+                        win_rate: 0.60,
+                        profit_factor: 1.5,
+                        avg_trade_pnl: 0.002,
+                        time_span_hours: 100.0,
+                        num_events: 10000,
+                    },
+                    out_of_sample_metrics: OOSValidateSampleMetrics {
+                        sharpe_ratio: 0.6,
+                        total_return: 0.02,
+                        max_drawdown: 0.05,
+                        num_trades: 75,
+                        win_rate: 0.45,
+                        profit_factor: 1.0,
+                        avg_trade_pnl: 0.0005,
+                        time_span_hours: 25.0,
+                        num_events: 2500,
+                    },
+                },
+            ],
+            best: Some(OOSValidateReport {
+                params_tested: OOSValidateTestedParams {
+                    spread_bps: 1.0,
+                    skew_factor: 0.3,
+                    fill_probability: 0.05,
+                    high_entropy_threshold: 0.7,
+                },
+                comparison: OOSValidatePerformanceComparison {
+                    sharpe_degradation: 0.9,
+                    return_degradation: 0.85,
+                    win_rate_drop: 0.02,
+                    trade_frequency_ratio: 0.95,
+                },
+                overfit_verdict: OOSValidateOverfitVerdict::Robust,
+                recommendation: OOSValidateRecommendation::ReadyForPaperTrading,
+                in_sample_metrics: OOSValidateSampleMetrics {
+                    sharpe_ratio: 1.0,
+                    total_return: 0.03,
+                    max_drawdown: 0.02,
+                    num_trades: 80,
+                    win_rate: 0.52,
+                    profit_factor: 1.1,
+                    avg_trade_pnl: 0.0008,
+                    time_span_hours: 100.0,
+                    num_events: 10000,
+                },
+                out_of_sample_metrics: OOSValidateSampleMetrics {
+                    sharpe_ratio: 0.9,
+                    total_return: 0.0255,
+                    max_drawdown: 0.025,
+                    num_trades: 40,
+                    win_rate: 0.50,
+                    profit_factor: 1.05,
+                    avg_trade_pnl: 0.0007,
+                    time_span_hours: 25.0,
+                    num_events: 2500,
+                },
+            }),
+            total_combinations: 2,
+            verdict_summary: OOSValidateVerdictSummary {
+                robust_count: 1,
+                mild_overfit_count: 0,
+                moderate_overfit_count: 0,
+                severe_overfit_count: 1,
+                inconclusive_count: 0,
+                total_count: 2,
+            },
+        };
+
+        assert_eq!(result.all_reports.len(), 2);
+        assert!(result.best.is_some());
+        assert_eq!(result.verdict_summary.robust_count, 1);
+        assert_eq!(result.verdict_summary.severe_overfit_count, 1);
+    }
+
+    #[test]
+    fn test_oos_validate_result_edge_cases() {
+        // Test with zero degradation (perfect match)
+        let comparison = OOSValidatePerformanceComparison {
+            sharpe_degradation: 1.0,
+            return_degradation: 1.0,
+            win_rate_drop: 0.0,
+            trade_frequency_ratio: 1.0,
+        };
+        assert_eq!(comparison.sharpe_degradation, 1.0);
+        assert_eq!(comparison.win_rate_drop, 0.0);
+
+        // Test with negative degradation (OOS better than IS)
+        let comparison = OOSValidatePerformanceComparison {
+            sharpe_degradation: 1.2,
+            return_degradation: 1.1,
+            win_rate_drop: -0.05,
+            trade_frequency_ratio: 1.1,
+        };
+        assert!(comparison.sharpe_degradation > 1.0);
+        assert!(comparison.win_rate_drop < 0.0);
+    }
+
+    #[test]
+    fn test_oos_validate_sample_metrics_edge_cases() {
+        // Test with zero values
+        let metrics = OOSValidateSampleMetrics {
+            sharpe_ratio: 0.0,
+            total_return: 0.0,
+            max_drawdown: 0.0,
+            num_trades: 0,
+            win_rate: 0.0,
+            profit_factor: 0.0,
+            avg_trade_pnl: 0.0,
+            time_span_hours: 0.0,
+            num_events: 0,
+        };
+
+        assert_eq!(metrics.sharpe_ratio, 0.0);
+        assert_eq!(metrics.num_trades, 0);
+
+        // Test with negative sharpe (losses)
+        let metrics = OOSValidateSampleMetrics {
+            sharpe_ratio: -1.0,
+            total_return: -0.05,
+            max_drawdown: 0.10,
+            num_trades: 50,
+            win_rate: 0.30,
+            profit_factor: 0.5,
+            avg_trade_pnl: -0.001,
+            time_span_hours: 25.0,
+            num_events: 2500,
+        };
+
+        assert!(metrics.sharpe_ratio < 0.0);
+        assert!(metrics.total_return < 0.0);
+    }
+
+    #[test]
+    fn test_oos_validate_result_clone() {
+        let result = OOSValidateResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            holdout: 0.20,
+            embargo_hours: 1.0,
+            all_reports: vec![],
+            best: None,
+            total_combinations: 0,
+            verdict_summary: OOSValidateVerdictSummary::default(),
+        };
+
+        let cloned = result.clone();
+        assert_eq!(result.algorithm, cloned.algorithm);
+        assert_eq!(result.holdout, cloned.holdout);
+    }
+
+    #[test]
+    fn test_oos_validate_report_clone() {
+        let report = OOSValidateReport {
+            params_tested: OOSValidateTestedParams {
+                spread_bps: 2.0,
+                skew_factor: 0.5,
+                fill_probability: 0.10,
+                high_entropy_threshold: 0.7,
+            },
+            comparison: OOSValidatePerformanceComparison {
+                sharpe_degradation: 0.8,
+                return_degradation: 0.75,
+                win_rate_drop: 0.05,
+                trade_frequency_ratio: 0.9,
+            },
+            overfit_verdict: OOSValidateOverfitVerdict::Robust,
+            recommendation: OOSValidateRecommendation::ReadyForPaperTrading,
+            in_sample_metrics: OOSValidateSampleMetrics {
+                sharpe_ratio: 1.5,
+                total_return: 0.05,
+                max_drawdown: 0.02,
+                num_trades: 100,
+                win_rate: 0.55,
+                profit_factor: 1.2,
+                avg_trade_pnl: 0.001,
+                time_span_hours: 100.0,
+                num_events: 10000,
+            },
+            out_of_sample_metrics: OOSValidateSampleMetrics {
+                sharpe_ratio: 1.2,
+                total_return: 0.0375,
+                max_drawdown: 0.03,
+                num_trades: 50,
+                win_rate: 0.50,
+                profit_factor: 1.1,
+                avg_trade_pnl: 0.0008,
+                time_span_hours: 25.0,
+                num_events: 2500,
+            },
+        };
+
+        let cloned = report.clone();
+        assert_eq!(report.params_tested.spread_bps, cloned.params_tested.spread_bps);
+        assert_eq!(report.comparison.sharpe_degradation, cloned.comparison.sharpe_degradation);
     }
 }
 

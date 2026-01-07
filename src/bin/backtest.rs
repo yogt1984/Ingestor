@@ -63,9 +63,10 @@ use ingestor::strategies::{
 };
 use ingestor::commands::{
     BacktestCommands,
-    params::backtest_params::{EvaluateParamsBuilder, TuneParamsBuilder, RegimeSearchParamsBuilder, MultiObjectiveParamsBuilder, RegimeOptimizeParamsBuilder, TrainParamsBuilder, WalkForwardMLParamsBuilder, SweepParamsBuilder, WalkForwardParamsBuilder},
+    params::backtest_params::{EvaluateParamsBuilder, TuneParamsBuilder, RegimeSearchParamsBuilder, MultiObjectiveParamsBuilder, RegimeOptimizeParamsBuilder, TrainParamsBuilder, WalkForwardMLParamsBuilder, SweepParamsBuilder, WalkForwardParamsBuilder, OOSValidateParamsBuilder},
 };
 use ingestor::commands::common::{NoOpCallback, ProgressCallback};
+use ingestor::commands::backtest::OOSValidateOverfitVerdict;
 use std::sync::Arc;
 
 #[derive(Parser)]
@@ -850,7 +851,130 @@ fn main() -> Result<()> {
             run_regime_search(&cli, high_spreads, med_spreads, low_spreads, high_skews, med_skews, low_skews, fill_probs, output.clone())?;
         }
         Some(Commands::OosValidate { holdout, embargo_hours, spreads, skews, fill_probs, output }) => {
-            run_oos_validation(&cli, *holdout, *embargo_hours, spreads, skews, fill_probs, output.clone())?;
+            // Build OOSValidateParams from CLI
+            let oos_params = OOSValidateParamsBuilder::new()
+                .data_path(cli.data.clone())
+                .algorithm(cli.algorithm.clone())
+                .weights_file(cli.weights_file.clone())
+                .holdout(*holdout)
+                .embargo_hours(*embargo_hours)
+                .spreads(spreads.clone())
+                .skews(skews.clone())
+                .fill_probs(fill_probs.clone())
+                .max_inventory(cli.max_inventory)
+                .quote_size(cli.quote_size)
+                .fee_rate(cli.fee_rate)
+                .naive_fills(cli.naive_fills)
+                .queue_pos(cli.queue_pos)
+                .output(output.clone())
+                .quiet(cli.quiet)
+                .build()
+                .context("Failed to build OOS validation parameters")?;
+
+            // Execute OOS validation command
+            let callback = Arc::new(NoOpCallback);
+            let result = BacktestCommands::oos_validate(oos_params, callback)
+                .context("Failed to execute OOS validation command")?;
+
+            // Print results
+            if !cli.quiet {
+                println!("═══════════════════════════════════════════════════════");
+                println!("         OUT-OF-SAMPLE VALIDATION                      ");
+                println!("═══════════════════════════════════════════════════════");
+                println!();
+                println!("Configuration:");
+                println!("  Data:           {:?}", cli.data);
+                println!("  Hold-out:       {:.0}%", result.holdout * 100.0);
+                println!("  Embargo:        {:.1} hours", result.embargo_hours);
+                println!();
+
+                if !result.all_reports.is_empty() {
+                    println!("═══════════════════════════════════════════════════════");
+                    println!("              VALIDATION RESULTS SUMMARY                ");
+                    println!("═══════════════════════════════════════════════════════");
+                    println!();
+
+                    println!("TOP CONFIGURATIONS (by OOS Sharpe):");
+                    println!("┌───────┬───────┬────────┬───────────┬───────────┬──────────┬────────────┐");
+                    println!("│ Sprd  │ Skew  │ FillP  │  IS Shpe  │  OOS Shpe │  Degrad  │   Verdict  │");
+                    println!("├───────┼───────┼────────┼───────────┼───────────┼──────────┼────────────┤");
+
+                    for report in result.all_reports.iter().take(10) {
+                        let verdict_short = match report.overfit_verdict {
+                            OOSValidateOverfitVerdict::Robust => "ROBUST",
+                            OOSValidateOverfitVerdict::MildOverfit => "MILD",
+                            OOSValidateOverfitVerdict::ModerateOverfit => "MODERATE",
+                            OOSValidateOverfitVerdict::SevereOverfit => "SEVERE",
+                            OOSValidateOverfitVerdict::Inconclusive => "INCONCL",
+                        };
+
+                        println!("│ {:5.1} │ {:5.2} │ {:5.0}% │ {:+9.3} │ {:+9.3} │ {:7.0}% │ {:10} │",
+                            report.params_tested.spread_bps,
+                            report.params_tested.skew_factor,
+                            report.params_tested.fill_probability * 100.0,
+                            report.in_sample_metrics.sharpe_ratio,
+                            report.out_of_sample_metrics.sharpe_ratio,
+                            report.comparison.sharpe_degradation * 100.0,
+                            verdict_short);
+                    }
+                    println!("└───────┴───────┴────────┴───────────┴───────────┴──────────┴────────────┘");
+                    println!();
+
+                    // Print verdict distribution
+                    println!("VERDICT DISTRIBUTION:");
+                    println!("  Robust:         {} ({:.0}%)", 
+                        result.verdict_summary.robust_count,
+                        if result.verdict_summary.total_count > 0 {
+                            (result.verdict_summary.robust_count as f64 / result.verdict_summary.total_count as f64) * 100.0
+                        } else { 0.0 });
+                    println!("  Mild Overfit:   {} ({:.0}%)",
+                        result.verdict_summary.mild_overfit_count,
+                        if result.verdict_summary.total_count > 0 {
+                            (result.verdict_summary.mild_overfit_count as f64 / result.verdict_summary.total_count as f64) * 100.0
+                        } else { 0.0 });
+                    println!("  Moderate Overfit: {} ({:.0}%)",
+                        result.verdict_summary.moderate_overfit_count,
+                        if result.verdict_summary.total_count > 0 {
+                            (result.verdict_summary.moderate_overfit_count as f64 / result.verdict_summary.total_count as f64) * 100.0
+                        } else { 0.0 });
+                    println!("  Severe Overfit: {} ({:.0}%)",
+                        result.verdict_summary.severe_overfit_count,
+                        if result.verdict_summary.total_count > 0 {
+                            (result.verdict_summary.severe_overfit_count as f64 / result.verdict_summary.total_count as f64) * 100.0
+                        } else { 0.0 });
+                    println!();
+
+                    // Print best result details
+                    if let Some(ref best) = result.best {
+                        println!("═══════════════════════════════════════════════════════");
+                        println!("BEST CONFIGURATION (by OOS Sharpe):");
+                        println!("═══════════════════════════════════════════════════════");
+                        println!("Parameters:");
+                        println!("  Spread:          {:.1} bps", best.params_tested.spread_bps);
+                        println!("  Skew:            {:.2}", best.params_tested.skew_factor);
+                        println!("  Fill Prob:       {:.0}%", best.params_tested.fill_probability * 100.0);
+                        println!();
+                        println!("Performance:");
+                        println!("  In-Sample Sharpe:  {:.3}", best.in_sample_metrics.sharpe_ratio);
+                        println!("  OOS Sharpe:        {:.3}", best.out_of_sample_metrics.sharpe_ratio);
+                        println!("  Sharpe Degradation: {:.0}%", best.comparison.sharpe_degradation * 100.0);
+                        println!("  Verdict:           {:?}", best.overfit_verdict);
+                        println!("═══════════════════════════════════════════════════════");
+                    }
+                } else {
+                    println!("No valid results - check data availability");
+                }
+            }
+
+            // Save results if output specified
+            if let Some(ref output_path) = output {
+                let json = serde_json::to_string_pretty(&result)?;
+                std::fs::write(output_path, json)?;
+                if !cli.quiet {
+                    println!();
+                    println!("Results saved to: {:?}", output_path);
+                }
+            }
         }
         Some(Commands::MultiObjective { spreads, skews, fill_probs, high_entropies, min_trades, w_sharpe, w_drawdown, w_fill, w_turnover, output }) => {
             run_multi_objective(&cli, spreads, skews, fill_probs, high_entropies, *min_trades, *w_sharpe, *w_drawdown, *w_fill, *w_turnover, output.clone())?;
