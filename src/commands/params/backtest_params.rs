@@ -7607,4 +7607,784 @@ mod walk_forward_params_tests {
     }
 }
 
+#[cfg(test)]
+mod oos_validate_params_tests {
+    use super::*;
 
+    // ============================================================================
+    // Builder Creation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_oos_validate_params_builder_new() {
+        let builder = OOSValidateParamsBuilder::new();
+        assert!(true);
+    }
+
+    #[test]
+    fn test_oos_validate_params_builder_default() {
+        let builder = OOSValidateParamsBuilder::default();
+        assert!(true);
+    }
+
+    // ============================================================================
+    // Required Fields Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_oos_validate_params_missing_data_path() {
+        let result = OOSValidateParamsBuilder::new()
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .fill_probs("0.05,0.10".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("data_path"));
+    }
+
+    #[test]
+    fn test_oos_validate_params_missing_algorithm() {
+        let result = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .fill_probs("0.05,0.10".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("algorithm"));
+    }
+
+    #[test]
+    fn test_oos_validate_params_missing_spreads() {
+        let result = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .skews("0.3,0.5".to_string())
+            .fill_probs("0.05,0.10".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("spreads"));
+    }
+
+    #[test]
+    fn test_oos_validate_params_missing_skews() {
+        let result = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .fill_probs("0.05,0.10".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("skews"));
+    }
+
+    #[test]
+    fn test_oos_validate_params_missing_fill_probs() {
+        let result = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("fill_probs"));
+    }
+
+    #[test]
+    fn test_oos_validate_params_missing_all_required() {
+        let result = OOSValidateParamsBuilder::new().build();
+        assert!(result.is_err());
+    }
+
+    // ============================================================================
+    // Holdout Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_oos_validate_params_holdout_too_low() {
+        let result = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("0.05".to_string())
+            .holdout(0.05)
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("holdout"));
+    }
+
+    #[test]
+    fn test_oos_validate_params_holdout_too_high() {
+        let result = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("0.05".to_string())
+            .holdout(0.6)
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("holdout"));
+    }
+
+    #[test]
+    fn test_oos_validate_params_holdout_boundary_low() {
+        let params = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("0.05".to_string())
+            .holdout(0.1)
+            .build()
+            .expect("Should accept minimum holdout");
+        assert_eq!(params.holdout, 0.1);
+    }
+
+    #[test]
+    fn test_oos_validate_params_holdout_boundary_high() {
+        let params = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("0.05".to_string())
+            .holdout(0.5)
+            .build()
+            .expect("Should accept maximum holdout");
+        assert_eq!(params.holdout, 0.5);
+    }
+
+    #[test]
+    fn test_oos_validate_params_holdout_middle() {
+        let params = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("0.05".to_string())
+            .holdout(0.25)
+            .build()
+            .expect("Should accept middle holdout");
+        assert_eq!(params.holdout, 0.25);
+    }
+
+    // ============================================================================
+    // Parameter List Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_oos_validate_params_empty_spreads() {
+        let result = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("0.05".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_oos_validate_params_invalid_fill_probs() {
+        let result = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("1.5,2.0".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("fill_prob"));
+    }
+
+    #[test]
+    fn test_oos_validate_params_valid_params() {
+        let params = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .fill_probs("0.05,0.10,0.15".to_string())
+            .holdout(0.20)
+            .embargo_hours(1.0)
+            .build()
+            .expect("Should build valid params");
+
+        assert_eq!(params.algorithm, "as");
+        assert_eq!(params.spreads, "1,2,3");
+        assert_eq!(params.skews, "0.3,0.5");
+        assert_eq!(params.fill_probs, "0.05,0.10,0.15");
+        assert_eq!(params.holdout, 0.20);
+        assert_eq!(params.embargo_hours, 1.0);
+    }
+
+    // ============================================================================
+    // Embargo Hours Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_oos_validate_params_negative_embargo_hours() {
+        let result = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("0.05".to_string())
+            .embargo_hours(-1.0)
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("embargo_hours"));
+    }
+
+    #[test]
+    fn test_oos_validate_params_zero_embargo_hours() {
+        let params = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("0.05".to_string())
+            .embargo_hours(0.0)
+            .build()
+            .expect("Should accept zero embargo hours");
+        assert_eq!(params.embargo_hours, 0.0);
+    }
+
+    // ============================================================================
+    // Default Values Tests
+    // ============================================================================
+
+    #[test]
+    fn test_oos_validate_params_defaults() {
+        let params = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("0.05".to_string())
+            .build()
+            .expect("Should build with defaults");
+
+        assert_eq!(params.holdout, 0.20);
+        assert_eq!(params.embargo_hours, 1.0);
+        assert_eq!(params.max_inventory, 0.1);
+        assert_eq!(params.quote_size, 0.001);
+        assert_eq!(params.fee_rate, 0.0001);
+        assert_eq!(params.queue_pos, 0.5);
+        assert_eq!(params.naive_fills, false);
+        assert_eq!(params.quiet, false);
+    }
+
+    // ============================================================================
+    // Builder Method Tests
+    // ============================================================================
+
+    #[test]
+    fn test_oos_validate_params_builder_all_methods() {
+        let params = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .weights_file(Some(PathBuf::from("./weights.json")))
+            .holdout(0.25)
+            .embargo_hours(2.0)
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .fill_probs("0.05,0.10".to_string())
+            .max_inventory(0.2)
+            .quote_size(0.002)
+            .fee_rate(0.0002)
+            .naive_fills(true)
+            .queue_pos(0.6)
+            .output(Some(PathBuf::from("./output.json")))
+            .quiet(true)
+            .build()
+            .expect("Should build with all methods");
+
+        assert_eq!(params.algorithm, "as");
+        assert!(params.weights_file.is_some());
+        assert_eq!(params.holdout, 0.25);
+        assert_eq!(params.embargo_hours, 2.0);
+        assert_eq!(params.spreads, "1,2,3");
+        assert_eq!(params.skews, "0.3,0.5");
+        assert_eq!(params.fill_probs, "0.05,0.10");
+    }
+
+    // ============================================================================
+    // Edge Cases Tests
+    // ============================================================================
+
+    #[test]
+    fn test_oos_validate_params_single_value_lists() {
+        let params = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("0.05".to_string())
+            .build()
+            .expect("Should accept single values");
+
+        assert_eq!(params.spreads, "1");
+        assert_eq!(params.skews, "0.3");
+        assert_eq!(params.fill_probs, "0.05");
+    }
+
+    #[test]
+    fn test_oos_validate_params_whitespace_handling() {
+        let params = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads(" 1 , 2 , 3 ".to_string())
+            .skews(" 0.3 , 0.5 ".to_string())
+            .fill_probs(" 0.05 , 0.10 ".to_string())
+            .build()
+            .expect("Should handle whitespace");
+
+        assert_eq!(params.spreads, " 1 , 2 , 3 ");
+        assert_eq!(params.skews, " 0.3 , 0.5 ");
+        assert_eq!(params.fill_probs, " 0.05 , 0.10 ");
+    }
+
+    #[test]
+    fn test_oos_validate_params_negative_spread() {
+        let result = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("-1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("0.05".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("spread"));
+    }
+
+    #[test]
+    fn test_oos_validate_params_fill_prob_out_of_range() {
+        let result = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("0.05,1.5".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("fill_prob"));
+    }
+
+    #[test]
+    fn test_oos_validate_params_invalid_queue_pos() {
+        let result = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("0.05".to_string())
+            .queue_pos(1.5)
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("queue_pos"));
+    }
+
+    #[test]
+    fn test_oos_validate_params_negative_fee_rate() {
+        let result = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("0.05".to_string())
+            .fee_rate(-0.1)
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("fee_rate"));
+    }
+
+    #[test]
+    fn test_oos_validate_params_zero_max_inventory() {
+        let result = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("0.05".to_string())
+            .max_inventory(0.0)
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("max_inventory"));
+    }
+
+    #[test]
+    fn test_oos_validate_params_zero_quote_size() {
+        let result = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("0.05".to_string())
+            .quote_size(0.0)
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("quote_size"));
+    }
+
+    #[test]
+    fn test_oos_validate_params_holdout_exactly_0_1() {
+        let params = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("0.05".to_string())
+            .holdout(0.1)
+            .build()
+            .expect("Should accept exactly 0.1");
+        assert_eq!(params.holdout, 0.1);
+    }
+
+    #[test]
+    fn test_oos_validate_params_holdout_exactly_0_5() {
+        let params = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("0.05".to_string())
+            .holdout(0.5)
+            .build()
+            .expect("Should accept exactly 0.5");
+        assert_eq!(params.holdout, 0.5);
+    }
+
+    #[test]
+    fn test_oos_validate_params_holdout_just_below_minimum() {
+        let result = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("0.05".to_string())
+            .holdout(0.099)
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_oos_validate_params_holdout_just_above_maximum() {
+        let result = OOSValidateParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_probs("0.05".to_string())
+            .holdout(0.501)
+            .build();
+        assert!(result.is_err());
+    }
+}
+
+/// Parameters for the `oos-validate` command (out-of-sample validation - both algorithm types)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OOSValidateParams {
+    /// Path to data directory containing Parquet files
+    pub data_path: PathBuf,
+    /// Algorithm to use (e.g., "as", "ml", "fixed")
+    pub algorithm: String,
+    /// Path to ML weights file (required for ML algorithm)
+    pub weights_file: Option<PathBuf>,
+    /// Fraction of data to reserve for out-of-sample test (0.1-0.5)
+    pub holdout: f64,
+    /// Gap between train and test to prevent lookahead (hours)
+    pub embargo_hours: f64,
+    /// Spread values to test (comma-separated string, e.g., "1,2,3")
+    pub spreads: String,
+    /// Skew values to test (comma-separated string, e.g., "0.3,0.5")
+    pub skews: String,
+    /// Fill probability values to test (comma-separated string, e.g., "0.05,0.10,0.15")
+    pub fill_probs: String,
+    /// Maximum inventory
+    pub max_inventory: f64,
+    /// Quote size
+    pub quote_size: f64,
+    /// Fee rate (e.g., 0.0001 = 1 bps)
+    pub fee_rate: f64,
+    /// Use naive fill simulation (for comparison)
+    pub naive_fills: bool,
+    /// Queue position (0.0=front, 1.0=back)
+    pub queue_pos: f64,
+    /// Output file for results (JSON)
+    pub output: Option<PathBuf>,
+    /// Quiet mode (no progress output)
+    pub quiet: bool,
+}
+
+/// Builder for `OOSValidateParams` with validation
+pub struct OOSValidateParamsBuilder {
+    data_path: Option<PathBuf>,
+    algorithm: Option<String>,
+    weights_file: Option<PathBuf>,
+    holdout: Option<f64>,
+    embargo_hours: Option<f64>,
+    spreads: Option<String>,
+    skews: Option<String>,
+    fill_probs: Option<String>,
+    max_inventory: Option<f64>,
+    quote_size: Option<f64>,
+    fee_rate: Option<f64>,
+    naive_fills: Option<bool>,
+    queue_pos: Option<f64>,
+    output: Option<PathBuf>,
+    quiet: Option<bool>,
+}
+
+impl OOSValidateParamsBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            data_path: None,
+            algorithm: None,
+            weights_file: None,
+            holdout: None,
+            embargo_hours: None,
+            spreads: None,
+            skews: None,
+            fill_probs: None,
+            max_inventory: None,
+            quote_size: None,
+            fee_rate: None,
+            naive_fills: None,
+            queue_pos: None,
+            output: None,
+            quiet: None,
+        }
+    }
+
+    /// Set data path
+    pub fn data_path(mut self, path: PathBuf) -> Self {
+        self.data_path = Some(path);
+        self
+    }
+
+    /// Set algorithm
+    pub fn algorithm(mut self, algo: String) -> Self {
+        self.algorithm = Some(algo);
+        self
+    }
+
+    /// Set weights file
+    pub fn weights_file(mut self, path: Option<PathBuf>) -> Self {
+        self.weights_file = path;
+        self
+    }
+
+    /// Set holdout fraction
+    pub fn holdout(mut self, fraction: f64) -> Self {
+        self.holdout = Some(fraction);
+        self
+    }
+
+    /// Set embargo hours
+    pub fn embargo_hours(mut self, hours: f64) -> Self {
+        self.embargo_hours = Some(hours);
+        self
+    }
+
+    /// Set spreads (comma-separated string)
+    pub fn spreads(mut self, spreads: String) -> Self {
+        self.spreads = Some(spreads);
+        self
+    }
+
+    /// Set skews (comma-separated string)
+    pub fn skews(mut self, skews: String) -> Self {
+        self.skews = Some(skews);
+        self
+    }
+
+    /// Set fill probabilities (comma-separated string)
+    pub fn fill_probs(mut self, fill_probs: String) -> Self {
+        self.fill_probs = Some(fill_probs);
+        self
+    }
+
+    /// Set max inventory
+    pub fn max_inventory(mut self, max_inv: f64) -> Self {
+        self.max_inventory = Some(max_inv);
+        self
+    }
+
+    /// Set quote size
+    pub fn quote_size(mut self, size: f64) -> Self {
+        self.quote_size = Some(size);
+        self
+    }
+
+    /// Set fee rate
+    pub fn fee_rate(mut self, rate: f64) -> Self {
+        self.fee_rate = Some(rate);
+        self
+    }
+
+    /// Set naive fills flag
+    pub fn naive_fills(mut self, naive: bool) -> Self {
+        self.naive_fills = Some(naive);
+        self
+    }
+
+    /// Set queue position
+    pub fn queue_pos(mut self, pos: f64) -> Self {
+        self.queue_pos = Some(pos);
+        self
+    }
+
+    /// Set output file
+    pub fn output(mut self, path: Option<PathBuf>) -> Self {
+        self.output = path;
+        self
+    }
+
+    /// Set quiet mode flag
+    pub fn quiet(mut self, enabled: bool) -> Self {
+        self.quiet = Some(enabled);
+        self
+    }
+
+    /// Build `OOSValidateParams` with validation
+    pub fn build(self) -> Result<OOSValidateParams> {
+        // Validate required fields
+        let data_path = self.data_path
+            .ok_or_else(|| anyhow::anyhow!("data_path is required"))?;
+        let algorithm = self.algorithm
+            .ok_or_else(|| anyhow::anyhow!("algorithm is required"))?;
+        let spreads = self.spreads
+            .ok_or_else(|| anyhow::anyhow!("spreads is required"))?;
+        let skews = self.skews
+            .ok_or_else(|| anyhow::anyhow!("skews is required"))?;
+        let fill_probs = self.fill_probs
+            .ok_or_else(|| anyhow::anyhow!("fill_probs is required"))?;
+
+        // Validate and parse spreads
+        let spread_values: Vec<f64> = spreads
+            .split(',')
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    trimmed.parse().ok()
+                }
+            })
+            .collect();
+
+        if spread_values.is_empty() {
+            anyhow::bail!("spreads must contain at least one valid number");
+        }
+
+        for &spread in &spread_values {
+            if spread < 0.0 {
+                anyhow::bail!("all spread values must be >= 0.0, found {}", spread);
+            }
+        }
+
+        // Validate and parse skews
+        let skew_values: Vec<f64> = skews
+            .split(',')
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    trimmed.parse().ok()
+                }
+            })
+            .collect();
+
+        if skew_values.is_empty() {
+            anyhow::bail!("skews must contain at least one valid number");
+        }
+
+        // Validate and parse fill_probs
+        let fill_prob_values: Vec<f64> = fill_probs
+            .split(',')
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    trimmed.parse().ok()
+                }
+            })
+            .collect();
+
+        if fill_prob_values.is_empty() {
+            anyhow::bail!("fill_probs must contain at least one valid number");
+        }
+
+        for &fill_prob in &fill_prob_values {
+            if !(0.0..=1.0).contains(&fill_prob) {
+                anyhow::bail!("all fill_prob values must be in range [0.0, 1.0], found {}", fill_prob);
+            }
+        }
+
+        // Validate holdout
+        let holdout = self.holdout.unwrap_or(0.20);
+        if !(0.1..=0.5).contains(&holdout) {
+            anyhow::bail!("holdout must be in range [0.1, 0.5], found {}", holdout);
+        }
+
+        // Validate embargo_hours
+        if let Some(embargo_hours) = self.embargo_hours {
+            if embargo_hours < 0.0 {
+                anyhow::bail!("embargo_hours must be >= 0.0");
+            }
+        }
+
+        // Validate ranges
+        if let Some(queue_pos) = self.queue_pos {
+            if !(0.0..=1.0).contains(&queue_pos) {
+                anyhow::bail!("queue_pos must be in range [0.0, 1.0]");
+            }
+        }
+        if let Some(fee_rate) = self.fee_rate {
+            if fee_rate < 0.0 {
+                anyhow::bail!("fee_rate must be >= 0.0");
+            }
+        }
+        if let Some(max_inventory) = self.max_inventory {
+            if max_inventory <= 0.0 {
+                anyhow::bail!("max_inventory must be > 0.0");
+            }
+        }
+        if let Some(quote_size) = self.quote_size {
+            if quote_size <= 0.0 {
+                anyhow::bail!("quote_size must be > 0.0");
+            }
+        }
+
+        Ok(OOSValidateParams {
+            data_path,
+            algorithm,
+            weights_file: self.weights_file,
+            holdout,
+            embargo_hours: self.embargo_hours.unwrap_or(1.0),
+            spreads,
+            skews,
+            fill_probs,
+            max_inventory: self.max_inventory.unwrap_or(0.1),
+            quote_size: self.quote_size.unwrap_or(0.001),
+            fee_rate: self.fee_rate.unwrap_or(0.0001),
+            naive_fills: self.naive_fills.unwrap_or(false),
+            queue_pos: self.queue_pos.unwrap_or(0.5),
+            output: self.output,
+            quiet: self.quiet.unwrap_or(false),
+        })
+    }
+}
+
+impl Default for OOSValidateParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
