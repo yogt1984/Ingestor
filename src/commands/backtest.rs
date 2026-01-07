@@ -30,7 +30,7 @@ use num::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::common::{ProgressCallback, ProgressEvent, LogLevel};
-use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams, WalkForwardMLParams};
+use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams, WalkForwardMLParams, SweepParams};
 use crate::backtest::{
     BacktestEngine, BacktestConfig, BacktestResults,
     replay::{ParquetReplay, ReplayConfig},
@@ -312,6 +312,33 @@ pub struct TuneResult {
     pub all_results: Vec<TuneResultItem>,
     /// Best parameter combination (by Sharpe ratio)
     pub best: Option<TuneResultItem>,
+    /// Total number of combinations tested
+    pub total_combinations: usize,
+}
+
+/// Single sweep result (one parameter combination)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SweepResultItem {
+    pub spread: f64,
+    pub skew: f64,
+    pub sharpe: f64,
+    pub total_return: f64,
+    pub max_drawdown: f64,
+    pub num_trades: usize,
+    pub win_rate: f64,
+}
+
+/// Results from the `sweep` command (parameter sweep)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SweepResult {
+    /// Algorithm type used
+    pub algorithm: String,
+    /// Algorithm display name
+    pub algorithm_name: String,
+    /// All sweep results (all parameter combinations tested)
+    pub all_results: Vec<SweepResultItem>,
+    /// Best parameter combination (by Sharpe ratio)
+    pub best: Option<SweepResultItem>,
     /// Total number of combinations tested
     pub total_combinations: usize,
 }
@@ -1813,6 +1840,197 @@ impl BacktestCommands {
             fold_results,
             aggregate,
             consensus_weights: results.consensus_weights,
+        })
+    }
+
+    /// Run parameter sweep
+    ///
+    /// This is the extracted version of the `run_sweep()` function from the CLI.
+    /// It supports progress callbacks for real-time updates during execution.
+    ///
+    /// Returns `SweepResult` with all parameter combinations tested, sorted by Sharpe ratio.
+    pub fn sweep(
+        params: SweepParams,
+        callback: Arc<dyn ProgressCallback>,
+    ) -> Result<SweepResult> {
+        // Parse algorithm type early to fail fast on invalid algorithm
+        let algo_type = AlgorithmType::from_str(&params.algorithm)
+            .map_err(|_| anyhow::anyhow!(
+                "Unknown algorithm '{}'. Valid options: {}",
+                params.algorithm,
+                AlgorithmRegistry::all_type_strings().join(", ")
+            ))?;
+
+        let algo_name = algo_type.display_name().to_string();
+
+        // Parse spreads and skews
+        let spreads: Vec<f64> = params.spreads
+            .split(',')
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    trimmed.parse().ok()
+                }
+            })
+            .collect();
+
+        let skews: Vec<f64> = params.skews
+            .split(',')
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    trimmed.parse().ok()
+                }
+            })
+            .collect();
+
+        let total_combinations = spreads.len() * skews.len();
+
+        callback.on_event(ProgressEvent::Started {
+            total: Some(total_combinations),
+            message: format!(
+                "Starting parameter sweep with algorithm: {} ({} combinations)",
+                algo_name,
+                total_combinations
+            ),
+        });
+
+        // Load ML weights if needed
+        let ml_weights = Self::load_ml_weights_if_needed(
+            algo_type,
+            params.weights_file.as_deref(),
+            &callback,
+        )?;
+
+        // Load data once
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: "Loading market data...".to_string(),
+        });
+
+        let replay_config = ReplayConfig {
+            data_dir: params.data_path.clone(),
+            ..Default::default()
+        };
+
+        let mut replay = ParquetReplay::new(replay_config.clone());
+        let num_events = replay.load()
+            .context("Failed to load market data")?;
+        let _events = replay.into_events(); // We'll reload for each combination
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!("Loaded {} events", num_events),
+        });
+
+        let mut all_results: Vec<SweepResultItem> = Vec::new();
+        let mut current = 0;
+
+        for &spread in &spreads {
+            for &skew in &skews {
+                current += 1;
+
+                // Reload events (need fresh copy for each run)
+                let mut replay = ParquetReplay::new(replay_config.clone());
+                replay.load()
+                    .context("Failed to reload market data")?;
+                let events = replay.into_events();
+
+                // Create algorithm with sweep parameters
+                let algo_params = BacktestAlgorithmParams::new(
+                    Decimal::from_f64_retain(params.max_inventory).unwrap_or(dec!(0.1)),
+                    Decimal::from_f64_retain(params.quote_size).unwrap_or(dec!(0.001)),
+                    spread,
+                    skew,
+                );
+                let algo_params = if let Some(ref weights) = ml_weights {
+                    algo_params.with_ml_weights(weights.clone())
+                } else {
+                    algo_params
+                };
+
+                let algorithm = AlgorithmRegistry::create_for_backtest(algo_type, &algo_params)
+                    .map_err(|e| anyhow::anyhow!("Failed to create algorithm '{}': {}", algo_name, e))?;
+
+                let config = BacktestConfig {
+                    replay: replay_config.clone(),
+                    mm: MMConfig::default(),
+                    simulator: SimulatorConfig {
+                        fee_rate: Decimal::from_f64_retain(params.fee_rate).unwrap_or(dec!(0.0001)),
+                        ..Default::default()
+                    },
+                    fill_sim: FillSimulatorConfig {
+                        base_fill_probability: params.fill_prob,
+                        queue_position: params.queue_pos,
+                        fee_rate: Decimal::from_f64_retain(params.fee_rate).unwrap_or(dec!(0.0001)),
+                        ..Default::default()
+                    },
+                    verbose: false,
+                    use_realistic_fills: !params.naive_fills,
+                    ..Default::default()
+                };
+
+                let mut engine = BacktestEngine::from_events_with_algorithm(config, events, algorithm);
+                let results = engine.run()
+                    .context("Failed to run backtest")?;
+
+                let sweep_item = SweepResultItem {
+                    spread,
+                    skew,
+                    sharpe: results.metrics.sharpe_ratio,
+                    total_return: results.metrics.total_return,
+                    max_drawdown: results.metrics.max_drawdown,
+                    num_trades: results.metrics.num_trades,
+                    win_rate: results.metrics.win_rate,
+                };
+
+                callback.on_event(ProgressEvent::Progress {
+                    current,
+                    total: Some(total_combinations),
+                    message: format!(
+                        "Spread={:.1}, Skew={:.1} => Sharpe={:+.2}, Return={:+.2}%, Trades={}",
+                        spread,
+                        skew,
+                        sweep_item.sharpe,
+                        sweep_item.total_return * 100.0,
+                        sweep_item.num_trades,
+                    ),
+                });
+
+                callback.on_event(ProgressEvent::Metric {
+                    name: "current_sharpe".to_string(),
+                    value: sweep_item.sharpe,
+                });
+
+                all_results.push(sweep_item);
+            }
+        }
+
+        // Find best by Sharpe
+        let best = all_results.iter()
+            .max_by(|a, b| {
+                a.sharpe.partial_cmp(&b.sharpe).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .cloned();
+
+        callback.on_event(ProgressEvent::Completed {
+            message: format!(
+                "Parameter sweep completed: {} combinations tested, best Sharpe: {:.2}",
+                total_combinations,
+                best.as_ref().map(|b| b.sharpe).unwrap_or(0.0)
+            ),
+        });
+
+        Ok(SweepResult {
+            algorithm: params.algorithm.clone(),
+            algorithm_name: algo_name,
+            all_results,
+            best,
+            total_combinations,
         })
     }
 }
@@ -6036,6 +6254,417 @@ mod tests {
         assert_eq!(fold_result.configs_evaluated, 100);
         assert_eq!(fold_result.valid_configs, 0);
         assert_eq!(fold_result.train_trades, 0);
+    }
+
+    // ============================================================================
+    // SweepParamsBuilder Tests
+    // ============================================================================
+
+    #[test]
+    fn test_sweep_params_builder_new() {
+        let builder = crate::commands::params::backtest_params::SweepParamsBuilder::new();
+        // Should not panic
+        assert!(true);
+    }
+
+    #[test]
+    fn test_sweep_params_builder_default() {
+        let builder = crate::commands::params::backtest_params::SweepParamsBuilder::default();
+        // Should not panic
+        assert!(true);
+    }
+
+    #[test]
+    fn test_sweep_params_builder_required_fields() {
+        use crate::commands::params::backtest_params::SweepParamsBuilder;
+        use std::path::PathBuf;
+
+        // Missing data_path
+        let result = SweepParamsBuilder::new()
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("data_path"));
+
+        // Missing algorithm
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("algorithm"));
+
+        // Missing spreads
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("spreads"));
+
+        // Missing skews
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("skews"));
+    }
+
+    #[test]
+    fn test_sweep_params_builder_valid_params() {
+        use crate::commands::params::backtest_params::SweepParamsBuilder;
+        use std::path::PathBuf;
+
+        let params = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .max_inventory(0.2)
+            .quote_size(0.002)
+            .fee_rate(0.0002)
+            .fill_prob(0.15)
+            .queue_pos(0.6)
+            .naive_fills(true)
+            .quiet(true)
+            .build()
+            .expect("Should build valid params");
+
+        assert_eq!(params.algorithm, "as");
+        assert_eq!(params.spreads, "1,2,3");
+        assert_eq!(params.skews, "0.3,0.5");
+        assert_eq!(params.max_inventory, 0.2);
+        assert_eq!(params.quote_size, 0.002);
+        assert_eq!(params.fee_rate, 0.0002);
+        assert_eq!(params.fill_prob, 0.15);
+        assert_eq!(params.queue_pos, 0.6);
+        assert_eq!(params.naive_fills, true);
+        assert_eq!(params.quiet, true);
+    }
+
+    #[test]
+    fn test_sweep_params_builder_defaults() {
+        use crate::commands::params::backtest_params::SweepParamsBuilder;
+        use std::path::PathBuf;
+
+        let params = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .build()
+            .expect("Should build with defaults");
+
+        assert_eq!(params.max_inventory, 0.1);
+        assert_eq!(params.quote_size, 0.001);
+        assert_eq!(params.fee_rate, 0.0001);
+        assert_eq!(params.fill_prob, 0.10);
+        assert_eq!(params.queue_pos, 0.5);
+        assert_eq!(params.naive_fills, false);
+        assert_eq!(params.quiet, false);
+    }
+
+    #[test]
+    fn test_sweep_params_builder_invalid_spreads() {
+        use crate::commands::params::backtest_params::SweepParamsBuilder;
+        use std::path::PathBuf;
+
+        // Empty spreads
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("".to_string())
+            .skews("0.3".to_string())
+            .build();
+        assert!(result.is_err());
+
+        // Invalid numbers
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("abc,def".to_string())
+            .skews("0.3".to_string())
+            .build();
+        assert!(result.is_err());
+
+        // Negative spread
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("-1,2".to_string())
+            .skews("0.3".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sweep_params_builder_invalid_skews() {
+        use crate::commands::params::backtest_params::SweepParamsBuilder;
+        use std::path::PathBuf;
+
+        // Empty skews
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("".to_string())
+            .build();
+        assert!(result.is_err());
+
+        // Invalid numbers
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("abc,def".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sweep_params_builder_invalid_ranges() {
+        use crate::commands::params::backtest_params::SweepParamsBuilder;
+        use std::path::PathBuf;
+
+        // Invalid fill_prob
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_prob(1.5)
+            .build();
+        assert!(result.is_err());
+
+        // Invalid queue_pos
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .queue_pos(1.5)
+            .build();
+        assert!(result.is_err());
+
+        // Invalid fee_rate
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fee_rate(-0.1)
+            .build();
+        assert!(result.is_err());
+
+        // Invalid max_inventory
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .max_inventory(0.0)
+            .build();
+        assert!(result.is_err());
+
+        // Invalid quote_size
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .quote_size(0.0)
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sweep_params_builder_whitespace_handling() {
+        use crate::commands::params::backtest_params::SweepParamsBuilder;
+        use std::path::PathBuf;
+
+        // Should handle whitespace in comma-separated values
+        let params = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads(" 1 , 2 , 3 ".to_string())
+            .skews(" 0.3 , 0.5 ".to_string())
+            .build()
+            .expect("Should handle whitespace");
+
+        assert_eq!(params.spreads, " 1 , 2 , 3 ");
+        assert_eq!(params.skews, " 0.3 , 0.5 ");
+    }
+
+    // ============================================================================
+    // SweepResult Tests
+    // ============================================================================
+
+    #[test]
+    fn test_sweep_result_item_creation() {
+        let item = SweepResultItem {
+            spread: 2.0,
+            skew: 0.5,
+            sharpe: 1.5,
+            total_return: 0.05,
+            max_drawdown: 0.02,
+            num_trades: 100,
+            win_rate: 0.55,
+        };
+
+        assert_eq!(item.spread, 2.0);
+        assert_eq!(item.skew, 0.5);
+        assert_eq!(item.sharpe, 1.5);
+        assert_eq!(item.total_return, 0.05);
+        assert_eq!(item.max_drawdown, 0.02);
+        assert_eq!(item.num_trades, 100);
+        assert_eq!(item.win_rate, 0.55);
+    }
+
+    #[test]
+    fn test_sweep_result_item_clone() {
+        let item1 = SweepResultItem {
+            spread: 2.0,
+            skew: 0.5,
+            sharpe: 1.5,
+            total_return: 0.05,
+            max_drawdown: 0.02,
+            num_trades: 100,
+            win_rate: 0.55,
+        };
+
+        let item2 = item1.clone();
+        assert_eq!(item1.spread, item2.spread);
+        assert_eq!(item1.sharpe, item2.sharpe);
+    }
+
+    #[test]
+    fn test_sweep_result_creation() {
+        let result = SweepResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            all_results: vec![
+                SweepResultItem {
+                    spread: 1.0,
+                    skew: 0.3,
+                    sharpe: 1.0,
+                    total_return: 0.03,
+                    max_drawdown: 0.01,
+                    num_trades: 50,
+                    win_rate: 0.50,
+                },
+                SweepResultItem {
+                    spread: 2.0,
+                    skew: 0.5,
+                    sharpe: 1.5,
+                    total_return: 0.05,
+                    max_drawdown: 0.02,
+                    num_trades: 100,
+                    win_rate: 0.55,
+                },
+            ],
+            best: Some(SweepResultItem {
+                spread: 2.0,
+                skew: 0.5,
+                sharpe: 1.5,
+                total_return: 0.05,
+                max_drawdown: 0.02,
+                num_trades: 100,
+                win_rate: 0.55,
+            }),
+            total_combinations: 2,
+        };
+
+        assert_eq!(result.algorithm, "as");
+        assert_eq!(result.all_results.len(), 2);
+        assert!(result.best.is_some());
+        assert_eq!(result.total_combinations, 2);
+    }
+
+    #[test]
+    fn test_sweep_result_serialization() {
+        let result = SweepResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            all_results: vec![
+                SweepResultItem {
+                    spread: 2.0,
+                    skew: 0.5,
+                    sharpe: 1.5,
+                    total_return: 0.05,
+                    max_drawdown: 0.02,
+                    num_trades: 100,
+                    win_rate: 0.55,
+                },
+            ],
+            best: Some(SweepResultItem {
+                spread: 2.0,
+                skew: 0.5,
+                sharpe: 1.5,
+                total_return: 0.05,
+                max_drawdown: 0.02,
+                num_trades: 100,
+                win_rate: 0.55,
+            }),
+            total_combinations: 1,
+        };
+
+        let json = serde_json::to_string(&result).expect("Should serialize");
+        let deserialized: SweepResult = serde_json::from_str(&json).expect("Should deserialize");
+
+        assert_eq!(deserialized.algorithm, result.algorithm);
+        assert_eq!(deserialized.all_results.len(), result.all_results.len());
+        assert_eq!(deserialized.total_combinations, result.total_combinations);
+    }
+
+    #[test]
+    fn test_sweep_result_with_no_best() {
+        let result = SweepResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            all_results: vec![],
+            best: None,
+            total_combinations: 0,
+        };
+
+        assert!(result.best.is_none());
+        assert_eq!(result.all_results.len(), 0);
+    }
+
+    #[test]
+    fn test_sweep_result_item_edge_cases() {
+        // Test with zero values
+        let item = SweepResultItem {
+            spread: 0.0,
+            skew: 0.0,
+            sharpe: 0.0,
+            total_return: 0.0,
+            max_drawdown: 0.0,
+            num_trades: 0,
+            win_rate: 0.0,
+        };
+
+        assert_eq!(item.spread, 0.0);
+        assert_eq!(item.num_trades, 0);
+
+        // Test with negative sharpe (losses)
+        let item = SweepResultItem {
+            spread: 1.0,
+            skew: 0.3,
+            sharpe: -1.0,
+            total_return: -0.05,
+            max_drawdown: 0.10,
+            num_trades: 50,
+            win_rate: 0.30,
+        };
+
+        assert!(item.sharpe < 0.0);
+        assert!(item.total_return < 0.0);
     }
 }
 

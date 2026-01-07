@@ -6345,4 +6345,612 @@ impl Default for TrainParamsBuilder {
     }
 }
 
+/// Parameters for the `sweep` command (parameter sweep - both algorithm types)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SweepParams {
+    /// Path to data directory containing Parquet files
+    pub data_path: PathBuf,
+    /// Algorithm to use (e.g., "as", "ml", "fixed")
+    pub algorithm: String,
+    /// Path to ML weights file (required for ML algorithm)
+    pub weights_file: Option<PathBuf>,
+    /// Spread values to test (comma-separated string, e.g., "1,2,3,4,5")
+    pub spreads: String,
+    /// Skew values to test (comma-separated string, e.g., "0.3,0.5,0.7")
+    pub skews: String,
+    /// Maximum inventory
+    pub max_inventory: f64,
+    /// Quote size
+    pub quote_size: f64,
+    /// Fee rate (e.g., 0.0001 = 1 bps)
+    pub fee_rate: f64,
+    /// Use naive fill simulation (for comparison)
+    pub naive_fills: bool,
+    /// Fill probability (0.0-1.0) for realistic simulation
+    pub fill_prob: f64,
+    /// Queue position (0.0=front, 1.0=back)
+    pub queue_pos: f64,
+    /// Output file for results (JSON)
+    pub output: Option<PathBuf>,
+    /// Quiet mode (no progress output)
+    pub quiet: bool,
+}
+
+/// Builder for `SweepParams` with validation
+pub struct SweepParamsBuilder {
+    data_path: Option<PathBuf>,
+    algorithm: Option<String>,
+    weights_file: Option<PathBuf>,
+    spreads: Option<String>,
+    skews: Option<String>,
+    max_inventory: Option<f64>,
+    quote_size: Option<f64>,
+    fee_rate: Option<f64>,
+    naive_fills: Option<bool>,
+    fill_prob: Option<f64>,
+    queue_pos: Option<f64>,
+    output: Option<PathBuf>,
+    quiet: Option<bool>,
+}
+
+impl SweepParamsBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            data_path: None,
+            algorithm: None,
+            weights_file: None,
+            spreads: None,
+            skews: None,
+            max_inventory: None,
+            quote_size: None,
+            fee_rate: None,
+            naive_fills: None,
+            fill_prob: None,
+            queue_pos: None,
+            output: None,
+            quiet: None,
+        }
+    }
+
+    /// Set data path
+    pub fn data_path(mut self, path: PathBuf) -> Self {
+        self.data_path = Some(path);
+        self
+    }
+
+    /// Set algorithm
+    pub fn algorithm(mut self, algo: String) -> Self {
+        self.algorithm = Some(algo);
+        self
+    }
+
+    /// Set weights file
+    pub fn weights_file(mut self, path: Option<PathBuf>) -> Self {
+        self.weights_file = path;
+        self
+    }
+
+    /// Set spreads (comma-separated string)
+    pub fn spreads(mut self, spreads: String) -> Self {
+        self.spreads = Some(spreads);
+        self
+    }
+
+    /// Set skews (comma-separated string)
+    pub fn skews(mut self, skews: String) -> Self {
+        self.skews = Some(skews);
+        self
+    }
+
+    /// Set max inventory
+    pub fn max_inventory(mut self, max_inv: f64) -> Self {
+        self.max_inventory = Some(max_inv);
+        self
+    }
+
+    /// Set quote size
+    pub fn quote_size(mut self, size: f64) -> Self {
+        self.quote_size = Some(size);
+        self
+    }
+
+    /// Set fee rate
+    pub fn fee_rate(mut self, rate: f64) -> Self {
+        self.fee_rate = Some(rate);
+        self
+    }
+
+    /// Set naive fills flag
+    pub fn naive_fills(mut self, naive: bool) -> Self {
+        self.naive_fills = Some(naive);
+        self
+    }
+
+    /// Set fill probability
+    pub fn fill_prob(mut self, prob: f64) -> Self {
+        self.fill_prob = Some(prob);
+        self
+    }
+
+    /// Set queue position
+    pub fn queue_pos(mut self, pos: f64) -> Self {
+        self.queue_pos = Some(pos);
+        self
+    }
+
+    /// Set output file
+    pub fn output(mut self, path: Option<PathBuf>) -> Self {
+        self.output = path;
+        self
+    }
+
+    /// Set quiet mode flag
+    pub fn quiet(mut self, enabled: bool) -> Self {
+        self.quiet = Some(enabled);
+        self
+    }
+
+    /// Build `SweepParams` with validation
+    pub fn build(self) -> Result<SweepParams> {
+        // Validate required fields
+        let data_path = self.data_path
+            .ok_or_else(|| anyhow::anyhow!("data_path is required"))?;
+        let algorithm = self.algorithm
+            .ok_or_else(|| anyhow::anyhow!("algorithm is required"))?;
+        let spreads = self.spreads
+            .ok_or_else(|| anyhow::anyhow!("spreads is required"))?;
+        let skews = self.skews
+            .ok_or_else(|| anyhow::anyhow!("skews is required"))?;
+
+        // Validate and parse spreads
+        let spread_values: Vec<f64> = spreads
+            .split(',')
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    trimmed.parse().ok()
+                }
+            })
+            .collect();
+
+        if spread_values.is_empty() {
+            anyhow::bail!("spreads must contain at least one valid number");
+        }
+
+        for &spread in &spread_values {
+            if spread < 0.0 {
+                anyhow::bail!("all spread values must be >= 0.0, found {}", spread);
+            }
+        }
+
+        // Validate and parse skews
+        let skew_values: Vec<f64> = skews
+            .split(',')
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    trimmed.parse().ok()
+                }
+            })
+            .collect();
+
+        if skew_values.is_empty() {
+            anyhow::bail!("skews must contain at least one valid number");
+        }
+
+        // Validate ranges
+        if let Some(fill_prob) = self.fill_prob {
+            if !(0.0..=1.0).contains(&fill_prob) {
+                anyhow::bail!("fill_prob must be in range [0.0, 1.0]");
+            }
+        }
+        if let Some(queue_pos) = self.queue_pos {
+            if !(0.0..=1.0).contains(&queue_pos) {
+                anyhow::bail!("queue_pos must be in range [0.0, 1.0]");
+            }
+        }
+        if let Some(fee_rate) = self.fee_rate {
+            if fee_rate < 0.0 {
+                anyhow::bail!("fee_rate must be >= 0.0");
+            }
+        }
+        if let Some(max_inventory) = self.max_inventory {
+            if max_inventory <= 0.0 {
+                anyhow::bail!("max_inventory must be > 0.0");
+            }
+        }
+        if let Some(quote_size) = self.quote_size {
+            if quote_size <= 0.0 {
+                anyhow::bail!("quote_size must be > 0.0");
+            }
+        }
+
+        Ok(SweepParams {
+            data_path,
+            algorithm,
+            weights_file: self.weights_file,
+            spreads,
+            skews,
+            max_inventory: self.max_inventory.unwrap_or(0.1),
+            quote_size: self.quote_size.unwrap_or(0.001),
+            fee_rate: self.fee_rate.unwrap_or(0.0001),
+            naive_fills: self.naive_fills.unwrap_or(false),
+            fill_prob: self.fill_prob.unwrap_or(0.10),
+            queue_pos: self.queue_pos.unwrap_or(0.5),
+            output: self.output,
+            quiet: self.quiet.unwrap_or(false),
+        })
+    }
+}
+
+impl Default for SweepParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod sweep_params_tests {
+    use super::*;
+
+    // ============================================================================
+    // Builder Creation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_sweep_params_builder_new() {
+        let builder = SweepParamsBuilder::new();
+        // Should not panic
+        assert!(true);
+    }
+
+    #[test]
+    fn test_sweep_params_builder_default() {
+        let builder = SweepParamsBuilder::default();
+        // Should not panic
+        assert!(true);
+    }
+
+    // ============================================================================
+    // Required Fields Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_sweep_params_missing_data_path() {
+        let result = SweepParamsBuilder::new()
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("data_path"));
+    }
+
+    #[test]
+    fn test_sweep_params_missing_algorithm() {
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("algorithm"));
+    }
+
+    #[test]
+    fn test_sweep_params_missing_spreads() {
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("spreads"));
+    }
+
+    #[test]
+    fn test_sweep_params_missing_skews() {
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("skews"));
+    }
+
+    #[test]
+    fn test_sweep_params_missing_all_required() {
+        let result = SweepParamsBuilder::new().build();
+        assert!(result.is_err());
+    }
+
+    // ============================================================================
+    // Spreads Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_sweep_params_empty_spreads() {
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("".to_string())
+            .skews("0.3".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sweep_params_invalid_spread_numbers() {
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("abc,def".to_string())
+            .skews("0.3".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sweep_params_negative_spread() {
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("-1,2".to_string())
+            .skews("0.3".to_string())
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("spread"));
+    }
+
+    #[test]
+    fn test_sweep_params_valid_spreads() {
+        let params = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3,4,5".to_string())
+            .skews("0.3".to_string())
+            .build()
+            .expect("Should accept valid spreads");
+        assert_eq!(params.spreads, "1,2,3,4,5");
+    }
+
+    #[test]
+    fn test_sweep_params_spreads_with_whitespace() {
+        let params = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads(" 1 , 2 , 3 ".to_string())
+            .skews("0.3".to_string())
+            .build()
+            .expect("Should handle whitespace");
+        assert_eq!(params.spreads, " 1 , 2 , 3 ");
+    }
+
+    // ============================================================================
+    // Skews Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_sweep_params_empty_skews() {
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sweep_params_invalid_skew_numbers() {
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("abc,def".to_string())
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sweep_params_valid_skews() {
+        let params = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3,0.5,0.7".to_string())
+            .build()
+            .expect("Should accept valid skews");
+        assert_eq!(params.skews, "0.3,0.5,0.7");
+    }
+
+    // ============================================================================
+    // Range Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_sweep_params_invalid_fill_prob() {
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fill_prob(1.5)
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("fill_prob"));
+    }
+
+    #[test]
+    fn test_sweep_params_invalid_queue_pos() {
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .queue_pos(1.5)
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("queue_pos"));
+    }
+
+    #[test]
+    fn test_sweep_params_negative_fee_rate() {
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .fee_rate(-0.1)
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("fee_rate"));
+    }
+
+    #[test]
+    fn test_sweep_params_zero_max_inventory() {
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .max_inventory(0.0)
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("max_inventory"));
+    }
+
+    #[test]
+    fn test_sweep_params_zero_quote_size() {
+        let result = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .quote_size(0.0)
+            .build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("quote_size"));
+    }
+
+    // ============================================================================
+    // Default Values Tests
+    // ============================================================================
+
+    #[test]
+    fn test_sweep_params_defaults() {
+        let params = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1,2".to_string())
+            .skews("0.3".to_string())
+            .build()
+            .expect("Should build with defaults");
+
+        assert_eq!(params.max_inventory, 0.1);
+        assert_eq!(params.quote_size, 0.001);
+        assert_eq!(params.fee_rate, 0.0001);
+        assert_eq!(params.fill_prob, 0.10);
+        assert_eq!(params.queue_pos, 0.5);
+        assert_eq!(params.naive_fills, false);
+        assert_eq!(params.quiet, false);
+    }
+
+    // ============================================================================
+    // Builder Method Tests
+    // ============================================================================
+
+    #[test]
+    fn test_sweep_params_builder_all_methods() {
+        let params = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .weights_file(Some(PathBuf::from("./weights.json")))
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .max_inventory(0.2)
+            .quote_size(0.002)
+            .fee_rate(0.0002)
+            .naive_fills(true)
+            .fill_prob(0.15)
+            .queue_pos(0.6)
+            .output(Some(PathBuf::from("./output.json")))
+            .quiet(true)
+            .build()
+            .expect("Should build with all methods");
+
+        assert_eq!(params.algorithm, "as");
+        assert!(params.weights_file.is_some());
+        assert_eq!(params.spreads, "1,2,3");
+        assert_eq!(params.skews, "0.3,0.5");
+        assert_eq!(params.max_inventory, 0.2);
+        assert_eq!(params.quote_size, 0.002);
+        assert_eq!(params.fee_rate, 0.0002);
+        assert_eq!(params.naive_fills, true);
+        assert_eq!(params.fill_prob, 0.15);
+        assert_eq!(params.queue_pos, 0.6);
+        assert!(params.output.is_some());
+        assert_eq!(params.quiet, true);
+    }
+
+    // ============================================================================
+    // Edge Cases Tests
+    // ============================================================================
+
+    #[test]
+    fn test_sweep_params_single_value_lists() {
+        let params = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1".to_string())
+            .skews("0.3".to_string())
+            .build()
+            .expect("Should accept single values");
+
+        assert_eq!(params.spreads, "1");
+        assert_eq!(params.skews, "0.3");
+    }
+
+    #[test]
+    fn test_sweep_params_boundary_values() {
+        // Test boundary values that should pass
+        let params = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("0.0".to_string())
+            .skews("0.0".to_string())
+            .fill_prob(0.0)
+            .queue_pos(0.0)
+            .fee_rate(0.0)
+            .build()
+            .expect("Should accept boundary values");
+
+        assert_eq!(params.fill_prob, 0.0);
+        assert_eq!(params.queue_pos, 0.0);
+        assert_eq!(params.fee_rate, 0.0);
+    }
+
+    #[test]
+    fn test_sweep_params_upper_boundary_values() {
+        let params = SweepParamsBuilder::new()
+            .data_path(PathBuf::from("./data/features"))
+            .algorithm("as".to_string())
+            .spreads("1".to_string())
+            .skews("0.3".to_string())
+            .fill_prob(1.0)
+            .queue_pos(1.0)
+            .build()
+            .expect("Should accept upper boundary values");
+
+        assert_eq!(params.fill_prob, 1.0);
+        assert_eq!(params.queue_pos, 1.0);
+    }
+}
+
 
