@@ -30,7 +30,7 @@ use num::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::common::{ProgressCallback, ProgressEvent, LogLevel};
-use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams, WalkForwardMLParams, SweepParams, WalkForwardParams, OOSValidateParams, SimulateParams};
+use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams, WalkForwardMLParams, SweepParams, WalkForwardParams, OOSValidateParams, SimulateParams, GridParams};
 use crate::backtest::{
     BacktestEngine, BacktestConfig, BacktestResults,
     replay::{ParquetReplay, ReplayConfig},
@@ -2901,6 +2901,212 @@ impl BacktestCommands {
             total_sessions: session_count,
         })
     }
+
+    /// Run 2D grid search over spread and skew parameters (MM algorithms only)
+    ///
+    /// This is a simpler version of tune() that only searches over spread and skew,
+    /// without high_entropy and fill_prob dimensions. It's designed for quick
+    /// parameter exploration.
+    ///
+    /// **Algorithm Restriction**: Only supports MM algorithms (as, ml, fixed).
+    /// Non-MM algorithms will be rejected during parameter validation.
+    ///
+    /// Returns `GridResult` with all tested combinations and the best result.
+    pub fn grid(
+        params: GridParams,
+        callback: Arc<dyn ProgressCallback>,
+    ) -> Result<GridResult> {
+        // Algorithm type validation is already done in GridParamsBuilder
+        // But we'll parse it again for display name
+        let algo_type = AlgorithmType::from_str(&params.algorithm)
+            .map_err(|_| anyhow::anyhow!(
+                "Unknown algorithm '{}'. Valid options: {}",
+                params.algorithm,
+                AlgorithmRegistry::all_type_strings().join(", ")
+            ))?;
+
+        // Double-check algorithm type (should already be validated in builder, but be safe)
+        if !matches!(algo_type, AlgorithmType::AvellanedaStoikov | AlgorithmType::MLSpreadSkew | AlgorithmType::FixedSpread) {
+            anyhow::bail!(
+                "Grid command only supports MM algorithms (as, ml, fixed). Got: {}",
+                params.algorithm
+            );
+        }
+
+        let algo_name = algo_type.display_name().to_string();
+
+        // Parse spreads and skews
+        let spreads: Vec<f64> = params.spreads
+            .split(',')
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    trimmed.parse().ok()
+                }
+            })
+            .collect();
+
+        let skews: Vec<f64> = params.skews
+            .split(',')
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    trimmed.parse().ok()
+                }
+            })
+            .collect();
+
+        let total_combinations = spreads.len() * skews.len();
+
+        callback.on_event(ProgressEvent::Started {
+            total: Some(total_combinations),
+            message: format!(
+                "Starting 2D grid search with algorithm: {} ({} combinations: {} spreads × {} skews)",
+                algo_name,
+                total_combinations,
+                spreads.len(),
+                skews.len()
+            ),
+        });
+
+        // Load ML weights if needed
+        let ml_weights = Self::load_ml_weights_if_needed(
+            algo_type,
+            params.weights_file.as_deref(),
+            &callback,
+        )?;
+
+        // Load data once
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: "Loading market data...".to_string(),
+        });
+
+        let replay_config = ReplayConfig {
+            data_dir: params.data_path.clone(),
+            ..Default::default()
+        };
+
+        let mut replay = ParquetReplay::new(replay_config.clone());
+        let num_events = replay.load()
+            .context("Failed to load market data")?;
+        let _events = replay.into_events(); // We'll reload for each combination
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!("Loaded {} events", num_events),
+        });
+
+        let mut all_results: Vec<GridResultItem> = Vec::new();
+        let mut current = 0;
+
+        for &spread in &spreads {
+            for &skew in &skews {
+                current += 1;
+
+                // Reload events (need fresh copy for each run)
+                let mut replay = ParquetReplay::new(replay_config.clone());
+                replay.load()
+                    .context("Failed to reload market data")?;
+                let events = replay.into_events();
+
+                // Create algorithm with grid parameters
+                let algo_params = BacktestAlgorithmParams::new(
+                    Decimal::from_f64_retain(params.max_inventory).unwrap_or(dec!(0.1)),
+                    Decimal::from_f64_retain(params.quote_size).unwrap_or(dec!(0.001)),
+                    spread,
+                    skew,
+                );
+                let algo_params = if let Some(ref weights) = ml_weights {
+                    algo_params.with_ml_weights(weights.clone())
+                } else {
+                    algo_params
+                };
+
+                let algorithm = AlgorithmRegistry::create_for_backtest(algo_type, &algo_params)
+                    .map_err(|e| anyhow::anyhow!("Failed to create algorithm '{}': {}", algo_name, e))?;
+
+                let config = BacktestConfig {
+                    replay: replay_config.clone(),
+                    mm: MMConfig::default(),
+                    simulator: SimulatorConfig {
+                        fee_rate: Decimal::from_f64_retain(params.fee_rate).unwrap_or(dec!(0.0001)),
+                        ..Default::default()
+                    },
+                    fill_sim: FillSimulatorConfig {
+                        base_fill_probability: params.fill_prob,
+                        queue_position: params.queue_pos,
+                        fee_rate: Decimal::from_f64_retain(params.fee_rate).unwrap_or(dec!(0.0001)),
+                        ..Default::default()
+                    },
+                    verbose: false,
+                    use_realistic_fills: !params.naive_fills,
+                    ..Default::default()
+                };
+
+                let mut engine = BacktestEngine::from_events_with_algorithm(config, events, algorithm);
+                let results = engine.run()
+                    .context("Failed to run backtest")?;
+
+                let grid_item = GridResultItem {
+                    spread,
+                    skew,
+                    sharpe: results.metrics.sharpe_ratio,
+                    total_return: results.metrics.total_return,
+                    max_drawdown: results.metrics.max_drawdown,
+                    num_trades: results.metrics.num_trades,
+                    win_rate: results.metrics.win_rate,
+                };
+
+                callback.on_event(ProgressEvent::Progress {
+                    current,
+                    total: Some(total_combinations),
+                    message: format!(
+                        "Spread={:.1}, Skew={:.1} => Sharpe={:+.2}, Return={:+.2}%, Trades={}",
+                        spread,
+                        skew,
+                        grid_item.sharpe,
+                        grid_item.total_return * 100.0,
+                        grid_item.num_trades,
+                    ),
+                });
+
+                callback.on_event(ProgressEvent::Metric {
+                    name: "current_sharpe".to_string(),
+                    value: grid_item.sharpe,
+                });
+
+                all_results.push(grid_item);
+            }
+        }
+
+        // Find best by Sharpe
+        let best = all_results.iter()
+            .max_by(|a, b| {
+                a.sharpe.partial_cmp(&b.sharpe).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .cloned();
+
+        callback.on_event(ProgressEvent::Completed {
+            message: format!(
+                "Grid search completed: {} combinations tested, best Sharpe: {:.2}",
+                total_combinations,
+                best.as_ref().map(|b| b.sharpe).unwrap_or(0.0)
+            ),
+        });
+
+        Ok(GridResult {
+            algorithm: params.algorithm.clone(),
+            algorithm_name: algo_name,
+            all_results,
+            best,
+            total_combinations,
+        })
+    }
 }
 
 /// Result of a campaign simulation
@@ -2910,6 +3116,28 @@ pub struct SimulateResult {
     pub algorithm_name: String,
     pub campaign_report: crate::backtest::validation_campaign::CampaignReport,
     pub total_sessions: usize,
+}
+
+/// Single grid search result item
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GridResultItem {
+    pub spread: f64,
+    pub skew: f64,
+    pub sharpe: f64,
+    pub total_return: f64,
+    pub max_drawdown: f64,
+    pub num_trades: usize,
+    pub win_rate: f64,
+}
+
+/// Result of a grid search (2D: spread and skew only)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GridResult {
+    pub algorithm: String,
+    pub algorithm_name: String,
+    pub all_results: Vec<GridResultItem>,
+    pub best: Option<GridResultItem>,
+    pub total_combinations: usize,
 }
 
 #[cfg(test)]
@@ -8400,6 +8628,238 @@ mod tests {
         assert_eq!(deserialized.algorithm, result.algorithm);
         assert_eq!(deserialized.algorithm_name, result.algorithm_name);
         assert_eq!(deserialized.total_sessions, result.total_sessions);
+    }
+
+    // ============================================================================
+    // GridResult Tests
+    // ============================================================================
+
+    #[test]
+    fn test_grid_result_item_struct() {
+        let item = GridResultItem {
+            spread: 2.5,
+            skew: 0.6,
+            sharpe: 1.2,
+            total_return: 0.05,
+            max_drawdown: 0.03,
+            num_trades: 100,
+            win_rate: 0.55,
+        };
+
+        assert_eq!(item.spread, 2.5);
+        assert_eq!(item.skew, 0.6);
+        assert_eq!(item.sharpe, 1.2);
+        assert_eq!(item.total_return, 0.05);
+        assert_eq!(item.max_drawdown, 0.03);
+        assert_eq!(item.num_trades, 100);
+        assert_eq!(item.win_rate, 0.55);
+    }
+
+    #[test]
+    fn test_grid_result_item_clone() {
+        let item = GridResultItem {
+            spread: 2.5,
+            skew: 0.6,
+            sharpe: 1.2,
+            total_return: 0.05,
+            max_drawdown: 0.03,
+            num_trades: 100,
+            win_rate: 0.55,
+        };
+
+        let cloned = item.clone();
+        assert_eq!(cloned.spread, item.spread);
+        assert_eq!(cloned.skew, item.skew);
+        assert_eq!(cloned.sharpe, item.sharpe);
+    }
+
+    #[test]
+    fn test_grid_result_struct() {
+        let item1 = GridResultItem {
+            spread: 1.0,
+            skew: 0.3,
+            sharpe: 0.8,
+            total_return: 0.03,
+            max_drawdown: 0.02,
+            num_trades: 50,
+            win_rate: 0.50,
+        };
+
+        let item2 = GridResultItem {
+            spread: 2.0,
+            skew: 0.5,
+            sharpe: 1.2,
+            total_return: 0.05,
+            max_drawdown: 0.03,
+            num_trades: 100,
+            win_rate: 0.55,
+        };
+
+        let result = GridResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            all_results: vec![item1.clone(), item2.clone()],
+            best: Some(item2.clone()),
+            total_combinations: 2,
+        };
+
+        assert_eq!(result.algorithm, "as");
+        assert_eq!(result.algorithm_name, "Avellaneda-Stoikov");
+        assert_eq!(result.all_results.len(), 2);
+        assert_eq!(result.total_combinations, 2);
+        assert!(result.best.is_some());
+        assert_eq!(result.best.as_ref().unwrap().spread, 2.0);
+    }
+
+    #[test]
+    fn test_grid_result_no_best() {
+        let result = GridResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            all_results: vec![],
+            best: None,
+            total_combinations: 0,
+        };
+
+        assert!(result.best.is_none());
+        assert_eq!(result.all_results.len(), 0);
+    }
+
+    #[test]
+    fn test_grid_result_clone() {
+        let item = GridResultItem {
+            spread: 2.0,
+            skew: 0.5,
+            sharpe: 1.2,
+            total_return: 0.05,
+            max_drawdown: 0.03,
+            num_trades: 100,
+            win_rate: 0.55,
+        };
+
+        let result = GridResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            all_results: vec![item.clone()],
+            best: Some(item.clone()),
+            total_combinations: 1,
+        };
+
+        let cloned = result.clone();
+        assert_eq!(cloned.algorithm, result.algorithm);
+        assert_eq!(cloned.algorithm_name, result.algorithm_name);
+        assert_eq!(cloned.all_results.len(), result.all_results.len());
+        assert_eq!(cloned.total_combinations, result.total_combinations);
+        assert!(cloned.best.is_some());
+        assert_eq!(cloned.best.as_ref().unwrap().spread, result.best.as_ref().unwrap().spread);
+    }
+
+    #[test]
+    fn test_grid_result_serialization() {
+        let item = GridResultItem {
+            spread: 2.0,
+            skew: 0.5,
+            sharpe: 1.2,
+            total_return: 0.05,
+            max_drawdown: 0.03,
+            num_trades: 100,
+            win_rate: 0.55,
+        };
+
+        let result = GridResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            all_results: vec![item.clone()],
+            best: Some(item.clone()),
+            total_combinations: 1,
+        };
+
+        // Test JSON serialization
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"algorithm\":\"as\""));
+        assert!(json.contains("\"algorithm_name\":\"Avellaneda-Stoikov\""));
+        assert!(json.contains("\"total_combinations\":1"));
+        assert!(json.contains("\"spread\":2.0"));
+        assert!(json.contains("\"skew\":0.5"));
+
+        // Test deserialization
+        let deserialized: GridResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.algorithm, result.algorithm);
+        assert_eq!(deserialized.algorithm_name, result.algorithm_name);
+        assert_eq!(deserialized.total_combinations, result.total_combinations);
+        assert_eq!(deserialized.all_results.len(), result.all_results.len());
+        assert!(deserialized.best.is_some());
+    }
+
+    #[test]
+    fn test_grid_result_item_serialization() {
+        let item = GridResultItem {
+            spread: 2.5,
+            skew: 0.6,
+            sharpe: 1.2,
+            total_return: 0.05,
+            max_drawdown: 0.03,
+            num_trades: 100,
+            win_rate: 0.55,
+        };
+
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(json.contains("\"spread\":2.5"));
+        assert!(json.contains("\"skew\":0.6"));
+        assert!(json.contains("\"sharpe\":1.2"));
+        assert!(json.contains("\"num_trades\":100"));
+
+        let deserialized: GridResultItem = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.spread, item.spread);
+        assert_eq!(deserialized.skew, item.skew);
+        assert_eq!(deserialized.sharpe, item.sharpe);
+        assert_eq!(deserialized.num_trades, item.num_trades);
+    }
+
+    #[test]
+    fn test_grid_result_multiple_items() {
+        let items = vec![
+            GridResultItem {
+                spread: 1.0,
+                skew: 0.3,
+                sharpe: 0.8,
+                total_return: 0.03,
+                max_drawdown: 0.02,
+                num_trades: 50,
+                win_rate: 0.50,
+            },
+            GridResultItem {
+                spread: 2.0,
+                skew: 0.5,
+                sharpe: 1.2,
+                total_return: 0.05,
+                max_drawdown: 0.03,
+                num_trades: 100,
+                win_rate: 0.55,
+            },
+            GridResultItem {
+                spread: 3.0,
+                skew: 0.7,
+                sharpe: 0.9,
+                total_return: 0.04,
+                max_drawdown: 0.025,
+                num_trades: 75,
+                win_rate: 0.52,
+            },
+        ];
+
+        let result = GridResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            all_results: items.clone(),
+            best: Some(items[1].clone()), // Best by Sharpe
+            total_combinations: 3,
+        };
+
+        assert_eq!(result.all_results.len(), 3);
+        assert_eq!(result.total_combinations, 3);
+        assert!(result.best.is_some());
+        assert_eq!(result.best.as_ref().unwrap().sharpe, 1.2);
     }
 }
 

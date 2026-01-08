@@ -8777,6 +8777,279 @@ impl Default for SimulateParamsBuilder {
     }
 }
 
+/// Parameters for the `grid` command (2D grid search - spread and skew only, MM algorithms only)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GridParams {
+    /// Path to data directory containing Parquet files
+    pub data_path: PathBuf,
+    /// Algorithm to use (must be MM algorithm: as, ml, or fixed)
+    pub algorithm: String,
+    /// Path to ML weights file (required for ML algorithm)
+    pub weights_file: Option<PathBuf>,
+    /// Spread values to test (comma-separated string, e.g., "1,2,3,4,5")
+    pub spreads: String,
+    /// Skew values to test (comma-separated string, e.g., "0.3,0.5,0.7")
+    pub skews: String,
+    /// Maximum inventory
+    pub max_inventory: f64,
+    /// Quote size
+    pub quote_size: f64,
+    /// Fee rate (e.g., 0.0001 = 1 bps)
+    pub fee_rate: f64,
+    /// Use naive fill simulation (for comparison)
+    pub naive_fills: bool,
+    /// Fill probability (0.0-1.0) for realistic simulation
+    pub fill_prob: f64,
+    /// Queue position (0.0=front, 1.0=back)
+    pub queue_pos: f64,
+    /// Output file for results (JSON)
+    pub output: Option<PathBuf>,
+    /// Quiet mode (no progress output)
+    pub quiet: bool,
+}
+
+/// Builder for `GridParams` with validation
+pub struct GridParamsBuilder {
+    data_path: Option<PathBuf>,
+    algorithm: Option<String>,
+    weights_file: Option<PathBuf>,
+    spreads: Option<String>,
+    skews: Option<String>,
+    max_inventory: Option<f64>,
+    quote_size: Option<f64>,
+    fee_rate: Option<f64>,
+    naive_fills: Option<bool>,
+    fill_prob: Option<f64>,
+    queue_pos: Option<f64>,
+    output: Option<PathBuf>,
+    quiet: Option<bool>,
+}
+
+impl GridParamsBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            data_path: None,
+            algorithm: None,
+            weights_file: None,
+            spreads: None,
+            skews: None,
+            max_inventory: None,
+            quote_size: None,
+            fee_rate: None,
+            naive_fills: None,
+            fill_prob: None,
+            queue_pos: None,
+            output: None,
+            quiet: None,
+        }
+    }
+
+    /// Set data path
+    pub fn data_path(mut self, path: PathBuf) -> Self {
+        self.data_path = Some(path);
+        self
+    }
+
+    /// Set algorithm
+    pub fn algorithm(mut self, algo: String) -> Self {
+        self.algorithm = Some(algo);
+        self
+    }
+
+    /// Set weights file
+    pub fn weights_file(mut self, path: Option<PathBuf>) -> Self {
+        self.weights_file = path;
+        self
+    }
+
+    /// Set spreads (comma-separated string)
+    pub fn spreads(mut self, spreads: String) -> Self {
+        self.spreads = Some(spreads);
+        self
+    }
+
+    /// Set skews (comma-separated string)
+    pub fn skews(mut self, skews: String) -> Self {
+        self.skews = Some(skews);
+        self
+    }
+
+    /// Set max inventory
+    pub fn max_inventory(mut self, max_inv: f64) -> Self {
+        self.max_inventory = Some(max_inv);
+        self
+    }
+
+    /// Set quote size
+    pub fn quote_size(mut self, size: f64) -> Self {
+        self.quote_size = Some(size);
+        self
+    }
+
+    /// Set fee rate
+    pub fn fee_rate(mut self, rate: f64) -> Self {
+        self.fee_rate = Some(rate);
+        self
+    }
+
+    /// Set naive fills flag
+    pub fn naive_fills(mut self, naive: bool) -> Self {
+        self.naive_fills = Some(naive);
+        self
+    }
+
+    /// Set fill probability
+    pub fn fill_prob(mut self, prob: f64) -> Self {
+        self.fill_prob = Some(prob);
+        self
+    }
+
+    /// Set queue position
+    pub fn queue_pos(mut self, pos: f64) -> Self {
+        self.queue_pos = Some(pos);
+        self
+    }
+
+    /// Set output file
+    pub fn output(mut self, path: Option<PathBuf>) -> Self {
+        self.output = path;
+        self
+    }
+
+    /// Set quiet mode flag
+    pub fn quiet(mut self, enabled: bool) -> Self {
+        self.quiet = Some(enabled);
+        self
+    }
+
+    /// Build `GridParams` with validation
+    pub fn build(self) -> Result<GridParams> {
+        use crate::strategies::{AlgorithmType, AlgorithmRegistry};
+
+        // Validate required fields
+        let data_path = self.data_path
+            .ok_or_else(|| anyhow::anyhow!("data_path is required"))?;
+        let algorithm = self.algorithm
+            .ok_or_else(|| anyhow::anyhow!("algorithm is required"))?;
+        let spreads = self.spreads
+            .ok_or_else(|| anyhow::anyhow!("spreads is required"))?;
+        let skews = self.skews
+            .ok_or_else(|| anyhow::anyhow!("skews is required"))?;
+
+        // Validate algorithm type - must be MM algorithm
+        let algo_type = AlgorithmType::from_str(&algorithm)
+            .map_err(|_| anyhow::anyhow!(
+                "Unknown algorithm '{}'. Valid options: {}",
+                algorithm,
+                AlgorithmRegistry::all_type_strings().join(", ")
+            ))?;
+
+        // Check if algorithm is MM type
+        if !matches!(algo_type, AlgorithmType::AvellanedaStoikov | AlgorithmType::MLSpreadSkew | AlgorithmType::FixedSpread) {
+            anyhow::bail!(
+                "Grid command only supports MM algorithms (as, ml, fixed). Got: {}",
+                algorithm
+            );
+        }
+
+        // Validate and parse spreads
+        let spread_values: Vec<f64> = spreads
+            .split(',')
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    trimmed.parse().ok()
+                }
+            })
+            .collect();
+
+        if spread_values.is_empty() {
+            anyhow::bail!("spreads must contain at least one valid number");
+        }
+
+        for &spread in &spread_values {
+            if spread < 0.0 {
+                anyhow::bail!("all spread values must be >= 0.0, found {}", spread);
+            }
+        }
+
+        // Validate and parse skews
+        let skew_values: Vec<f64> = skews
+            .split(',')
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    trimmed.parse().ok()
+                }
+            })
+            .collect();
+
+        if skew_values.is_empty() {
+            anyhow::bail!("skews must contain at least one valid number");
+        }
+
+        for &skew in &skew_values {
+            if skew < 0.0 {
+                anyhow::bail!("all skew values must be >= 0.0, found {}", skew);
+            }
+        }
+
+        // Validate ranges
+        if let Some(queue_pos) = self.queue_pos {
+            if !(0.0..=1.0).contains(&queue_pos) {
+                anyhow::bail!("queue_pos must be in range [0.0, 1.0]");
+            }
+        }
+        if let Some(fee_rate) = self.fee_rate {
+            if fee_rate < 0.0 {
+                anyhow::bail!("fee_rate must be >= 0.0");
+            }
+        }
+        if let Some(max_inventory) = self.max_inventory {
+            if max_inventory <= 0.0 {
+                anyhow::bail!("max_inventory must be > 0.0");
+            }
+        }
+        if let Some(quote_size) = self.quote_size {
+            if quote_size <= 0.0 {
+                anyhow::bail!("quote_size must be > 0.0");
+            }
+        }
+        if let Some(fill_prob) = self.fill_prob {
+            if !(0.0..=1.0).contains(&fill_prob) {
+                anyhow::bail!("fill_prob must be in range [0.0, 1.0]");
+            }
+        }
+
+        Ok(GridParams {
+            data_path,
+            algorithm,
+            weights_file: self.weights_file,
+            spreads,
+            skews,
+            max_inventory: self.max_inventory.unwrap_or(0.1),
+            quote_size: self.quote_size.unwrap_or(0.001),
+            fee_rate: self.fee_rate.unwrap_or(0.0001),
+            naive_fills: self.naive_fills.unwrap_or(false),
+            fill_prob: self.fill_prob.unwrap_or(0.10),
+            queue_pos: self.queue_pos.unwrap_or(0.5),
+            output: self.output,
+            quiet: self.quiet.unwrap_or(false),
+        })
+    }
+}
+
+impl Default for GridParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod simulate_params_tests {
     use super::*;
@@ -9453,5 +9726,630 @@ mod simulate_params_tests {
         assert_eq!(params.queue_pos, 0.3);
         assert_eq!(params.output, Some(PathBuf::from("./report.json")));
         assert!(params.quiet);
+    }
+}
+
+#[cfg(test)]
+mod grid_params_tests {
+    use super::*;
+
+    // ============================================================================
+    // Basic Construction Tests
+    // ============================================================================
+
+    #[test]
+    fn test_grid_params_builder_new() {
+        let builder = GridParamsBuilder::new();
+        assert!(builder.data_path.is_none());
+        assert!(builder.algorithm.is_none());
+    }
+
+    #[test]
+    fn test_grid_params_builder_default() {
+        let builder = GridParamsBuilder::default();
+        assert!(builder.data_path.is_none());
+    }
+
+    #[test]
+    fn test_grid_params_minimal_valid() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(params.is_ok());
+        let params = params.unwrap();
+        assert_eq!(params.spreads, "1,2,3");
+        assert_eq!(params.skews, "0.3,0.5");
+        assert_eq!(params.max_inventory, 0.1);
+        assert_eq!(params.quote_size, 0.001);
+        assert_eq!(params.fee_rate, 0.0001);
+        assert!(!params.naive_fills);
+        assert_eq!(params.fill_prob, 0.10);
+        assert_eq!(params.queue_pos, 0.5);
+    }
+
+    // ============================================================================
+    // Required Fields Tests
+    // ============================================================================
+
+    #[test]
+    fn test_grid_params_missing_data_path() {
+        let params = GridParamsBuilder::new()
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("data_path is required"));
+    }
+
+    #[test]
+    fn test_grid_params_missing_algorithm() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("algorithm is required"));
+    }
+
+    #[test]
+    fn test_grid_params_missing_spreads() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("spreads is required"));
+    }
+
+    #[test]
+    fn test_grid_params_missing_skews() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("skews is required"));
+    }
+
+    // ============================================================================
+    // Algorithm Type Validation Tests (MM Only)
+    // ============================================================================
+
+    #[test]
+    fn test_grid_params_valid_mm_algorithm_as() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(params.is_ok());
+    }
+
+    #[test]
+    fn test_grid_params_valid_mm_algorithm_ml() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(params.is_ok());
+    }
+
+    #[test]
+    fn test_grid_params_valid_mm_algorithm_fixed() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("fixed".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(params.is_ok());
+    }
+
+    #[test]
+    fn test_grid_params_invalid_algorithm_mom() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("mom".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(params.is_err());
+        let err_msg = params.unwrap_err().to_string();
+        assert!(err_msg.contains("Grid command only supports MM algorithms") || err_msg.contains("Unknown algorithm"));
+    }
+
+    #[test]
+    fn test_grid_params_invalid_algorithm_nonexistent() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("nonexistent".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(params.is_err());
+    }
+
+    // ============================================================================
+    // Spreads Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_grid_params_spreads_empty() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("spreads must contain at least one valid number"));
+    }
+
+    #[test]
+    fn test_grid_params_spreads_only_commas() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads(",,,".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_grid_params_spreads_invalid_number() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,invalid,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        // Should still work, just ignores invalid entries
+        let params = params.unwrap();
+        assert_eq!(params.spreads, "1,invalid,3");
+    }
+
+    #[test]
+    fn test_grid_params_spreads_negative() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("-1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("spread values must be >= 0.0"));
+    }
+
+    #[test]
+    fn test_grid_params_spreads_zero() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("0,1,2".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(params.is_ok());
+    }
+
+    #[test]
+    fn test_grid_params_spreads_with_spaces() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1, 2, 3".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(params.is_ok());
+    }
+
+    #[test]
+    fn test_grid_params_spreads_single_value() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("2.5".to_string())
+            .skews("0.3,0.5".to_string())
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().spreads, "2.5");
+    }
+
+    // ============================================================================
+    // Skews Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_grid_params_skews_empty() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("".to_string())
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("skews must contain at least one valid number"));
+    }
+
+    #[test]
+    fn test_grid_params_skews_negative() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("-0.3,0.5".to_string())
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("skew values must be >= 0.0"));
+    }
+
+    #[test]
+    fn test_grid_params_skews_zero() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0,0.5".to_string())
+            .build();
+        assert!(params.is_ok());
+    }
+
+    #[test]
+    fn test_grid_params_skews_with_spaces() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3, 0.5, 0.7".to_string())
+            .build();
+        assert!(params.is_ok());
+    }
+
+    #[test]
+    fn test_grid_params_skews_single_value() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.5".to_string())
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().skews, "0.5");
+    }
+
+    // ============================================================================
+    // Queue Position Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_grid_params_queue_pos_out_of_range_high() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .queue_pos(1.5)
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("queue_pos must be in range [0.0, 1.0]"));
+    }
+
+    #[test]
+    fn test_grid_params_queue_pos_out_of_range_low() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .queue_pos(-0.1)
+            .build();
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_grid_params_queue_pos_boundary() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .queue_pos(1.0)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().queue_pos, 1.0);
+    }
+
+    // ============================================================================
+    // Fill Prob Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_grid_params_fill_prob_out_of_range_high() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .fill_prob(1.5)
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("fill_prob must be in range [0.0, 1.0]"));
+    }
+
+    #[test]
+    fn test_grid_params_fill_prob_out_of_range_low() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .fill_prob(-0.1)
+            .build();
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_grid_params_fill_prob_boundary() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .fill_prob(1.0)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().fill_prob, 1.0);
+    }
+
+    // ============================================================================
+    // Fee Rate Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_grid_params_fee_rate_negative() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .fee_rate(-0.0001)
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("fee_rate must be >= 0.0"));
+    }
+
+    #[test]
+    fn test_grid_params_fee_rate_zero() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .fee_rate(0.0)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().fee_rate, 0.0);
+    }
+
+    // ============================================================================
+    // Max Inventory Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_grid_params_max_inventory_zero() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .max_inventory(0.0)
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("max_inventory must be > 0.0"));
+    }
+
+    #[test]
+    fn test_grid_params_max_inventory_negative() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .max_inventory(-0.1)
+            .build();
+        assert!(params.is_err());
+    }
+
+    // ============================================================================
+    // Quote Size Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_grid_params_quote_size_zero() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .quote_size(0.0)
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("quote_size must be > 0.0"));
+    }
+
+    #[test]
+    fn test_grid_params_quote_size_negative() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .quote_size(-0.001)
+            .build();
+        assert!(params.is_err());
+    }
+
+    // ============================================================================
+    // Optional Fields Tests
+    // ============================================================================
+
+    #[test]
+    fn test_grid_params_weights_file() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .weights_file(Some(PathBuf::from("./weights.json")))
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().weights_file, Some(PathBuf::from("./weights.json")));
+    }
+
+    #[test]
+    fn test_grid_params_output() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .output(Some(PathBuf::from("./results.json")))
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().output, Some(PathBuf::from("./results.json")));
+    }
+
+    #[test]
+    fn test_grid_params_boolean_flags() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .naive_fills(true)
+            .quiet(true)
+            .build();
+        assert!(params.is_ok());
+        let params = params.unwrap();
+        assert!(params.naive_fills);
+        assert!(params.quiet);
+    }
+
+    // ============================================================================
+    // Serialization Tests
+    // ============================================================================
+
+    #[test]
+    fn test_grid_params_serialization() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .build()
+            .unwrap();
+
+        // Test JSON serialization
+        let json = serde_json::to_string(&params).unwrap();
+        assert!(json.contains("\"spreads\":\"1,2,3\""));
+        assert!(json.contains("\"skews\":\"0.3,0.5\""));
+        assert!(json.contains("\"algorithm\":\"as\""));
+
+        // Test deserialization
+        let deserialized: GridParams = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.spreads, params.spreads);
+        assert_eq!(deserialized.skews, params.skews);
+        assert_eq!(deserialized.algorithm, params.algorithm);
+    }
+
+    #[test]
+    fn test_grid_params_serialization_with_optionals() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1,2,3".to_string())
+            .skews("0.3,0.5".to_string())
+            .weights_file(Some(PathBuf::from("./weights.json")))
+            .output(Some(PathBuf::from("./output.json")))
+            .build()
+            .unwrap();
+
+        let json = serde_json::to_string(&params).unwrap();
+        let deserialized: GridParams = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.weights_file, params.weights_file);
+        assert_eq!(deserialized.output, params.output);
+    }
+
+    // ============================================================================
+    // Complex Scenarios Tests
+    // ============================================================================
+
+    #[test]
+    fn test_grid_params_all_fields_set() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .weights_file(Some(PathBuf::from("./weights.json")))
+            .spreads("1,2,3,4,5".to_string())
+            .skews("0.3,0.5,0.7".to_string())
+            .max_inventory(0.2)
+            .quote_size(0.002)
+            .fee_rate(0.0002)
+            .naive_fills(true)
+            .fill_prob(0.15)
+            .queue_pos(0.3)
+            .output(Some(PathBuf::from("./results.json")))
+            .quiet(true)
+            .build();
+        assert!(params.is_ok());
+        let params = params.unwrap();
+        assert_eq!(params.spreads, "1,2,3,4,5");
+        assert_eq!(params.skews, "0.3,0.5,0.7");
+        assert_eq!(params.max_inventory, 0.2);
+        assert_eq!(params.quote_size, 0.002);
+        assert_eq!(params.fee_rate, 0.0002);
+        assert!(params.naive_fills);
+        assert_eq!(params.fill_prob, 0.15);
+        assert_eq!(params.queue_pos, 0.3);
+        assert_eq!(params.output, Some(PathBuf::from("./results.json")));
+        assert!(params.quiet);
+    }
+
+    #[test]
+    fn test_grid_params_large_parameter_grids() {
+        let spreads = (1..=20).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        let skews = (1..=10).map(|i| (i as f64 / 10.0).to_string()).collect::<Vec<_>>().join(",");
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads(spreads.clone())
+            .skews(skews.clone())
+            .build();
+        assert!(params.is_ok());
+        let params = params.unwrap();
+        assert_eq!(params.spreads, spreads);
+        assert_eq!(params.skews, skews);
+    }
+
+    #[test]
+    fn test_grid_params_decimal_values() {
+        let params = GridParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spreads("1.5,2.5,3.5".to_string())
+            .skews("0.33,0.55,0.77".to_string())
+            .build();
+        assert!(params.is_ok());
     }
 }

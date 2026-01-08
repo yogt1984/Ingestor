@@ -63,7 +63,7 @@ use ingestor::strategies::{
 };
 use ingestor::commands::{
     BacktestCommands,
-    params::backtest_params::{EvaluateParamsBuilder, TuneParamsBuilder, RegimeSearchParamsBuilder, MultiObjectiveParamsBuilder, RegimeOptimizeParamsBuilder, TrainParamsBuilder, WalkForwardMLParamsBuilder, SweepParamsBuilder, WalkForwardParamsBuilder, OOSValidateParamsBuilder, SimulateParamsBuilder},
+    params::backtest_params::{EvaluateParamsBuilder, TuneParamsBuilder, RegimeSearchParamsBuilder, MultiObjectiveParamsBuilder, RegimeOptimizeParamsBuilder, TrainParamsBuilder, WalkForwardMLParamsBuilder, SweepParamsBuilder, WalkForwardParamsBuilder, OOSValidateParamsBuilder, SimulateParamsBuilder, GridParamsBuilder},
 };
 use ingestor::commands::common::{NoOpCallback, ProgressCallback};
 use ingestor::commands::backtest::OOSValidateOverfitVerdict;
@@ -618,6 +618,21 @@ enum Commands {
         #[arg(short, long)]
         output: Option<std::path::PathBuf>,
     },
+
+    /// 2D grid search over spread and skew (MM algorithms only)
+    Grid {
+        /// Spread values to test (comma-separated)
+        #[arg(long, default_value = "1,2,3,4,5")]
+        spreads: String,
+
+        /// Skew values to test (comma-separated)
+        #[arg(long, default_value = "0.3,0.5,0.7")]
+        skews: String,
+
+        /// Output file for results (JSON)
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -1046,6 +1061,92 @@ fn main() -> Result<()> {
                 if !cli.quiet {
                     println!();
                     println!("Campaign report saved to: {:?}", output_path);
+                }
+            }
+        }
+        Some(Commands::Grid { spreads, skews, output }) => {
+            // Build GridParams from CLI
+            let grid_params = GridParamsBuilder::new()
+                .data_path(cli.data.clone())
+                .algorithm(cli.algorithm.clone())
+                .weights_file(cli.weights_file.clone())
+                .spreads(spreads.clone())
+                .skews(skews.clone())
+                .max_inventory(cli.max_inventory)
+                .quote_size(cli.quote_size)
+                .fee_rate(cli.fee_rate)
+                .naive_fills(cli.naive_fills)
+                .fill_prob(cli.fill_prob)
+                .queue_pos(cli.queue_pos)
+                .output(output.clone())
+                .quiet(cli.quiet)
+                .build()
+                .context("Failed to build grid parameters")?;
+
+            let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+            let result = BacktestCommands::grid(grid_params, callback)
+                .context("Failed to run grid search")?;
+
+            // Display results
+            if !cli.quiet {
+                println!("═══════════════════════════════════════════════════════");
+                println!("           2D GRID SEARCH RESULTS                       ");
+                println!("═══════════════════════════════════════════════════════");
+                println!();
+                println!("Algorithm: {} ({})", result.algorithm_name, result.algorithm);
+                println!("Total combinations tested: {}", result.total_combinations);
+                println!();
+
+                // Parse parameter lists for display
+                let spread_values: Vec<f64> = spreads.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+                let skew_values: Vec<f64> = skews.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+
+                println!("Parameter Space:");
+                println!("  Spreads: {:?}", spread_values);
+                println!("  Skews:   {:?}", skew_values);
+                println!();
+
+                println!("═══════════════════════════════════════════════════════");
+                println!("TOP 10 PARAMETER SETS (by Sharpe):");
+                println!("═══════════════════════════════════════════════════════");
+
+                for (i, r) in result.all_results.iter().take(10).enumerate() {
+                    println!(
+                        "{:>2}. Spread={:.1} Skew={:.1}",
+                        i + 1, r.spread, r.skew
+                    );
+                    println!(
+                        "    Sharpe={:+.2} Return={:+.2}% DD={:.2}% WinRate={:.1}% Trades={}",
+                        r.sharpe, r.total_return * 100.0, r.max_drawdown * 100.0, r.win_rate * 100.0, r.num_trades
+                    );
+                }
+
+                // Best overall
+                if let Some(ref best) = result.best {
+                    println!();
+                    println!("═══════════════════════════════════════════════════════");
+                    println!("RECOMMENDED PARAMETERS:");
+                    println!("═══════════════════════════════════════════════════════");
+                    println!("  Algorithm:                  {} ({})", result.algorithm_name, result.algorithm);
+                    println!("  base_spread_bps:            {}", best.spread);
+                    println!("  inventory_skew_factor:      {}", best.skew);
+                    println!();
+                    println!("Expected Performance:");
+                    println!("  Sharpe Ratio: {:+.2}", best.sharpe);
+                    println!("  Total Return: {:+.2}%", best.total_return * 100.0);
+                    println!("  Max Drawdown: {:.2}%", best.max_drawdown * 100.0);
+                    println!("  Win Rate:     {:.1}%", best.win_rate * 100.0);
+                    println!("═══════════════════════════════════════════════════════");
+                }
+            }
+
+            // Save results if output specified
+            if let Some(ref output_path) = output {
+                let json = serde_json::to_string_pretty(&result)?;
+                std::fs::write(output_path, json)?;
+                if !cli.quiet {
+                    println!();
+                    println!("Results saved to: {:?}", output_path);
                 }
             }
         }
