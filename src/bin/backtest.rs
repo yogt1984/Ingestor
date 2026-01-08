@@ -63,7 +63,7 @@ use ingestor::strategies::{
 };
 use ingestor::commands::{
     BacktestCommands,
-    params::backtest_params::{EvaluateParamsBuilder, TuneParamsBuilder, RegimeSearchParamsBuilder, MultiObjectiveParamsBuilder, RegimeOptimizeParamsBuilder, TrainParamsBuilder, WalkForwardMLParamsBuilder, SweepParamsBuilder, WalkForwardParamsBuilder, OOSValidateParamsBuilder},
+    params::backtest_params::{EvaluateParamsBuilder, TuneParamsBuilder, RegimeSearchParamsBuilder, MultiObjectiveParamsBuilder, RegimeOptimizeParamsBuilder, TrainParamsBuilder, WalkForwardMLParamsBuilder, SweepParamsBuilder, WalkForwardParamsBuilder, OOSValidateParamsBuilder, SimulateParamsBuilder},
 };
 use ingestor::commands::common::{NoOpCallback, ProgressCallback};
 use ingestor::commands::backtest::OOSValidateOverfitVerdict;
@@ -1001,7 +1001,53 @@ fn main() -> Result<()> {
             run_simulate_session(&cli, *duration, preset.clone(), *spread, *skew, sessions_dir.clone(), output.clone())?;
         }
         Some(Commands::Simulate { weeks, session_hours, min_sessions_per_week, preset, spread, skew, expected_fill_rate, expected_sharpe, expected_return, min_weekly_trades, max_drawdown_pct, min_win_rate, campaigns_dir, output }) => {
-            run_simulate_campaign(&cli, *weeks, *session_hours, *min_sessions_per_week, preset.clone(), *spread, *skew, *expected_fill_rate, *expected_sharpe, *expected_return, *min_weekly_trades, *max_drawdown_pct, *min_win_rate, campaigns_dir.clone(), output.clone())?;
+            // Build SimulateParams from CLI
+            let simulate_params = SimulateParamsBuilder::new()
+                .data_path(cli.data.clone())
+                .algorithm(cli.algorithm.clone())
+                .weights_file(cli.weights_file.clone())
+                .weeks(*weeks)
+                .session_hours(*session_hours)
+                .min_sessions_per_week(*min_sessions_per_week)
+                .preset(preset.clone())
+                .spread(*spread)
+                .skew(*skew)
+                .expected_fill_rate(*expected_fill_rate)
+                .expected_sharpe(*expected_sharpe)
+                .expected_return(*expected_return)
+                .min_weekly_trades(*min_weekly_trades)
+                .max_drawdown_pct(*max_drawdown_pct)
+                .min_win_rate(*min_win_rate)
+                .campaigns_dir(campaigns_dir.clone())
+                .max_inventory(cli.max_inventory)
+                .quote_size(cli.quote_size)
+                .fee_rate(cli.fee_rate)
+                .naive_fills(cli.naive_fills)
+                .fill_prob(cli.fill_prob)
+                .queue_pos(cli.queue_pos)
+                .output(output.clone())
+                .quiet(cli.quiet)
+                .build()
+                .context("Failed to build simulate parameters")?;
+
+            let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+            let result = BacktestCommands::simulate(simulate_params, callback)
+                .context("Failed to run campaign simulation")?;
+
+            // Print campaign report summary
+            if !cli.quiet {
+                print_campaign_report(&result.campaign_report);
+            }
+
+            // Save report if output specified
+            if let Some(ref output_path) = output {
+                let json = serde_json::to_string_pretty(&result.campaign_report)?;
+                std::fs::write(output_path, &json)?;
+                if !cli.quiet {
+                    println!();
+                    println!("Campaign report saved to: {:?}", output_path);
+                }
+            }
         }
         Some(Commands::Evaluate) | None => {
             run_single(&cli)?;
