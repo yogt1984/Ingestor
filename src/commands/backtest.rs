@@ -3618,6 +3618,16 @@ pub struct CampaignResult {
     pub total_sessions: usize,
 }
 
+/// Result of a paper trading session
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaperResult {
+    pub algorithm: String,
+    pub algorithm_name: String,
+    pub session_result: crate::backtest::session_runner::SessionResult,
+    pub events_processed: usize,
+    pub is_valid_for_validation: bool,
+}
+
 /// Single grid search result item
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GridResultItem {
