@@ -63,7 +63,7 @@ use ingestor::strategies::{
 };
 use ingestor::commands::{
     BacktestCommands,
-    params::backtest_params::{EvaluateParamsBuilder, TuneParamsBuilder, RegimeSearchParamsBuilder, MultiObjectiveParamsBuilder, RegimeOptimizeParamsBuilder, TrainParamsBuilder, WalkForwardMLParamsBuilder, SweepParamsBuilder, WalkForwardParamsBuilder, OOSValidateParamsBuilder, SimulateParamsBuilder, GridParamsBuilder, CampaignParamsBuilder},
+    params::backtest_params::{EvaluateParamsBuilder, TuneParamsBuilder, RegimeSearchParamsBuilder, MultiObjectiveParamsBuilder, RegimeOptimizeParamsBuilder, TrainParamsBuilder, WalkForwardMLParamsBuilder, SweepParamsBuilder, WalkForwardParamsBuilder, OOSValidateParamsBuilder, SimulateParamsBuilder, GridParamsBuilder, CampaignParamsBuilder, PaperParamsBuilder},
 };
 use ingestor::commands::common::{NoOpCallback, ProgressCallback};
 use ingestor::commands::backtest::OOSValidateOverfitVerdict;
@@ -1072,7 +1072,72 @@ fn main() -> Result<()> {
             run_validate_session(session.clone(), sessions_dir.clone(), *min_hours, *min_trades, output.clone())?;
         }
         Some(Commands::SimulateSession { duration, preset, spread, skew, sessions_dir, output }) => {
-            run_simulate_session(&cli, *duration, preset.clone(), *spread, *skew, sessions_dir.clone(), output.clone())?;
+            // Build PaperParams from CLI
+            let paper_params = PaperParamsBuilder::new()
+                .data_path(cli.data.clone())
+                .algorithm(cli.algorithm.clone())
+                .weights_file(cli.weights_file.clone())
+                .duration(*duration)
+                .preset(preset.clone())
+                .spread(*spread)
+                .skew(*skew)
+                .sessions_dir(sessions_dir.clone())
+                .max_inventory(cli.max_inventory)
+                .quote_size(cli.quote_size)
+                .fee_rate(cli.fee_rate)
+                .naive_fills(cli.naive_fills)
+                .fill_prob(cli.fill_prob)
+                .queue_pos(cli.queue_pos)
+                .min_duration_hours(0.1)
+                .min_trades(5)
+                .output(output.clone())
+                .quiet(cli.quiet)
+                .build()
+                .context("Failed to build paper parameters")?;
+
+            let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+            let result = BacktestCommands::paper(paper_params, callback)
+                .context("Failed to run paper trading session")?;
+
+            // Print session summary
+            if !cli.quiet {
+                println!("═══════════════════════════════════════════════════════════════════════");
+                println!("              PAPER TRADING SESSION RESULTS                            ");
+                println!("═══════════════════════════════════════════════════════════════════════");
+                println!();
+                println!("Session ID: {}", result.session_result.summary.session_id);
+                println!("Algorithm: {} ({})", result.algorithm_name, result.algorithm);
+                println!("Events processed: {}", result.events_processed);
+                println!("Duration: {:.1} hours", result.session_result.summary.metrics.duration_secs / 3600.0);
+                println!();
+                println!("Trading Metrics:");
+                println!("  Total trades: {}", result.session_result.summary.metrics.total_trades);
+                println!("  Buy/Sell: {} / {}", result.session_result.summary.metrics.buy_trades, result.session_result.summary.metrics.sell_trades);
+                println!("  Quotes generated: {}", result.session_result.summary.metrics.quotes_generated);
+                println!();
+                println!("Performance:");
+                println!("  Net PnL: {:+.6}", result.session_result.summary.metrics.net_pnl);
+                println!("  Win rate: {:.1}%", result.session_result.summary.metrics.win_rate * 100.0);
+                println!("  Sharpe ratio: {:.2}", result.session_result.summary.metrics.sharpe_ratio);
+                println!("  Max drawdown: {:.2}%", result.session_result.summary.metrics.max_drawdown * 100.0);
+                println!();
+                if result.is_valid_for_validation {
+                    println!("Status: Session is VALID for validation with validate-session");
+                } else {
+                    println!("Status: Session does NOT meet minimum requirements for validation");
+                }
+                println!("═══════════════════════════════════════════════════════════════════════");
+            }
+
+            // Save result JSON if output specified
+            if let Some(ref output_path) = output {
+                let json = serde_json::to_string_pretty(&result.session_result)?;
+                std::fs::write(output_path, &json)?;
+                if !cli.quiet {
+                    println!();
+                    println!("Full result saved to: {:?}", output_path);
+                }
+            }
         }
         Some(Commands::Simulate { weeks, session_hours, min_sessions_per_week, preset, spread, skew, expected_fill_rate, expected_sharpe, expected_return, min_weekly_trades, max_drawdown_pct, min_win_rate, campaigns_dir, output }) => {
             // Build SimulateParams from CLI
