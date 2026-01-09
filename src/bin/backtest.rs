@@ -63,7 +63,7 @@ use ingestor::strategies::{
 };
 use ingestor::commands::{
     BacktestCommands,
-    params::backtest_params::{EvaluateParamsBuilder, TuneParamsBuilder, RegimeSearchParamsBuilder, MultiObjectiveParamsBuilder, RegimeOptimizeParamsBuilder, TrainParamsBuilder, WalkForwardMLParamsBuilder, SweepParamsBuilder, WalkForwardParamsBuilder, OOSValidateParamsBuilder, SimulateParamsBuilder, GridParamsBuilder, CampaignParamsBuilder, PaperParamsBuilder},
+    params::backtest_params::{EvaluateParamsBuilder, TuneParamsBuilder, RegimeSearchParamsBuilder, MultiObjectiveParamsBuilder, RegimeOptimizeParamsBuilder, TrainParamsBuilder, WalkForwardMLParamsBuilder, SweepParamsBuilder, WalkForwardParamsBuilder, OOSValidateParamsBuilder, SimulateParamsBuilder, GridParamsBuilder, CampaignParamsBuilder, PaperParamsBuilder, ListAlgorithmsParamsBuilder},
 };
 use ingestor::commands::common::{NoOpCallback, ProgressCallback};
 use ingestor::commands::backtest::OOSValidateOverfitVerdict;
@@ -700,7 +700,92 @@ fn main() -> Result<()> {
 
     match &cli.command {
         Some(Commands::Algorithms { algo, json }) => {
-            show_algorithms(algo.clone(), *json)?;
+            // Build ListAlgorithmsParams from CLI
+            let list_params = ListAlgorithmsParamsBuilder::new()
+                .algo(algo.clone())
+                .json(*json)
+                .build()
+                .context("Failed to build list algorithms parameters")?;
+
+            let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+            let result = BacktestCommands::list_algorithms(list_params, callback)
+                .context("Failed to list algorithms")?;
+
+            // Display results
+            if result.json_output.is_empty() {
+                // Human-readable output
+                if result.algorithms.len() == 1 {
+                    // Single algorithm details
+                    let algo = &result.algorithms[0];
+                    println!("Algorithm: {} ({})", algo.name, algo.type_string);
+                    println!("Version:   {}", algo.version);
+                    println!("Category:  {}", algo.category);
+                    println!("Trainable: {}", if algo.is_trainable { "Yes" } else { "No" });
+                    println!("Configurable: {}", if algo.is_configurable { "Yes" } else { "No" });
+                    println!();
+                    println!("Description:");
+                    println!("  {}", algo.description);
+                    println!();
+                    if !algo.aliases.is_empty() {
+                        println!("Aliases: {}", algo.aliases.join(", "));
+                        println!();
+                    }
+                    if !algo.parameters.is_empty() {
+                        println!("Parameters:");
+                        println!("  {:<25} {:<12} {:<8} {}", "Name", "Default", "Tunable", "Description");
+                        println!("  {}", "-".repeat(80));
+                        for p in &algo.parameters {
+                            let default_str = format!("{:.4}", p.default);
+                            let range_str = if let Some((min, max)) = p.range {
+                                format!(" [{:.2}, {:.2}]", min, max)
+                            } else {
+                                String::new()
+                            };
+                            println!(
+                                "  {:<25} {:<12} {:<8} {}{}",
+                                p.name,
+                                default_str,
+                                if p.tunable { "Yes" } else { "No" },
+                                p.description,
+                                range_str
+                            );
+                        }
+                    }
+                    if !algo.tunable_parameters.is_empty() {
+                        println!();
+                        println!("Tunable Parameters (for grid search):");
+                        for param_name in &algo.tunable_parameters {
+                            if let Some(p) = algo.parameters.iter().find(|p| p.name == *param_name) {
+                                if let Some((min, max)) = p.range {
+                                    println!("  {} [{:.2} - {:.2}]", p.name, min, max);
+                                } else {
+                                    println!("  {}", p.name);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // List all algorithms
+                    println!("Available Algorithms");
+                    println!("====================");
+                    println!();
+                    for algo in &result.algorithms {
+                        let trainable_marker = if algo.is_trainable { " [trainable]" } else { "" };
+                        println!("{} ({}){}:", algo.name, algo.type_string, trainable_marker);
+                        println!("  Category:    {}", algo.category);
+                        println!("  Version:     {}", algo.version);
+                        println!("  Description: {}", algo.description);
+                        println!("  Aliases:     {}", algo.aliases.join(", "));
+                        if !algo.tunable_parameters.is_empty() {
+                            println!("  Tunable:     {}", algo.tunable_parameters.join(", "));
+                        }
+                        println!();
+                    }
+                }
+            } else {
+                // JSON output
+                println!("{}", result.json_output);
+            }
         }
         Some(Commands::Sweep { spreads, skews }) => {
             // Build SweepParams from CLI

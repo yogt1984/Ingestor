@@ -30,7 +30,7 @@ use num::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::common::{ProgressCallback, ProgressEvent, LogLevel};
-use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams, WalkForwardMLParams, SweepParams, WalkForwardParams, OOSValidateParams, SimulateParams, GridParams, CampaignParams, PaperParams};
+use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams, WalkForwardMLParams, SweepParams, WalkForwardParams, OOSValidateParams, SimulateParams, GridParams, CampaignParams, PaperParams, ListAlgorithmsParams};
 use crate::backtest::{
     BacktestEngine, BacktestConfig, BacktestResults,
     replay::{ParquetReplay, ReplayConfig},
@@ -3396,6 +3396,165 @@ impl BacktestCommands {
         })
     }
 
+    /// List available algorithms and their parameters (info only)
+    ///
+    /// This command provides information about all available trading algorithms,
+    /// their parameters, and capabilities. It can show all algorithms or details
+    /// for a specific algorithm.
+    pub fn list_algorithms(
+        params: ListAlgorithmsParams,
+        callback: Arc<dyn ProgressCallback>,
+    ) -> Result<ListAlgorithmsResult> {
+        use crate::strategies::registry::AlgorithmRegistry;
+
+        callback.on_event(ProgressEvent::Started {
+            total: None,
+            message: "Listing available algorithms".to_string(),
+        });
+
+        if params.json {
+            // JSON output mode
+            let json = AlgorithmRegistry::to_json();
+            let json_string = serde_json::to_string_pretty(&json)?;
+
+            callback.on_event(ProgressEvent::Log {
+                level: LogLevel::Info,
+                message: "Algorithm information in JSON format".to_string(),
+            });
+
+            let algo_count = AlgorithmRegistry::list().len();
+            callback.on_event(ProgressEvent::Completed {
+                message: format!("Listed {} algorithms in JSON format", algo_count),
+            });
+
+            // For JSON mode, we still need to build the algorithms list for the result
+            let algorithms: Vec<ListAlgorithmInfo> = AlgorithmRegistry::list()
+                .into_iter()
+                .map(|info| {
+                    let params = AlgorithmRegistry::parameters(info.algorithm_type);
+                    let tunable_params = AlgorithmRegistry::tunable_parameters(info.algorithm_type);
+                    ListAlgorithmInfo {
+                        name: info.name.to_string(),
+                        type_string: info.type_string.to_string(),
+                        version: info.version.to_string(),
+                        category: if info.is_trainable { "ML/Trainable".to_string() } else { "Rule-Based".to_string() },
+                        is_trainable: info.is_trainable,
+                        is_configurable: info.is_configurable,
+                        description: info.description.to_string(),
+                        aliases: info.aliases.into_iter().map(|s| s.to_string()).collect(),
+                        parameters: params.into_iter().map(|p| {
+                            AlgorithmParameter {
+                                name: p.name,
+                                default: p.default,
+                                tunable: p.tunable,
+                                description: p.description,
+                                range: p.range,
+                            }
+                        }).collect(),
+                        tunable_parameters: tunable_params.into_iter().map(|p| p.name).collect(),
+                    }
+                })
+                .collect();
+
+            return Ok(ListAlgorithmsResult {
+                algorithms,
+                json_output: json_string,
+            });
+        }
+
+        // Build algorithm information list
+        let mut algorithms = Vec::new();
+
+        if let Some(ref algo_id) = params.algo {
+            // Show details for specific algorithm
+            callback.on_event(ProgressEvent::Log {
+                level: LogLevel::Info,
+                message: format!("Fetching details for algorithm: {}", algo_id),
+            });
+
+            match AlgorithmRegistry::info_by_string(algo_id) {
+                Ok(info) => {
+                    let params = AlgorithmRegistry::parameters(info.algorithm_type);
+                    let tunable_params = AlgorithmRegistry::tunable_parameters(info.algorithm_type);
+                    algorithms.push(ListAlgorithmInfo {
+                        name: info.name.to_string(),
+                        type_string: info.type_string.to_string(),
+                        version: info.version.to_string(),
+                        category: if info.is_trainable { "ML/Trainable".to_string() } else { "Rule-Based".to_string() },
+                        is_trainable: info.is_trainable,
+                        is_configurable: info.is_configurable,
+                        description: info.description.to_string(),
+                        aliases: info.aliases.into_iter().map(|s| s.to_string()).collect(),
+                        parameters: params.into_iter().map(|p| {
+                            AlgorithmParameter {
+                                name: p.name,
+                                default: p.default,
+                                tunable: p.tunable,
+                                description: p.description,
+                                range: p.range,
+                            }
+                        }).collect(),
+                        tunable_parameters: tunable_params.into_iter().map(|p| p.name).collect(),
+                    });
+
+                    callback.on_event(ProgressEvent::Log {
+                        level: LogLevel::Info,
+                        message: format!("Found algorithm: {} ({})", info.name, info.type_string),
+                    });
+                }
+                Err(_) => {
+                    callback.on_event(ProgressEvent::Log {
+                        level: LogLevel::Warn,
+                        message: format!("Unknown algorithm: {}", algo_id),
+                    });
+                    // Still return all algorithms so user can see what's available
+                }
+            }
+        }
+
+        // If no specific algorithm requested, or if specific algorithm not found, list all
+        if algorithms.is_empty() {
+            callback.on_event(ProgressEvent::Log {
+                level: LogLevel::Info,
+                message: "Fetching all available algorithms".to_string(),
+            });
+
+            for info in AlgorithmRegistry::list() {
+                let params = AlgorithmRegistry::parameters(info.algorithm_type);
+                let tunable_params = AlgorithmRegistry::tunable_parameters(info.algorithm_type);
+                algorithms.push(ListAlgorithmInfo {
+                    name: info.name.to_string(),
+                    type_string: info.type_string.to_string(),
+                    version: info.version.to_string(),
+                    category: if info.is_trainable { "ML/Trainable".to_string() } else { "Rule-Based".to_string() },
+                    is_trainable: info.is_trainable,
+                    is_configurable: info.is_configurable,
+                    description: info.description.to_string(),
+                    aliases: info.aliases.into_iter().map(|s| s.to_string()).collect(),
+                    parameters: params.into_iter().map(|p| {
+                        AlgorithmParameter {
+                            name: p.name,
+                            default: p.default,
+                            tunable: p.tunable,
+                            description: p.description,
+                            range: p.range,
+                        }
+                    }).collect(),
+                    tunable_parameters: tunable_params.into_iter().map(|p| p.name).collect(),
+                });
+            }
+        }
+
+        callback.on_event(ProgressEvent::Completed {
+            message: format!("Listed {} algorithm(s)", algorithms.len()),
+        });
+
+        Ok(ListAlgorithmsResult {
+            algorithms,
+            json_output: String::new(),
+        })
+    }
+
     /// Run 2D grid search over spread and skew parameters (MM algorithms only)
     ///
     /// This is a simpler version of tune() that only searches over spread and skew,
@@ -3629,6 +3788,38 @@ pub struct PaperResult {
     pub session_result: crate::backtest::session_runner::SessionResult,
     pub events_processed: usize,
     pub is_valid_for_validation: bool,
+}
+
+/// Algorithm information for list_algorithms command
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListAlgorithmInfo {
+    pub name: String,
+    pub type_string: String,
+    pub version: String,
+    pub category: String,
+    pub is_trainable: bool,
+    pub is_configurable: bool,
+    pub description: String,
+    pub aliases: Vec<String>,
+    pub parameters: Vec<AlgorithmParameter>,
+    pub tunable_parameters: Vec<String>,
+}
+
+/// Algorithm parameter information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlgorithmParameter {
+    pub name: String,
+    pub default: f64,
+    pub tunable: bool,
+    pub description: String,
+    pub range: Option<(f64, f64)>,
+}
+
+/// Result of list_algorithms command
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListAlgorithmsResult {
+    pub algorithms: Vec<ListAlgorithmInfo>,
+    pub json_output: String,
 }
 
 /// Single grid search result item
@@ -9614,3 +9805,71 @@ mod tests {
 }
 
 
+
+    // ============================================================================
+    // ListAlgorithmsResult Tests
+    // ============================================================================
+
+    #[test]
+    fn test_list_algorithms_result_struct() {
+        let result = ListAlgorithmsResult {
+            algorithms: vec![],
+            json_output: String::new(),
+        };
+        assert_eq!(result.algorithms.len(), 0);
+        assert!(result.json_output.is_empty());
+    }
+
+    #[test]
+    fn test_list_algorithms_result_with_algorithms() {
+        let algo_info = ListAlgorithmInfo {
+            name: "Test Algorithm".to_string(),
+            type_string: "test".to_string(),
+            version: "1.0.0".to_string(),
+            category: "Rule-Based".to_string(),
+            is_trainable: false,
+            is_configurable: true,
+            description: "Test description".to_string(),
+            aliases: vec!["t".to_string()],
+            parameters: vec![],
+            tunable_parameters: vec![],
+        };
+        let result = ListAlgorithmsResult {
+            algorithms: vec![algo_info.clone()],
+            json_output: String::new(),
+        };
+        assert_eq!(result.algorithms.len(), 1);
+        assert_eq!(result.algorithms[0].name, "Test Algorithm");
+    }
+
+    #[test]
+    fn test_list_algorithms_result_json_output() {
+        let result = ListAlgorithmsResult {
+            algorithms: vec![],
+            json_output: r#"{"algorithms": []}"#.to_string(),
+        };
+        assert!(!result.json_output.is_empty());
+    }
+
+    #[test]
+    fn test_list_algorithms_result_serialization() {
+        let algo_info = ListAlgorithmInfo {
+            name: "Test".to_string(),
+            type_string: "test".to_string(),
+            version: "1.0".to_string(),
+            category: "Rule-Based".to_string(),
+            is_trainable: false,
+            is_configurable: true,
+            description: "Test".to_string(),
+            aliases: vec![],
+            parameters: vec![],
+            tunable_parameters: vec![],
+        };
+        let result = ListAlgorithmsResult {
+            algorithms: vec![algo_info],
+            json_output: String::new(),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"algorithms\""));
+    }
+}
