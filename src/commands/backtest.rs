@@ -9595,7 +9595,7 @@ mod tests {
 
     #[test]
     fn test_paper_result_struct() {
-        use crate::backtest::session_runner::{SessionResult, SessionSummary, SessionMetrics};
+        use crate::backtest::session_runner::{SessionResult, SessionSummary, SessionMetrics, SessionState};
         use chrono::Utc;
 
         let summary = SessionSummary {
@@ -9607,6 +9607,7 @@ mod tests {
 
         let session_result = SessionResult {
             summary,
+            final_state: SessionState::default(),
             events_processed: 1000,
             summary_path: PathBuf::from("./summary.json"),
             trades_path: Some(PathBuf::from("./trades.json")),
@@ -9631,7 +9632,7 @@ mod tests {
 
     #[test]
     fn test_paper_result_clone() {
-        use crate::backtest::session_runner::{SessionResult, SessionSummary, SessionMetrics};
+        use crate::backtest::session_runner::{SessionResult, SessionSummary, SessionMetrics, SessionState};
         use chrono::Utc;
 
         let summary = SessionSummary {
@@ -9643,6 +9644,7 @@ mod tests {
 
         let session_result = SessionResult {
             summary,
+            final_state: SessionState::default(),
             events_processed: 1000,
             summary_path: PathBuf::from("./summary.json"),
             trades_path: Some(PathBuf::from("./trades.json")),
@@ -9667,7 +9669,7 @@ mod tests {
 
     #[test]
     fn test_paper_result_serialization() {
-        use crate::backtest::session_runner::{SessionResult, SessionSummary, SessionMetrics};
+        use crate::backtest::session_runner::{SessionResult, SessionSummary, SessionMetrics, SessionState};
         use chrono::Utc;
 
         let summary = SessionSummary {
@@ -9679,6 +9681,7 @@ mod tests {
 
         let session_result = SessionResult {
             summary,
+            final_state: SessionState::default(),
             events_processed: 1000,
             summary_path: PathBuf::from("./summary.json"),
             trades_path: Some(PathBuf::from("./trades.json")),
@@ -9711,7 +9714,7 @@ mod tests {
 
     #[test]
     fn test_paper_result_invalid_for_validation() {
-        use crate::backtest::session_runner::{SessionResult, SessionSummary, SessionMetrics};
+        use crate::backtest::session_runner::{SessionResult, SessionSummary, SessionMetrics, SessionState};
         use chrono::Utc;
 
         let summary = SessionSummary {
@@ -9723,6 +9726,7 @@ mod tests {
 
         let session_result = SessionResult {
             summary,
+            final_state: SessionState::default(),
             events_processed: 100,
             summary_path: PathBuf::from("./summary.json"),
             trades_path: None,
