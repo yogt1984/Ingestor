@@ -30,7 +30,7 @@ use num::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::common::{ProgressCallback, ProgressEvent, LogLevel};
-use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams, WalkForwardMLParams, SweepParams, WalkForwardParams, OOSValidateParams, SimulateParams, GridParams};
+use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams, WalkForwardMLParams, SweepParams, WalkForwardParams, OOSValidateParams, SimulateParams, GridParams, CampaignParams};
 use crate::backtest::{
     BacktestEngine, BacktestConfig, BacktestResults,
     replay::{ParquetReplay, ReplayConfig},
@@ -2902,6 +2902,283 @@ impl BacktestCommands {
         })
     }
 
+    /// Run a validation campaign using historical data (both algorithm types)
+    ///
+    /// This is similar to `simulate()` but is a separate command interface.
+    /// It runs a multi-week validation campaign to test strategy performance
+    /// before live deployment.
+    pub fn campaign(
+        params: CampaignParams,
+        callback: Arc<dyn ProgressCallback>,
+    ) -> Result<CampaignResult> {
+        use crate::backtest::{
+            validation_campaign::{ValidationCampaign, CampaignConfig, ValidationGates},
+            replay::{ParquetReplay, ReplayConfig as ParquetReplayConfig},
+        };
+        use crate::backtest::session_runner::{SessionRunner, SessionRunnerConfig, SimulatedEvent};
+        use chrono::{Utc, TimeZone, NaiveDate};
+        use std::collections::BTreeMap;
+
+        // Parse algorithm type
+        let algo_type = AlgorithmType::from_str(&params.algorithm)
+            .map_err(|_| anyhow::anyhow!(
+                "Unknown algorithm '{}'. Valid options: {}",
+                params.algorithm,
+                AlgorithmRegistry::all_type_strings().join(", ")
+            ))?;
+        let algo_name = algo_type.display_name().to_string();
+
+        callback.on_event(ProgressEvent::Started {
+            total: None,
+            message: format!("Starting validation campaign for algorithm: {}", algo_name),
+        });
+
+        // Build campaign config
+        let preset_name = params.preset.clone().unwrap_or_else(|| {
+            format!("CLI-{:.1}bps-{:.2}skew", params.spread, params.skew)
+        });
+        let campaign_config = CampaignConfig {
+            preset_name: preset_name.clone(),
+            target_weeks: params.weeks,
+            session_hours_per_day: params.session_hours,
+            min_sessions_per_week: params.min_sessions_per_week,
+            symbol: "BTCUSDT".to_string(),
+            output_dir: params.campaigns_dir.clone(),
+            expected_fill_rate: params.expected_fill_rate,
+            expected_sharpe: params.expected_sharpe,
+            expected_return: params.expected_return,
+            gates: ValidationGates {
+                min_weekly_trades: params.min_weekly_trades,
+                min_fill_rate_ratio: 0.5,
+                max_drawdown_pct: params.max_drawdown_pct,
+                min_win_rate: params.min_win_rate,
+                fill_rate_warning_ratio: 0.7,
+                sharpe_warning: 0.5,
+                pnl_warning_ratio: 0.6,
+            },
+        };
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!("Campaign Configuration: {} weeks, {:.1}h/day, min {}/week", 
+                params.weeks, params.session_hours, params.min_sessions_per_week),
+        });
+
+        // Create campaign
+        let mut campaign = ValidationCampaign::new(campaign_config)
+            .context("Failed to create validation campaign")?;
+
+        // Build MM config (for MM algorithms)
+        let mut mm_config = MMConfig::default();
+        mm_config.regime_params.high_entropy.spread_bps = params.spread;
+        mm_config.regime_params.medium_entropy.spread_bps = params.spread;
+        mm_config.regime_params.low_entropy.spread_bps = params.spread;
+        mm_config.regime_params.high_entropy.skew_factor = params.skew;
+        mm_config.regime_params.medium_entropy.skew_factor = params.skew;
+        mm_config.regime_params.low_entropy.skew_factor = params.skew;
+
+        // Load historical data
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!("Loading historical data from {:?}...", params.data_path),
+        });
+
+        let replay_config = ParquetReplayConfig {
+            data_dir: params.data_path.clone(),
+            start_time: None,
+            end_time: None,
+            speed: 0.0,
+        };
+        let mut replay = ParquetReplay::new(replay_config);
+        let _count = replay.load()
+            .context("Failed to load historical data")?;
+        let events = replay.into_events();
+
+        if events.is_empty() {
+            anyhow::bail!("No events loaded from data directory");
+        }
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!("Loaded {} events", events.len()),
+        });
+
+        // Group events by day
+        let mut events_by_day: BTreeMap<NaiveDate, Vec<_>> = BTreeMap::new();
+        for event in events {
+            let datetime = Utc.timestamp_millis_opt(event.timestamp_ms).single()
+                .ok_or_else(|| anyhow::anyhow!("Invalid timestamp: {}", event.timestamp_ms))?;
+            let date = datetime.date_naive();
+            events_by_day.entry(date).or_default().push(event);
+        }
+
+        let total_days = events_by_day.len();
+        let required_days = (params.weeks as usize) * 7;
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!("Data spans {} days (need {} for {} weeks)", total_days, required_days, params.weeks),
+        });
+
+        if total_days < params.min_sessions_per_week as usize {
+            anyhow::bail!(
+                "Insufficient data: {} days available, need at least {} days",
+                total_days, params.min_sessions_per_week
+            );
+        }
+
+        // Start campaign
+        campaign.start()
+            .context("Failed to start campaign")?;
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!("Campaign started: {}", campaign.campaign_id),
+        });
+
+        // Process each day as a session
+        let mut session_count = 0;
+        let target_days = required_days.min(total_days);
+
+        for (day_idx, (date, day_events)) in events_by_day.iter().enumerate() {
+            if day_idx >= target_days {
+                break;
+            }
+
+            // Skip days with too few events
+            if day_events.len() < 100 {
+                callback.on_event(ProgressEvent::Log {
+                    level: LogLevel::Info,
+                    message: format!("Day {} ({}) - Skipping: only {} events", day_idx + 1, date, day_events.len()),
+                });
+                continue;
+            }
+
+            // Calculate session duration from events
+            let first_ts = day_events.first().map(|e| e.timestamp_ms).unwrap_or(0);
+            let last_ts = day_events.last().map(|e| e.timestamp_ms).unwrap_or(0);
+            let day_duration_hours = (last_ts - first_ts) as f64 / 3600_000.0;
+
+            // Use actual day duration or configured session_hours, whichever is smaller
+            let effective_hours = day_duration_hours.min(params.session_hours);
+
+            // Skip if session would be too short
+            if effective_hours < 0.1 {
+                callback.on_event(ProgressEvent::Log {
+                    level: LogLevel::Info,
+                    message: format!("Day {} ({}) - Skipping: duration {:.2}h too short", day_idx + 1, date, effective_hours),
+                });
+                continue;
+            }
+
+            // Build session runner config for this day
+            let runner_config = SessionRunnerConfig {
+                duration_hours: effective_hours,
+                min_duration_hours: 0.1,
+                preset_name: params.preset.clone(),
+                symbol: "BTCUSDT".to_string(),
+                output_dir: params.campaigns_dir.join("sessions"),
+                log_quotes: false,
+                fee_rate: rust_decimal::Decimal::from_f64_retain(params.fee_rate).unwrap_or(rust_decimal_macros::dec!(0.0001)),
+                mm_config: Some(mm_config.clone()),
+                risk_config: None,
+                sim_config: None,
+                checkpoint_interval_secs: 300,
+                progress_interval: 5000,
+                min_trades: 1,
+            };
+
+            // Create and run session
+            let mut runner = SessionRunner::new(runner_config)
+                .context("Failed to create session runner")?;
+            runner.initialize()
+                .context("Failed to initialize session runner")?;
+
+            // Process day's events
+            let target_end_ts = first_ts + (effective_hours * 3600_000.0) as i64;
+            for event in day_events {
+                if event.timestamp_ms > target_end_ts {
+                    break;
+                }
+                if let Some(sim_event) = SimulatedEvent::from_replay_event(event) {
+                    let _ = runner.process_event(&sim_event)?;
+                }
+            }
+
+            // Finalize session
+            let result = runner.finalize()
+                .context("Failed to finalize session")?;
+            session_count += 1;
+
+            // Report progress
+            let metrics = &result.summary.metrics;
+            callback.on_event(ProgressEvent::Progress {
+                current: session_count,
+                total: Some(target_days),
+                message: format!(
+                    "Day {} ({}) | Trades: {} | PnL: {:.6} | WR: {:.1}% | Fill: {:.2}%",
+                    day_idx + 1,
+                    date,
+                    metrics.total_trades,
+                    metrics.net_pnl.to_f64().unwrap_or(0.0),
+                    metrics.win_rate * 100.0,
+                    if metrics.quotes_generated > 0 {
+                        (metrics.total_trades as f64 / metrics.quotes_generated as f64) * 100.0
+                    } else {
+                        0.0
+                    }
+                ),
+            });
+
+            callback.on_event(ProgressEvent::Metric {
+                name: "session_pnl".to_string(),
+                value: metrics.net_pnl.to_f64().unwrap_or(0.0),
+            });
+
+            // Add session to campaign
+            campaign.add_session(result)
+                .context("Failed to add session to campaign")?;
+
+            // Check for weekly gate after each week
+            let sessions_this_week = (day_idx + 1) % 7;
+            if sessions_this_week == 0 {
+                let week_num = ((day_idx + 1) / 7) as u8;
+                if let Some(gate) = campaign.check_weekly_gate() {
+                    callback.on_event(ProgressEvent::Log {
+                        level: LogLevel::Info,
+                        message: format!("Week {} Gate: {:?}", week_num, gate),
+                    });
+                }
+            }
+        }
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!("Campaign complete: {} sessions processed", session_count),
+        });
+
+        // Stop campaign and generate report
+        campaign.stop()
+            .context("Failed to stop campaign")?;
+        let report = campaign.generate_report();
+
+        callback.on_event(ProgressEvent::Completed {
+            message: format!(
+                "Validation campaign completed: {} sessions, {} weeks, final status: {:?}",
+                session_count,
+                report.campaign_metrics.weeks_completed,
+                report.status
+            ),
+        });
+
+        Ok(CampaignResult {
+            algorithm: params.algorithm.clone(),
+            algorithm_name: algo_name,
+            campaign_report: report,
+            total_sessions: session_count,
+        })
+    }
+
     /// Run 2D grid search over spread and skew parameters (MM algorithms only)
     ///
     /// This is a simpler version of tune() that only searches over spread and skew,
@@ -3112,6 +3389,15 @@ impl BacktestCommands {
 /// Result of a campaign simulation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimulateResult {
+    pub algorithm: String,
+    pub algorithm_name: String,
+    pub campaign_report: crate::backtest::validation_campaign::CampaignReport,
+    pub total_sessions: usize,
+}
+
+/// Result of a validation campaign
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CampaignResult {
     pub algorithm: String,
     pub algorithm_name: String,
     pub campaign_report: crate::backtest::validation_campaign::CampaignReport,
@@ -8860,6 +9146,223 @@ mod tests {
         assert_eq!(result.total_combinations, 3);
         assert!(result.best.is_some());
         assert_eq!(result.best.as_ref().unwrap().sharpe, 1.2);
+    }
+
+    // ============================================================================
+    // CampaignResult Tests
+    // ============================================================================
+
+    #[test]
+    fn test_campaign_result_struct() {
+        use crate::backtest::validation_campaign::{CampaignReport, CampaignConfig, CampaignStatus, CampaignMetrics, ValidationGates};
+        use chrono::Utc;
+
+        let config = CampaignConfig {
+            preset_name: "test".to_string(),
+            target_weeks: 4,
+            session_hours_per_day: 8.0,
+            min_sessions_per_week: 5,
+            symbol: "BTCUSDT".to_string(),
+            output_dir: PathBuf::from("./data/campaigns"),
+            expected_fill_rate: 0.10,
+            expected_sharpe: 1.0,
+            expected_return: 0.05,
+            gates: ValidationGates {
+                min_weekly_trades: 50,
+                min_fill_rate_ratio: 0.5,
+                max_drawdown_pct: 5.0,
+                min_win_rate: 0.40,
+                fill_rate_warning_ratio: 0.7,
+                sharpe_warning: 0.5,
+                pnl_warning_ratio: 0.6,
+            },
+        };
+
+        let report = CampaignReport {
+            campaign_id: "test-id".to_string(),
+            config: config.clone(),
+            status: CampaignStatus::Completed,
+            start_time: Utc::now(),
+            end_time: Some(Utc::now()),
+            weekly_summaries: vec![],
+            campaign_metrics: CampaignMetrics::default(),
+            verdict: crate::backtest::validation_campaign::ValidationVerdict::GoLive,
+            verdict_reasons: vec![],
+            recommendations: vec![],
+        };
+
+        let result = CampaignResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            campaign_report: report.clone(),
+            total_sessions: 20,
+        };
+
+        assert_eq!(result.algorithm, "as");
+        assert_eq!(result.algorithm_name, "Avellaneda-Stoikov");
+        assert_eq!(result.total_sessions, 20);
+        assert_eq!(result.campaign_report.campaign_id, "test-id");
+    }
+
+    #[test]
+    fn test_campaign_result_clone() {
+        use crate::backtest::validation_campaign::{CampaignReport, CampaignConfig, CampaignStatus, CampaignMetrics, ValidationGates};
+        use chrono::Utc;
+
+        let config = CampaignConfig {
+            preset_name: "test".to_string(),
+            target_weeks: 4,
+            session_hours_per_day: 8.0,
+            min_sessions_per_week: 5,
+            symbol: "BTCUSDT".to_string(),
+            output_dir: PathBuf::from("./data/campaigns"),
+            expected_fill_rate: 0.10,
+            expected_sharpe: 1.0,
+            expected_return: 0.05,
+            gates: ValidationGates {
+                min_weekly_trades: 50,
+                min_fill_rate_ratio: 0.5,
+                max_drawdown_pct: 5.0,
+                min_win_rate: 0.40,
+                fill_rate_warning_ratio: 0.7,
+                sharpe_warning: 0.5,
+                pnl_warning_ratio: 0.6,
+            },
+        };
+
+        let report = CampaignReport {
+            campaign_id: "test-id".to_string(),
+            config: config.clone(),
+            status: CampaignStatus::Completed,
+            start_time: Utc::now(),
+            end_time: Some(Utc::now()),
+            weekly_summaries: vec![],
+            campaign_metrics: CampaignMetrics::default(),
+            verdict: crate::backtest::validation_campaign::ValidationVerdict::GoLive,
+            verdict_reasons: vec![],
+            recommendations: vec![],
+        };
+
+        let result = CampaignResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            campaign_report: report,
+            total_sessions: 20,
+        };
+
+        let cloned = result.clone();
+        assert_eq!(cloned.algorithm, result.algorithm);
+        assert_eq!(cloned.algorithm_name, result.algorithm_name);
+        assert_eq!(cloned.total_sessions, result.total_sessions);
+        assert_eq!(cloned.campaign_report.campaign_id, result.campaign_report.campaign_id);
+    }
+
+    #[test]
+    fn test_campaign_result_serialization() {
+        use crate::backtest::validation_campaign::{CampaignReport, CampaignConfig, CampaignStatus, CampaignMetrics, ValidationGates};
+        use chrono::Utc;
+
+        let config = CampaignConfig {
+            preset_name: "test".to_string(),
+            target_weeks: 4,
+            session_hours_per_day: 8.0,
+            min_sessions_per_week: 5,
+            symbol: "BTCUSDT".to_string(),
+            output_dir: PathBuf::from("./data/campaigns"),
+            expected_fill_rate: 0.10,
+            expected_sharpe: 1.0,
+            expected_return: 0.05,
+            gates: ValidationGates {
+                min_weekly_trades: 50,
+                min_fill_rate_ratio: 0.5,
+                max_drawdown_pct: 5.0,
+                min_win_rate: 0.40,
+                fill_rate_warning_ratio: 0.7,
+                sharpe_warning: 0.5,
+                pnl_warning_ratio: 0.6,
+            },
+        };
+
+        let report = CampaignReport {
+            campaign_id: "test-id".to_string(),
+            config: config.clone(),
+            status: CampaignStatus::Completed,
+            start_time: Utc::now(),
+            end_time: Some(Utc::now()),
+            weekly_summaries: vec![],
+            campaign_metrics: CampaignMetrics::default(),
+            verdict: crate::backtest::validation_campaign::ValidationVerdict::GoLive,
+            verdict_reasons: vec![],
+            recommendations: vec![],
+        };
+
+        let result = CampaignResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            campaign_report: report,
+            total_sessions: 20,
+        };
+
+        // Test JSON serialization
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"algorithm\":\"as\""));
+        assert!(json.contains("\"algorithm_name\":\"Avellaneda-Stoikov\""));
+        assert!(json.contains("\"total_sessions\":20"));
+
+        // Test deserialization
+        let deserialized: CampaignResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.algorithm, result.algorithm);
+        assert_eq!(deserialized.algorithm_name, result.algorithm_name);
+        assert_eq!(deserialized.total_sessions, result.total_sessions);
+    }
+
+    #[test]
+    fn test_campaign_result_zero_sessions() {
+        use crate::backtest::validation_campaign::{CampaignReport, CampaignConfig, CampaignStatus, CampaignMetrics, ValidationGates};
+        use chrono::Utc;
+
+        let config = CampaignConfig {
+            preset_name: "test".to_string(),
+            target_weeks: 4,
+            session_hours_per_day: 8.0,
+            min_sessions_per_week: 5,
+            symbol: "BTCUSDT".to_string(),
+            output_dir: PathBuf::from("./data/campaigns"),
+            expected_fill_rate: 0.10,
+            expected_sharpe: 1.0,
+            expected_return: 0.05,
+            gates: ValidationGates {
+                min_weekly_trades: 50,
+                min_fill_rate_ratio: 0.5,
+                max_drawdown_pct: 5.0,
+                min_win_rate: 0.40,
+                fill_rate_warning_ratio: 0.7,
+                sharpe_warning: 0.5,
+                pnl_warning_ratio: 0.6,
+            },
+        };
+
+        let report = CampaignReport {
+            campaign_id: "test-id".to_string(),
+            config: config.clone(),
+            status: CampaignStatus::Stopped,
+            start_time: Utc::now(),
+            end_time: Some(Utc::now()),
+            weekly_summaries: vec![],
+            campaign_metrics: CampaignMetrics::default(),
+            verdict: crate::backtest::validation_campaign::ValidationVerdict::Reject,
+            verdict_reasons: vec![],
+            recommendations: vec![],
+        };
+
+        let result = CampaignResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            campaign_report: report,
+            total_sessions: 0,
+        };
+
+        assert_eq!(result.total_sessions, 0);
     }
 }
 
