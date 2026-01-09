@@ -335,6 +335,47 @@ cargo run --release --bin backtest -- campaign \
 
 **Supports:** Both MM and MOM algorithms
 
+#### `algorithms` (alias: `list-algorithms`)
+List available algorithms and their parameters.
+
+```bash
+# List all algorithms
+cargo run --release --bin backtest -- algorithms
+
+# Show details for a specific algorithm
+cargo run --release --bin backtest -- algorithms --algo as
+
+# Output as JSON (for scripting)
+cargo run --release --bin backtest -- algorithms --json
+```
+
+**Features:**
+- List all available trading algorithms
+- Show detailed information for specific algorithms
+- Display algorithm parameters and tunable ranges
+- JSON output format for scripting
+- Algorithm categories (ML/Trainable vs Rule-Based)
+- Version information and aliases
+
+**Key Options:**
+- `--algo`: Show detailed information for a specific algorithm (optional)
+- `--json`: Output results in JSON format (for scripting)
+
+**Example Output:**
+```
+Available Algorithms
+====================
+
+Avellaneda-Stoikov (as) [trainable]:
+  Category:    ML/Trainable
+  Version:     1.0.0
+  Description: Optimal market making with inventory risk
+  Aliases:     as, avellaneda-stoikov
+  Tunable:     spread_bps, skew_factor
+
+...
+```
+
 #### `simulate-session` (alias: `paper`)
 Simulate a paper trading session using historical data.
 
