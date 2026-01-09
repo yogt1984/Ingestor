@@ -30,7 +30,7 @@ use num::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::common::{ProgressCallback, ProgressEvent, LogLevel};
-use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams, WalkForwardMLParams, SweepParams, WalkForwardParams, OOSValidateParams, SimulateParams, GridParams, CampaignParams};
+use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams, WalkForwardMLParams, SweepParams, WalkForwardParams, OOSValidateParams, SimulateParams, GridParams, CampaignParams, PaperParams};
 use crate::backtest::{
     BacktestEngine, BacktestConfig, BacktestResults,
     replay::{ParquetReplay, ReplayConfig},
@@ -3176,6 +3176,220 @@ impl BacktestCommands {
             algorithm_name: algo_name,
             campaign_report: report,
             total_sessions: session_count,
+        })
+    }
+
+    /// Run a paper trading session simulation using historical data (both algorithm types)
+    ///
+    /// This simulates a paper trading session by replaying historical market data
+    /// through the trading algorithm. It's used to validate backtest assumptions
+    /// and calibrate fill rates before live trading.
+    pub fn paper(
+        params: PaperParams,
+        callback: Arc<dyn ProgressCallback>,
+    ) -> Result<PaperResult> {
+        use crate::backtest::{
+            replay::{ParquetReplay, ReplayConfig as ParquetReplayConfig},
+            session_runner::{SessionRunner, SessionRunnerConfig, SimulatedEvent, FillRateStats},
+        };
+
+        // Parse algorithm type
+        let algo_type = AlgorithmType::from_str(&params.algorithm)
+            .map_err(|_| anyhow::anyhow!(
+                "Unknown algorithm '{}'. Valid options: {}",
+                params.algorithm,
+                AlgorithmRegistry::all_type_strings().join(", ")
+            ))?;
+        let algo_name = algo_type.display_name().to_string();
+
+        callback.on_event(ProgressEvent::Started {
+            total: None,
+            message: format!("Starting paper trading session for algorithm: {}", algo_name),
+        });
+
+        // Build MM config (for MM algorithms)
+        let mut mm_config = MMConfig::default();
+        mm_config.regime_params.high_entropy.spread_bps = params.spread;
+        mm_config.regime_params.medium_entropy.spread_bps = params.spread;
+        mm_config.regime_params.low_entropy.spread_bps = params.spread;
+        mm_config.regime_params.high_entropy.skew_factor = params.skew;
+        mm_config.regime_params.medium_entropy.skew_factor = params.skew;
+        mm_config.regime_params.low_entropy.skew_factor = params.skew;
+
+        // Build session runner config
+        let runner_config = SessionRunnerConfig {
+            duration_hours: params.duration,
+            min_duration_hours: params.min_duration_hours,
+            preset_name: params.preset.clone(),
+            symbol: "BTCUSDT".to_string(),
+            output_dir: params.sessions_dir.clone(),
+            log_quotes: false,
+            fee_rate: rust_decimal::Decimal::from_f64_retain(params.fee_rate).unwrap_or(rust_decimal_macros::dec!(0.0001)),
+            mm_config: Some(mm_config.clone()),
+            risk_config: None,
+            sim_config: None,
+            checkpoint_interval_secs: 300,
+            progress_interval: 1000,
+            min_trades: params.min_trades,
+        };
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!(
+                "Configuration: Duration {:.1}h, Spread {:.1}bps, Skew {:.2}",
+                params.duration, params.spread, params.skew
+            ),
+        });
+
+        // Create runner
+        let mut runner = SessionRunner::new(runner_config)
+            .context("Failed to create session runner")?;
+        runner.initialize()
+            .context("Failed to initialize session runner")?;
+
+        // Load historical data
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!("Loading historical data from {:?}...", params.data_path),
+        });
+
+        let replay_config = ParquetReplayConfig {
+            data_dir: params.data_path.clone(),
+            start_time: None,
+            end_time: None,
+            speed: 0.0, // As fast as possible
+        };
+        let mut replay = ParquetReplay::new(replay_config);
+        let _count = replay.load()
+            .context("Failed to load historical data")?;
+        let events = replay.into_events();
+
+        if events.is_empty() {
+            anyhow::bail!("No events loaded from data directory");
+        }
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!("Loaded {} events", events.len()),
+        });
+
+        // Calculate target end time
+        let first_ts = events.first().map(|e| e.timestamp_ms).unwrap_or(0);
+        let last_ts = events.last().map(|e| e.timestamp_ms).unwrap_or(0);
+        let data_duration_hours = (last_ts - first_ts) as f64 / 3600_000.0;
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!("Data spans {:.1} hours", data_duration_hours),
+        });
+
+        let target_end_ts = first_ts + (params.duration * 3600_000.0) as i64;
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: "Running simulation...".to_string(),
+        });
+
+        // Process events
+        let mut processed = 0;
+        let total_events = events.len();
+        let update_interval = (total_events / 20).max(1);
+
+        for event in &events {
+            // Stop if we've exceeded our target duration
+            if event.timestamp_ms > target_end_ts {
+                break;
+            }
+
+            // Convert backtest event to simulated event
+            let sim_event = match SimulatedEvent::from_replay_event(event) {
+                Some(e) => e,
+                None => continue, // Skip events with missing data
+            };
+
+            let _fills = runner.process_event(&sim_event)
+                .context("Failed to process event")?;
+            processed += 1;
+
+            // Progress update
+            if update_interval > 0 && processed % update_interval == 0 {
+                let progress = runner.progress();
+                callback.on_event(ProgressEvent::Progress {
+                    current: processed,
+                    total: Some(total_events),
+                    message: format!(
+                        "Events: {} | Trades: {} | Fill rate: {:.2}%",
+                        progress.events_processed,
+                        progress.metrics.total_trades,
+                        runner.current_fill_rate() * 100.0
+                    ),
+                });
+
+                callback.on_event(ProgressEvent::Metric {
+                    name: "trades".to_string(),
+                    value: progress.metrics.total_trades as f64,
+                });
+
+                callback.on_event(ProgressEvent::Metric {
+                    name: "fill_rate".to_string(),
+                    value: runner.current_fill_rate(),
+                });
+            }
+        }
+
+        // Finalize session
+        let result = runner.finalize()
+            .context("Failed to finalize session")?;
+
+        // Fill rate analysis
+        let fill_stats = FillRateStats::from_metrics(&result.summary.metrics);
+        let backtest_assumption = 0.10;
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!(
+                "Fill Rate Analysis: Overall {:.2}%, Bid {:.2}%, Ask {:.2}%",
+                fill_stats.overall_fill_rate * 100.0,
+                fill_stats.bid_fill_rate * 100.0,
+                fill_stats.ask_fill_rate * 100.0
+            ),
+        });
+
+        if fill_stats.differs_from_assumption(backtest_assumption, 0.95) {
+            callback.on_event(ProgressEvent::Log {
+                level: LogLevel::Warn,
+                message: "WARNING: Fill rate differs significantly from backtest assumption (10%)".to_string(),
+            });
+        }
+
+        // Report final metrics
+        let metrics = &result.summary.metrics;
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!(
+                "Session Results: {} trades, PnL {:.6}, WR {:.1}%, Sharpe {:.2}",
+                metrics.total_trades,
+                metrics.net_pnl.to_f64().unwrap_or(0.0),
+                metrics.win_rate * 100.0,
+                metrics.sharpe_ratio
+            ),
+        });
+
+        callback.on_event(ProgressEvent::Completed {
+            message: format!(
+                "Paper trading session completed: {} events processed, {} trades, {} valid for validation",
+                processed,
+                metrics.total_trades,
+                if result.is_valid_for_validation { "IS" } else { "NOT" }
+            ),
+        });
+
+        Ok(PaperResult {
+            algorithm: params.algorithm.clone(),
+            algorithm_name: algo_name,
+            session_result: result,
+            events_processed: processed,
+            is_valid_for_validation: result.is_valid_for_validation,
         })
     }
 
@@ -9363,6 +9577,159 @@ mod tests {
         };
 
         assert_eq!(result.total_sessions, 0);
+    }
+
+    // ============================================================================
+    // PaperResult Tests
+    // ============================================================================
+
+    #[test]
+    fn test_paper_result_struct() {
+        use crate::backtest::session_runner::{SessionResult, SessionSummary, SessionMetrics};
+        use chrono::Utc;
+
+        let summary = SessionSummary {
+            session_id: "test-session".to_string(),
+            start_time: Utc::now(),
+            end_time: Some(Utc::now()),
+            metrics: SessionMetrics::default(),
+        };
+
+        let session_result = SessionResult {
+            summary,
+            events_processed: 1000,
+            summary_path: PathBuf::from("./summary.json"),
+            trades_path: Some(PathBuf::from("./trades.json")),
+            warnings: vec![],
+            is_valid_for_validation: true,
+        };
+
+        let result = PaperResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            session_result: session_result.clone(),
+            events_processed: 1000,
+            is_valid_for_validation: true,
+        };
+
+        assert_eq!(result.algorithm, "as");
+        assert_eq!(result.algorithm_name, "Avellaneda-Stoikov");
+        assert_eq!(result.events_processed, 1000);
+        assert_eq!(result.is_valid_for_validation, true);
+        assert_eq!(result.session_result.summary.session_id, "test-session");
+    }
+
+    #[test]
+    fn test_paper_result_clone() {
+        use crate::backtest::session_runner::{SessionResult, SessionSummary, SessionMetrics};
+        use chrono::Utc;
+
+        let summary = SessionSummary {
+            session_id: "test-session".to_string(),
+            start_time: Utc::now(),
+            end_time: Some(Utc::now()),
+            metrics: SessionMetrics::default(),
+        };
+
+        let session_result = SessionResult {
+            summary,
+            events_processed: 1000,
+            summary_path: PathBuf::from("./summary.json"),
+            trades_path: Some(PathBuf::from("./trades.json")),
+            warnings: vec![],
+            is_valid_for_validation: true,
+        };
+
+        let result = PaperResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            session_result: session_result.clone(),
+            events_processed: 1000,
+            is_valid_for_validation: true,
+        };
+
+        let cloned = result.clone();
+        assert_eq!(cloned.algorithm, result.algorithm);
+        assert_eq!(cloned.algorithm_name, result.algorithm_name);
+        assert_eq!(cloned.events_processed, result.events_processed);
+        assert_eq!(cloned.is_valid_for_validation, result.is_valid_for_validation);
+    }
+
+    #[test]
+    fn test_paper_result_serialization() {
+        use crate::backtest::session_runner::{SessionResult, SessionSummary, SessionMetrics};
+        use chrono::Utc;
+
+        let summary = SessionSummary {
+            session_id: "test-session".to_string(),
+            start_time: Utc::now(),
+            end_time: Some(Utc::now()),
+            metrics: SessionMetrics::default(),
+        };
+
+        let session_result = SessionResult {
+            summary,
+            events_processed: 1000,
+            summary_path: PathBuf::from("./summary.json"),
+            trades_path: Some(PathBuf::from("./trades.json")),
+            warnings: vec![],
+            is_valid_for_validation: true,
+        };
+
+        let result = PaperResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            session_result: session_result.clone(),
+            events_processed: 1000,
+            is_valid_for_validation: true,
+        };
+
+        // Test JSON serialization
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"algorithm\":\"as\""));
+        assert!(json.contains("\"algorithm_name\":\"Avellaneda-Stoikov\""));
+        assert!(json.contains("\"events_processed\":1000"));
+        assert!(json.contains("\"is_valid_for_validation\":true"));
+
+        // Test deserialization
+        let deserialized: PaperResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.algorithm, result.algorithm);
+        assert_eq!(deserialized.algorithm_name, result.algorithm_name);
+        assert_eq!(deserialized.events_processed, result.events_processed);
+        assert_eq!(deserialized.is_valid_for_validation, result.is_valid_for_validation);
+    }
+
+    #[test]
+    fn test_paper_result_invalid_for_validation() {
+        use crate::backtest::session_runner::{SessionResult, SessionSummary, SessionMetrics};
+        use chrono::Utc;
+
+        let summary = SessionSummary {
+            session_id: "test-session".to_string(),
+            start_time: Utc::now(),
+            end_time: Some(Utc::now()),
+            metrics: SessionMetrics::default(),
+        };
+
+        let session_result = SessionResult {
+            summary,
+            events_processed: 100,
+            summary_path: PathBuf::from("./summary.json"),
+            trades_path: None,
+            warnings: vec!["Insufficient trades".to_string()],
+            is_valid_for_validation: false,
+        };
+
+        let result = PaperResult {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            session_result,
+            events_processed: 100,
+            is_valid_for_validation: false,
+        };
+
+        assert_eq!(result.is_valid_for_validation, false);
+        assert_eq!(result.events_processed, 100);
     }
 }
 

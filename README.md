@@ -335,6 +335,33 @@ cargo run --release --bin backtest -- campaign \
 
 **Supports:** Both MM and MOM algorithms
 
+#### `simulate-session` (alias: `paper`)
+Simulate a paper trading session using historical data.
+
+```bash
+cargo run --release --bin backtest -- simulate-session \
+    --duration 1.0 \
+    --preset "GridSearch-Best" \
+    --spread 2.0 \
+    --skew 0.5 \
+    --sessions-dir ./data/sessions \
+    --output session_result.json
+```
+
+**Features:**
+- Paper trading session simulation
+- Fill rate analysis and calibration
+- Validation against backtest assumptions
+- Supports both MM and MOM algorithms
+
+**Key Options:**
+- `--duration`: Session duration in hours (default: 1.0)
+- `--preset`: Preset name to use (optional)
+- `--spread`: Base spread in bps (if no preset)
+- `--skew`: Inventory skew factor (if no preset)
+- `--sessions-dir`: Output directory for session files
+- `--output`: Output file for session result (JSON)
+
 ### Data Management Commands
 
 #### `validate-data` (alias: `vd`)

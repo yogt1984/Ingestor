@@ -11507,3 +11507,335 @@ mod campaign_params_tests {
         assert!(params.is_ok());
     }
 }
+
+/// Parameters for the `paper` command (paper trading session simulation - both algorithm types)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaperParams {
+    /// Path to data directory containing Parquet files
+    pub data_path: PathBuf,
+    /// Algorithm to use (e.g., "as", "ml", "fixed", "mom")
+    pub algorithm: String,
+    /// Path to ML weights file (required for ML algorithm)
+    pub weights_file: Option<PathBuf>,
+    /// Session duration in hours
+    pub duration: f64,
+    /// Preset name to use (optional)
+    pub preset: Option<String>,
+    /// Base spread in bps (if no preset)
+    pub spread: f64,
+    /// Inventory skew factor (if no preset)
+    pub skew: f64,
+    /// Output directory for session files
+    pub sessions_dir: PathBuf,
+    /// Maximum inventory
+    pub max_inventory: f64,
+    /// Quote size
+    pub quote_size: f64,
+    /// Fee rate (e.g., 0.0001 = 1 bps)
+    pub fee_rate: f64,
+    /// Use naive fill simulation (for comparison)
+    pub naive_fills: bool,
+    /// Fill probability (0.0-1.0) for realistic simulation
+    pub fill_prob: f64,
+    /// Queue position (0.0=front, 1.0=back)
+    pub queue_pos: f64,
+    /// Minimum duration in hours for valid session
+    pub min_duration_hours: f64,
+    /// Minimum trades for valid session
+    pub min_trades: usize,
+    /// Output file for session result (JSON)
+    pub output: Option<PathBuf>,
+    /// Quiet mode (no progress output)
+    pub quiet: bool,
+}
+
+/// Builder for `PaperParams` with validation
+pub struct PaperParamsBuilder {
+    data_path: Option<PathBuf>,
+    algorithm: Option<String>,
+    weights_file: Option<PathBuf>,
+    duration: Option<f64>,
+    preset: Option<String>,
+    spread: Option<f64>,
+    skew: Option<f64>,
+    sessions_dir: Option<PathBuf>,
+    max_inventory: Option<f64>,
+    quote_size: Option<f64>,
+    fee_rate: Option<f64>,
+    naive_fills: Option<bool>,
+    fill_prob: Option<f64>,
+    queue_pos: Option<f64>,
+    min_duration_hours: Option<f64>,
+    min_trades: Option<usize>,
+    output: Option<PathBuf>,
+    quiet: Option<bool>,
+}
+
+impl PaperParamsBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            data_path: None,
+            algorithm: None,
+            weights_file: None,
+            duration: None,
+            preset: None,
+            spread: None,
+            skew: None,
+            sessions_dir: None,
+            max_inventory: None,
+            quote_size: None,
+            fee_rate: None,
+            naive_fills: None,
+            fill_prob: None,
+            queue_pos: None,
+            min_duration_hours: None,
+            min_trades: None,
+            output: None,
+            quiet: None,
+        }
+    }
+
+    /// Set data path
+    pub fn data_path(mut self, path: PathBuf) -> Self {
+        self.data_path = Some(path);
+        self
+    }
+
+    /// Set algorithm
+    pub fn algorithm(mut self, algo: String) -> Self {
+        self.algorithm = Some(algo);
+        self
+    }
+
+    /// Set weights file
+    pub fn weights_file(mut self, path: Option<PathBuf>) -> Self {
+        self.weights_file = path;
+        self
+    }
+
+    /// Set session duration
+    pub fn duration(mut self, hours: f64) -> Self {
+        self.duration = Some(hours);
+        self
+    }
+
+    /// Set preset name
+    pub fn preset(mut self, preset: Option<String>) -> Self {
+        self.preset = preset;
+        self
+    }
+
+    /// Set spread
+    pub fn spread(mut self, spread: f64) -> Self {
+        self.spread = Some(spread);
+        self
+    }
+
+    /// Set skew
+    pub fn skew(mut self, skew: f64) -> Self {
+        self.skew = Some(skew);
+        self
+    }
+
+    /// Set sessions directory
+    pub fn sessions_dir(mut self, dir: PathBuf) -> Self {
+        self.sessions_dir = Some(dir);
+        self
+    }
+
+    /// Set max inventory
+    pub fn max_inventory(mut self, max_inv: f64) -> Self {
+        self.max_inventory = Some(max_inv);
+        self
+    }
+
+    /// Set quote size
+    pub fn quote_size(mut self, size: f64) -> Self {
+        self.quote_size = Some(size);
+        self
+    }
+
+    /// Set fee rate
+    pub fn fee_rate(mut self, rate: f64) -> Self {
+        self.fee_rate = Some(rate);
+        self
+    }
+
+    /// Set naive fills flag
+    pub fn naive_fills(mut self, naive: bool) -> Self {
+        self.naive_fills = Some(naive);
+        self
+    }
+
+    /// Set fill probability
+    pub fn fill_prob(mut self, prob: f64) -> Self {
+        self.fill_prob = Some(prob);
+        self
+    }
+
+    /// Set queue position
+    pub fn queue_pos(mut self, pos: f64) -> Self {
+        self.queue_pos = Some(pos);
+        self
+    }
+
+    /// Set minimum duration hours
+    pub fn min_duration_hours(mut self, hours: f64) -> Self {
+        self.min_duration_hours = Some(hours);
+        self
+    }
+
+    /// Set minimum trades
+    pub fn min_trades(mut self, min: usize) -> Self {
+        self.min_trades = Some(min);
+        self
+    }
+
+    /// Set output file
+    pub fn output(mut self, path: Option<PathBuf>) -> Self {
+        self.output = path;
+        self
+    }
+
+    /// Set quiet mode flag
+    pub fn quiet(mut self, enabled: bool) -> Self {
+        self.quiet = Some(enabled);
+        self
+    }
+
+    /// Build `PaperParams` with validation
+    pub fn build(self) -> Result<PaperParams> {
+        // Validate required fields
+        let data_path = self.data_path
+            .ok_or_else(|| anyhow::anyhow!("data_path is required"))?;
+        let algorithm = self.algorithm
+            .ok_or_else(|| anyhow::anyhow!("algorithm is required"))?;
+
+        // Validate duration
+        let duration = self.duration.unwrap_or(1.0);
+        if duration <= 0.0 {
+            anyhow::bail!("duration must be > 0.0");
+        }
+
+        // Validate spread
+        let spread = self.spread.unwrap_or(2.0);
+        if spread < 0.0 {
+            anyhow::bail!("spread must be >= 0.0");
+        }
+
+        // Validate skew
+        let skew = self.skew.unwrap_or(0.5);
+        if skew < 0.0 {
+            anyhow::bail!("skew must be >= 0.0");
+        }
+
+        // Validate min_duration_hours
+        let min_duration_hours = self.min_duration_hours.unwrap_or(0.1);
+        if min_duration_hours <= 0.0 {
+            anyhow::bail!("min_duration_hours must be > 0.0");
+        }
+
+        // Validate min_trades
+        let min_trades = self.min_trades.unwrap_or(5);
+        if min_trades == 0 {
+            anyhow::bail!("min_trades must be > 0");
+        }
+
+        // Validate ranges
+        if let Some(queue_pos) = self.queue_pos {
+            if !(0.0..=1.0).contains(&queue_pos) {
+                anyhow::bail!("queue_pos must be in range [0.0, 1.0]");
+            }
+        }
+        if let Some(fee_rate) = self.fee_rate {
+            if fee_rate < 0.0 {
+                anyhow::bail!("fee_rate must be >= 0.0");
+            }
+        }
+        if let Some(max_inventory) = self.max_inventory {
+            if max_inventory <= 0.0 {
+                anyhow::bail!("max_inventory must be > 0.0");
+            }
+        }
+        if let Some(quote_size) = self.quote_size {
+            if quote_size <= 0.0 {
+                anyhow::bail!("quote_size must be > 0.0");
+            }
+        }
+        if let Some(fill_prob) = self.fill_prob {
+            if !(0.0..=1.0).contains(&fill_prob) {
+                anyhow::bail!("fill_prob must be in range [0.0, 1.0]");
+            }
+        }
+
+        Ok(PaperParams {
+            data_path,
+            algorithm,
+            weights_file: self.weights_file,
+            duration,
+            preset: self.preset,
+            spread,
+            skew,
+            sessions_dir: self.sessions_dir.unwrap_or_else(|| PathBuf::from("./data/sessions")),
+            max_inventory: self.max_inventory.unwrap_or(0.1),
+            quote_size: self.quote_size.unwrap_or(0.001),
+            fee_rate: self.fee_rate.unwrap_or(0.0001),
+            naive_fills: self.naive_fills.unwrap_or(false),
+            fill_prob: self.fill_prob.unwrap_or(0.10),
+            queue_pos: self.queue_pos.unwrap_or(0.5),
+            min_duration_hours,
+            min_trades,
+            output: self.output,
+            quiet: self.quiet.unwrap_or(false),
+        })
+    }
+}
+
+impl Default for PaperParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+
+#[cfg(test)]
+mod paper_params_tests {
+    use super::*;
+
+    #[test]
+    fn test_paper_params_builder_new() {
+        let builder = PaperParamsBuilder::new();
+        assert!(builder.data_path.is_none());
+        assert!(builder.algorithm.is_none());
+    }
+
+    #[test]
+    fn test_paper_params_minimal_valid() {
+        let params = PaperParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .build();
+        assert!(params.is_ok());
+    }
+
+    #[test]
+    fn test_paper_params_duration_zero() {
+        let params = PaperParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .duration(0.0)
+            .build();
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_paper_params_spread_negative() {
+        let params = PaperParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spread(-1.0)
+            .build();
+        assert!(params.is_err());
+    }
+}
