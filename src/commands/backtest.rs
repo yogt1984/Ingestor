@@ -3375,12 +3375,15 @@ impl BacktestCommands {
             ),
         });
 
+        let is_valid = result.is_valid_for_validation;
+        let total_trades = metrics.total_trades;
+
         callback.on_event(ProgressEvent::Completed {
             message: format!(
                 "Paper trading session completed: {} events processed, {} trades, {} valid for validation",
                 processed,
-                metrics.total_trades,
-                if result.is_valid_for_validation { "IS" } else { "NOT" }
+                total_trades,
+                if is_valid { "IS" } else { "NOT" }
             ),
         });
 
@@ -3389,7 +3392,7 @@ impl BacktestCommands {
             algorithm_name: algo_name,
             session_result: result,
             events_processed: processed,
-            is_valid_for_validation: result.is_valid_for_validation,
+            is_valid_for_validation: is_valid,
         })
     }
 
