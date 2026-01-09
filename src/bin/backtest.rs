@@ -63,7 +63,7 @@ use ingestor::strategies::{
 };
 use ingestor::commands::{
     BacktestCommands,
-    params::backtest_params::{EvaluateParamsBuilder, TuneParamsBuilder, RegimeSearchParamsBuilder, MultiObjectiveParamsBuilder, RegimeOptimizeParamsBuilder, TrainParamsBuilder, WalkForwardMLParamsBuilder, SweepParamsBuilder, WalkForwardParamsBuilder, OOSValidateParamsBuilder, SimulateParamsBuilder, GridParamsBuilder},
+    params::backtest_params::{EvaluateParamsBuilder, TuneParamsBuilder, RegimeSearchParamsBuilder, MultiObjectiveParamsBuilder, RegimeOptimizeParamsBuilder, TrainParamsBuilder, WalkForwardMLParamsBuilder, SweepParamsBuilder, WalkForwardParamsBuilder, OOSValidateParamsBuilder, SimulateParamsBuilder, GridParamsBuilder, CampaignParamsBuilder},
 };
 use ingestor::commands::common::{NoOpCallback, ProgressCallback};
 use ingestor::commands::backtest::OOSValidateOverfitVerdict;
@@ -633,6 +633,65 @@ enum Commands {
         #[arg(short, long)]
         output: Option<std::path::PathBuf>,
     },
+
+    /// Run validation campaign (both algorithm types)
+    Campaign {
+        /// Number of weeks for campaign (default 4)
+        #[arg(long, default_value = "4")]
+        weeks: u8,
+
+        /// Hours per daily session (default 8.0)
+        #[arg(long, default_value = "8.0")]
+        session_hours: f64,
+
+        /// Minimum sessions per week for valid week (default 5)
+        #[arg(long, default_value = "5")]
+        min_sessions_per_week: u8,
+
+        /// Preset name to use (optional)
+        #[arg(long)]
+        preset: Option<String>,
+
+        /// Base spread in bps (if no preset)
+        #[arg(long, default_value = "2.0")]
+        spread: f64,
+
+        /// Inventory skew factor (if no preset)
+        #[arg(long, default_value = "0.5")]
+        skew: f64,
+
+        /// Expected fill rate from backtest (for comparison)
+        #[arg(long, default_value = "0.10")]
+        expected_fill_rate: f64,
+
+        /// Expected Sharpe from backtest
+        #[arg(long, default_value = "1.0")]
+        expected_sharpe: f64,
+
+        /// Expected return from backtest
+        #[arg(long, default_value = "0.05")]
+        expected_return: f64,
+
+        /// Minimum weekly trades for gate pass
+        #[arg(long, default_value = "50")]
+        min_weekly_trades: usize,
+
+        /// Maximum drawdown percentage for gate pass
+        #[arg(long, default_value = "5.0")]
+        max_drawdown_pct: f64,
+
+        /// Minimum win rate for gate pass
+        #[arg(long, default_value = "0.40")]
+        min_win_rate: f64,
+
+        /// Output directory for campaign files
+        #[arg(long, default_value = "./data/campaigns")]
+        campaigns_dir: std::path::PathBuf,
+
+        /// Output file for campaign report (JSON)
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -1147,6 +1206,55 @@ fn main() -> Result<()> {
                 if !cli.quiet {
                     println!();
                     println!("Results saved to: {:?}", output_path);
+                }
+            }
+        }
+        Some(Commands::Campaign { weeks, session_hours, min_sessions_per_week, preset, spread, skew, expected_fill_rate, expected_sharpe, expected_return, min_weekly_trades, max_drawdown_pct, min_win_rate, campaigns_dir, output }) => {
+            // Build CampaignParams from CLI
+            let campaign_params = CampaignParamsBuilder::new()
+                .data_path(cli.data.clone())
+                .algorithm(cli.algorithm.clone())
+                .weights_file(cli.weights_file.clone())
+                .weeks(*weeks)
+                .session_hours(*session_hours)
+                .min_sessions_per_week(*min_sessions_per_week)
+                .preset(preset.clone())
+                .spread(*spread)
+                .skew(*skew)
+                .expected_fill_rate(*expected_fill_rate)
+                .expected_sharpe(*expected_sharpe)
+                .expected_return(*expected_return)
+                .min_weekly_trades(*min_weekly_trades)
+                .max_drawdown_pct(*max_drawdown_pct)
+                .min_win_rate(*min_win_rate)
+                .campaigns_dir(campaigns_dir.clone())
+                .max_inventory(cli.max_inventory)
+                .quote_size(cli.quote_size)
+                .fee_rate(cli.fee_rate)
+                .naive_fills(cli.naive_fills)
+                .fill_prob(cli.fill_prob)
+                .queue_pos(cli.queue_pos)
+                .output(output.clone())
+                .quiet(cli.quiet)
+                .build()
+                .context("Failed to build campaign parameters")?;
+
+            let callback: Arc<dyn ProgressCallback> = Arc::new(NoOpCallback);
+            let result = BacktestCommands::campaign(campaign_params, callback)
+                .context("Failed to run validation campaign")?;
+
+            // Print campaign report summary
+            if !cli.quiet {
+                print_campaign_report(&result.campaign_report);
+            }
+
+            // Save report if output specified
+            if let Some(ref output_path) = output {
+                let json = serde_json::to_string_pretty(&result.campaign_report)?;
+                std::fs::write(output_path, &json)?;
+                if !cli.quiet {
+                    println!();
+                    println!("Campaign report saved to: {:?}", output_path);
                 }
             }
         }

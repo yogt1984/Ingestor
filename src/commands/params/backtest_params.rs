@@ -9050,6 +9050,394 @@ impl Default for GridParamsBuilder {
     }
 }
 
+/// Parameters for the `campaign` command (validation campaign - both algorithm types)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CampaignParams {
+    /// Path to data directory containing Parquet files
+    pub data_path: PathBuf,
+    /// Algorithm to use (e.g., "as", "ml", "fixed", "mom")
+    pub algorithm: String,
+    /// Path to ML weights file (required for ML algorithm)
+    pub weights_file: Option<PathBuf>,
+    /// Number of weeks for campaign
+    pub weeks: u8,
+    /// Hours per daily session
+    pub session_hours: f64,
+    /// Minimum sessions per week for valid week
+    pub min_sessions_per_week: u8,
+    /// Preset name to use (optional)
+    pub preset: Option<String>,
+    /// Base spread in bps (if no preset)
+    pub spread: f64,
+    /// Inventory skew factor (if no preset)
+    pub skew: f64,
+    /// Expected fill rate from backtest (for comparison)
+    pub expected_fill_rate: f64,
+    /// Expected Sharpe from backtest
+    pub expected_sharpe: f64,
+    /// Expected return from backtest
+    pub expected_return: f64,
+    /// Minimum weekly trades for gate pass
+    pub min_weekly_trades: usize,
+    /// Maximum drawdown percentage for gate pass
+    pub max_drawdown_pct: f64,
+    /// Minimum win rate for gate pass
+    pub min_win_rate: f64,
+    /// Output directory for campaign files
+    pub campaigns_dir: PathBuf,
+    /// Maximum inventory
+    pub max_inventory: f64,
+    /// Quote size
+    pub quote_size: f64,
+    /// Fee rate (e.g., 0.0001 = 1 bps)
+    pub fee_rate: f64,
+    /// Use naive fill simulation (for comparison)
+    pub naive_fills: bool,
+    /// Fill probability (0.0-1.0) for realistic simulation
+    pub fill_prob: f64,
+    /// Queue position (0.0=front, 1.0=back)
+    pub queue_pos: f64,
+    /// Output file for campaign report (JSON)
+    pub output: Option<PathBuf>,
+    /// Quiet mode (no progress output)
+    pub quiet: bool,
+}
+
+/// Builder for `CampaignParams` with validation
+pub struct CampaignParamsBuilder {
+    data_path: Option<PathBuf>,
+    algorithm: Option<String>,
+    weights_file: Option<PathBuf>,
+    weeks: Option<u8>,
+    session_hours: Option<f64>,
+    min_sessions_per_week: Option<u8>,
+    preset: Option<String>,
+    spread: Option<f64>,
+    skew: Option<f64>,
+    expected_fill_rate: Option<f64>,
+    expected_sharpe: Option<f64>,
+    expected_return: Option<f64>,
+    min_weekly_trades: Option<usize>,
+    max_drawdown_pct: Option<f64>,
+    min_win_rate: Option<f64>,
+    campaigns_dir: Option<PathBuf>,
+    max_inventory: Option<f64>,
+    quote_size: Option<f64>,
+    fee_rate: Option<f64>,
+    naive_fills: Option<bool>,
+    fill_prob: Option<f64>,
+    queue_pos: Option<f64>,
+    output: Option<PathBuf>,
+    quiet: Option<bool>,
+}
+
+impl CampaignParamsBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            data_path: None,
+            algorithm: None,
+            weights_file: None,
+            weeks: None,
+            session_hours: None,
+            min_sessions_per_week: None,
+            preset: None,
+            spread: None,
+            skew: None,
+            expected_fill_rate: None,
+            expected_sharpe: None,
+            expected_return: None,
+            min_weekly_trades: None,
+            max_drawdown_pct: None,
+            min_win_rate: None,
+            campaigns_dir: None,
+            max_inventory: None,
+            quote_size: None,
+            fee_rate: None,
+            naive_fills: None,
+            fill_prob: None,
+            queue_pos: None,
+            output: None,
+            quiet: None,
+        }
+    }
+
+    /// Set data path
+    pub fn data_path(mut self, path: PathBuf) -> Self {
+        self.data_path = Some(path);
+        self
+    }
+
+    /// Set algorithm
+    pub fn algorithm(mut self, algo: String) -> Self {
+        self.algorithm = Some(algo);
+        self
+    }
+
+    /// Set weights file
+    pub fn weights_file(mut self, path: Option<PathBuf>) -> Self {
+        self.weights_file = path;
+        self
+    }
+
+    /// Set number of weeks
+    pub fn weeks(mut self, weeks: u8) -> Self {
+        self.weeks = Some(weeks);
+        self
+    }
+
+    /// Set session hours
+    pub fn session_hours(mut self, hours: f64) -> Self {
+        self.session_hours = Some(hours);
+        self
+    }
+
+    /// Set minimum sessions per week
+    pub fn min_sessions_per_week(mut self, min: u8) -> Self {
+        self.min_sessions_per_week = Some(min);
+        self
+    }
+
+    /// Set preset name
+    pub fn preset(mut self, preset: Option<String>) -> Self {
+        self.preset = preset;
+        self
+    }
+
+    /// Set spread
+    pub fn spread(mut self, spread: f64) -> Self {
+        self.spread = Some(spread);
+        self
+    }
+
+    /// Set skew
+    pub fn skew(mut self, skew: f64) -> Self {
+        self.skew = Some(skew);
+        self
+    }
+
+    /// Set expected fill rate
+    pub fn expected_fill_rate(mut self, rate: f64) -> Self {
+        self.expected_fill_rate = Some(rate);
+        self
+    }
+
+    /// Set expected Sharpe
+    pub fn expected_sharpe(mut self, sharpe: f64) -> Self {
+        self.expected_sharpe = Some(sharpe);
+        self
+    }
+
+    /// Set expected return
+    pub fn expected_return(mut self, ret: f64) -> Self {
+        self.expected_return = Some(ret);
+        self
+    }
+
+    /// Set minimum weekly trades
+    pub fn min_weekly_trades(mut self, min: usize) -> Self {
+        self.min_weekly_trades = Some(min);
+        self
+    }
+
+    /// Set maximum drawdown percentage
+    pub fn max_drawdown_pct(mut self, pct: f64) -> Self {
+        self.max_drawdown_pct = Some(pct);
+        self
+    }
+
+    /// Set minimum win rate
+    pub fn min_win_rate(mut self, rate: f64) -> Self {
+        self.min_win_rate = Some(rate);
+        self
+    }
+
+    /// Set campaigns directory
+    pub fn campaigns_dir(mut self, dir: PathBuf) -> Self {
+        self.campaigns_dir = Some(dir);
+        self
+    }
+
+    /// Set max inventory
+    pub fn max_inventory(mut self, max_inv: f64) -> Self {
+        self.max_inventory = Some(max_inv);
+        self
+    }
+
+    /// Set quote size
+    pub fn quote_size(mut self, size: f64) -> Self {
+        self.quote_size = Some(size);
+        self
+    }
+
+    /// Set fee rate
+    pub fn fee_rate(mut self, rate: f64) -> Self {
+        self.fee_rate = Some(rate);
+        self
+    }
+
+    /// Set naive fills flag
+    pub fn naive_fills(mut self, naive: bool) -> Self {
+        self.naive_fills = Some(naive);
+        self
+    }
+
+    /// Set fill probability
+    pub fn fill_prob(mut self, prob: f64) -> Self {
+        self.fill_prob = Some(prob);
+        self
+    }
+
+    /// Set queue position
+    pub fn queue_pos(mut self, pos: f64) -> Self {
+        self.queue_pos = Some(pos);
+        self
+    }
+
+    /// Set output file
+    pub fn output(mut self, path: Option<PathBuf>) -> Self {
+        self.output = path;
+        self
+    }
+
+    /// Set quiet mode flag
+    pub fn quiet(mut self, enabled: bool) -> Self {
+        self.quiet = Some(enabled);
+        self
+    }
+
+    /// Build `CampaignParams` with validation
+    pub fn build(self) -> Result<CampaignParams> {
+        // Validate required fields
+        let data_path = self.data_path
+            .ok_or_else(|| anyhow::anyhow!("data_path is required"))?;
+        let algorithm = self.algorithm
+            .ok_or_else(|| anyhow::anyhow!("algorithm is required"))?;
+
+        // Validate weeks
+        let weeks = self.weeks.unwrap_or(4);
+        if weeks == 0 {
+            anyhow::bail!("weeks must be > 0");
+        }
+
+        // Validate session_hours
+        let session_hours = self.session_hours.unwrap_or(8.0);
+        if session_hours <= 0.0 {
+            anyhow::bail!("session_hours must be > 0.0");
+        }
+
+        // Validate min_sessions_per_week
+        let min_sessions_per_week = self.min_sessions_per_week.unwrap_or(5);
+        if min_sessions_per_week == 0 {
+            anyhow::bail!("min_sessions_per_week must be > 0");
+        }
+
+        // Validate spread
+        let spread = self.spread.unwrap_or(2.0);
+        if spread < 0.0 {
+            anyhow::bail!("spread must be >= 0.0");
+        }
+
+        // Validate skew
+        let skew = self.skew.unwrap_or(0.5);
+        if skew < 0.0 {
+            anyhow::bail!("skew must be >= 0.0");
+        }
+
+        // Validate expected_fill_rate
+        let expected_fill_rate = self.expected_fill_rate.unwrap_or(0.10);
+        if !(0.0..=1.0).contains(&expected_fill_rate) {
+            anyhow::bail!("expected_fill_rate must be in range [0.0, 1.0]");
+        }
+
+        // Validate expected_sharpe
+        let expected_sharpe = self.expected_sharpe.unwrap_or(1.0);
+        // No range restriction on Sharpe (can be negative)
+
+        // Validate expected_return
+        let expected_return = self.expected_return.unwrap_or(0.05);
+        // No range restriction on return (can be negative)
+
+        // Validate min_weekly_trades
+        let min_weekly_trades = self.min_weekly_trades.unwrap_or(50);
+        if min_weekly_trades == 0 {
+            anyhow::bail!("min_weekly_trades must be > 0");
+        }
+
+        // Validate max_drawdown_pct
+        let max_drawdown_pct = self.max_drawdown_pct.unwrap_or(5.0);
+        if max_drawdown_pct < 0.0 || max_drawdown_pct > 100.0 {
+            anyhow::bail!("max_drawdown_pct must be in range [0.0, 100.0]");
+        }
+
+        // Validate min_win_rate
+        let min_win_rate = self.min_win_rate.unwrap_or(0.40);
+        if !(0.0..=1.0).contains(&min_win_rate) {
+            anyhow::bail!("min_win_rate must be in range [0.0, 1.0]");
+        }
+
+        // Validate ranges
+        if let Some(queue_pos) = self.queue_pos {
+            if !(0.0..=1.0).contains(&queue_pos) {
+                anyhow::bail!("queue_pos must be in range [0.0, 1.0]");
+            }
+        }
+        if let Some(fee_rate) = self.fee_rate {
+            if fee_rate < 0.0 {
+                anyhow::bail!("fee_rate must be >= 0.0");
+            }
+        }
+        if let Some(max_inventory) = self.max_inventory {
+            if max_inventory <= 0.0 {
+                anyhow::bail!("max_inventory must be > 0.0");
+            }
+        }
+        if let Some(quote_size) = self.quote_size {
+            if quote_size <= 0.0 {
+                anyhow::bail!("quote_size must be > 0.0");
+            }
+        }
+        if let Some(fill_prob) = self.fill_prob {
+            if !(0.0..=1.0).contains(&fill_prob) {
+                anyhow::bail!("fill_prob must be in range [0.0, 1.0]");
+            }
+        }
+
+        Ok(CampaignParams {
+            data_path,
+            algorithm,
+            weights_file: self.weights_file,
+            weeks,
+            session_hours,
+            min_sessions_per_week,
+            preset: self.preset,
+            spread,
+            skew,
+            expected_fill_rate,
+            expected_sharpe,
+            expected_return,
+            min_weekly_trades,
+            max_drawdown_pct,
+            min_win_rate,
+            campaigns_dir: self.campaigns_dir.unwrap_or_else(|| PathBuf::from("./data/campaigns")),
+            max_inventory: self.max_inventory.unwrap_or(0.1),
+            quote_size: self.quote_size.unwrap_or(0.001),
+            fee_rate: self.fee_rate.unwrap_or(0.0001),
+            naive_fills: self.naive_fills.unwrap_or(false),
+            fill_prob: self.fill_prob.unwrap_or(0.10),
+            queue_pos: self.queue_pos.unwrap_or(0.5),
+            output: self.output,
+            quiet: self.quiet.unwrap_or(false),
+        })
+    }
+}
+
+impl Default for CampaignParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod simulate_params_tests {
     use super::*;
@@ -10349,6 +10737,772 @@ mod grid_params_tests {
             .algorithm("as".to_string())
             .spreads("1.5,2.5,3.5".to_string())
             .skews("0.33,0.55,0.77".to_string())
+            .build();
+        assert!(params.is_ok());
+    }
+}
+
+#[cfg(test)]
+mod campaign_params_tests {
+    use super::*;
+
+    // ============================================================================
+    // Basic Construction Tests
+    // ============================================================================
+
+    #[test]
+    fn test_campaign_params_builder_new() {
+        let builder = CampaignParamsBuilder::new();
+        assert!(builder.data_path.is_none());
+        assert!(builder.algorithm.is_none());
+    }
+
+    #[test]
+    fn test_campaign_params_builder_default() {
+        let builder = CampaignParamsBuilder::default();
+        assert!(builder.data_path.is_none());
+    }
+
+    #[test]
+    fn test_campaign_params_minimal_valid() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .build();
+        assert!(params.is_ok());
+        let params = params.unwrap();
+        assert_eq!(params.weeks, 4);
+        assert_eq!(params.session_hours, 8.0);
+        assert_eq!(params.min_sessions_per_week, 5);
+        assert_eq!(params.spread, 2.0);
+        assert_eq!(params.skew, 0.5);
+        assert_eq!(params.expected_fill_rate, 0.10);
+        assert_eq!(params.expected_sharpe, 1.0);
+        assert_eq!(params.expected_return, 0.05);
+        assert_eq!(params.min_weekly_trades, 50);
+        assert_eq!(params.max_drawdown_pct, 5.0);
+        assert_eq!(params.min_win_rate, 0.40);
+    }
+
+    // ============================================================================
+    // Required Fields Tests
+    // ============================================================================
+
+    #[test]
+    fn test_campaign_params_missing_data_path() {
+        let params = CampaignParamsBuilder::new()
+            .algorithm("as".to_string())
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("data_path is required"));
+    }
+
+    #[test]
+    fn test_campaign_params_missing_algorithm() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("algorithm is required"));
+    }
+
+    // ============================================================================
+    // Algorithm Type Tests (Both MM and MOM supported)
+    // ============================================================================
+
+    #[test]
+    fn test_campaign_params_valid_mm_algorithm_as() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .build();
+        assert!(params.is_ok());
+    }
+
+    #[test]
+    fn test_campaign_params_valid_mm_algorithm_ml() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .build();
+        assert!(params.is_ok());
+    }
+
+    #[test]
+    fn test_campaign_params_valid_mm_algorithm_fixed() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("fixed".to_string())
+            .build();
+        assert!(params.is_ok());
+    }
+
+    #[test]
+    fn test_campaign_params_valid_mom_algorithm() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("mom".to_string())
+            .build();
+        // Should work - campaign supports both MM and MOM
+        assert!(params.is_ok());
+    }
+
+    // ============================================================================
+    // Weeks Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_campaign_params_weeks_zero() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .weeks(0)
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("weeks must be > 0"));
+    }
+
+    #[test]
+    fn test_campaign_params_weeks_valid() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .weeks(8)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().weeks, 8);
+    }
+
+    #[test]
+    fn test_campaign_params_weeks_default() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().weeks, 4);
+    }
+
+    // ============================================================================
+    // Session Hours Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_campaign_params_session_hours_zero() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .session_hours(0.0)
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("session_hours must be > 0.0"));
+    }
+
+    #[test]
+    fn test_campaign_params_session_hours_negative() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .session_hours(-1.0)
+            .build();
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_campaign_params_session_hours_valid() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .session_hours(12.0)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().session_hours, 12.0);
+    }
+
+    // ============================================================================
+    // Min Sessions Per Week Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_campaign_params_min_sessions_per_week_zero() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .min_sessions_per_week(0)
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("min_sessions_per_week must be > 0"));
+    }
+
+    #[test]
+    fn test_campaign_params_min_sessions_per_week_valid() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .min_sessions_per_week(7)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().min_sessions_per_week, 7);
+    }
+
+    // ============================================================================
+    // Spread Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_campaign_params_spread_negative() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spread(-1.0)
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("spread must be >= 0.0"));
+    }
+
+    #[test]
+    fn test_campaign_params_spread_zero() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spread(0.0)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().spread, 0.0);
+    }
+
+    #[test]
+    fn test_campaign_params_spread_valid() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .spread(3.5)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().spread, 3.5);
+    }
+
+    // ============================================================================
+    // Skew Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_campaign_params_skew_negative() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .skew(-1.0)
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("skew must be >= 0.0"));
+    }
+
+    #[test]
+    fn test_campaign_params_skew_valid() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .skew(0.7)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().skew, 0.7);
+    }
+
+    // ============================================================================
+    // Expected Fill Rate Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_campaign_params_expected_fill_rate_out_of_range_high() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .expected_fill_rate(1.5)
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("expected_fill_rate must be in range [0.0, 1.0]"));
+    }
+
+    #[test]
+    fn test_campaign_params_expected_fill_rate_out_of_range_low() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .expected_fill_rate(-0.1)
+            .build();
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_campaign_params_expected_fill_rate_boundary() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .expected_fill_rate(1.0)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().expected_fill_rate, 1.0);
+    }
+
+    // ============================================================================
+    // Min Weekly Trades Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_campaign_params_min_weekly_trades_zero() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .min_weekly_trades(0)
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("min_weekly_trades must be > 0"));
+    }
+
+    #[test]
+    fn test_campaign_params_min_weekly_trades_valid() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .min_weekly_trades(100)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().min_weekly_trades, 100);
+    }
+
+    // ============================================================================
+    // Max Drawdown PCT Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_campaign_params_max_drawdown_pct_out_of_range_high() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .max_drawdown_pct(150.0)
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("max_drawdown_pct must be in range [0.0, 100.0]"));
+    }
+
+    #[test]
+    fn test_campaign_params_max_drawdown_pct_out_of_range_low() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .max_drawdown_pct(-1.0)
+            .build();
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_campaign_params_max_drawdown_pct_boundary() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .max_drawdown_pct(100.0)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().max_drawdown_pct, 100.0);
+    }
+
+    // ============================================================================
+    // Min Win Rate Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_campaign_params_min_win_rate_out_of_range_high() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .min_win_rate(1.5)
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("min_win_rate must be in range [0.0, 1.0]"));
+    }
+
+    #[test]
+    fn test_campaign_params_min_win_rate_out_of_range_low() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .min_win_rate(-0.1)
+            .build();
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_campaign_params_min_win_rate_boundary() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .min_win_rate(1.0)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().min_win_rate, 1.0);
+    }
+
+    // ============================================================================
+    // Queue Position Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_campaign_params_queue_pos_out_of_range_high() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .queue_pos(1.5)
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("queue_pos must be in range [0.0, 1.0]"));
+    }
+
+    #[test]
+    fn test_campaign_params_queue_pos_out_of_range_low() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .queue_pos(-0.1)
+            .build();
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_campaign_params_queue_pos_boundary() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .queue_pos(1.0)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().queue_pos, 1.0);
+    }
+
+    // ============================================================================
+    // Fill Prob Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_campaign_params_fill_prob_out_of_range_high() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .fill_prob(1.5)
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("fill_prob must be in range [0.0, 1.0]"));
+    }
+
+    #[test]
+    fn test_campaign_params_fill_prob_out_of_range_low() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .fill_prob(-0.1)
+            .build();
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_campaign_params_fill_prob_boundary() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .fill_prob(1.0)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().fill_prob, 1.0);
+    }
+
+    // ============================================================================
+    // Fee Rate Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_campaign_params_fee_rate_negative() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .fee_rate(-0.0001)
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("fee_rate must be >= 0.0"));
+    }
+
+    #[test]
+    fn test_campaign_params_fee_rate_zero() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .fee_rate(0.0)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().fee_rate, 0.0);
+    }
+
+    // ============================================================================
+    // Max Inventory Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_campaign_params_max_inventory_zero() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .max_inventory(0.0)
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("max_inventory must be > 0.0"));
+    }
+
+    #[test]
+    fn test_campaign_params_max_inventory_negative() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .max_inventory(-0.1)
+            .build();
+        assert!(params.is_err());
+    }
+
+    // ============================================================================
+    // Quote Size Validation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_campaign_params_quote_size_zero() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .quote_size(0.0)
+            .build();
+        assert!(params.is_err());
+        assert!(params.unwrap_err().to_string().contains("quote_size must be > 0.0"));
+    }
+
+    #[test]
+    fn test_campaign_params_quote_size_negative() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .quote_size(-0.001)
+            .build();
+        assert!(params.is_err());
+    }
+
+    // ============================================================================
+    // Optional Fields Tests
+    // ============================================================================
+
+    #[test]
+    fn test_campaign_params_preset() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .preset(Some("test-preset".to_string()))
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().preset, Some("test-preset".to_string()));
+    }
+
+    #[test]
+    fn test_campaign_params_weights_file() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("ml".to_string())
+            .weights_file(Some(PathBuf::from("./weights.json")))
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().weights_file, Some(PathBuf::from("./weights.json")));
+    }
+
+    #[test]
+    fn test_campaign_params_campaigns_dir() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .campaigns_dir(PathBuf::from("./custom/campaigns"))
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().campaigns_dir, PathBuf::from("./custom/campaigns"));
+    }
+
+    #[test]
+    fn test_campaign_params_output() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .output(Some(PathBuf::from("./report.json")))
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().output, Some(PathBuf::from("./report.json")));
+    }
+
+    #[test]
+    fn test_campaign_params_boolean_flags() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .naive_fills(true)
+            .quiet(true)
+            .build();
+        assert!(params.is_ok());
+        let params = params.unwrap();
+        assert!(params.naive_fills);
+        assert!(params.quiet);
+    }
+
+    // ============================================================================
+    // Serialization Tests
+    // ============================================================================
+
+    #[test]
+    fn test_campaign_params_serialization() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .weeks(6)
+            .session_hours(10.0)
+            .spread(3.0)
+            .skew(0.7)
+            .build()
+            .unwrap();
+
+        // Test JSON serialization
+        let json = serde_json::to_string(&params).unwrap();
+        assert!(json.contains("\"weeks\":6"));
+        assert!(json.contains("\"session_hours\":10.0"));
+        assert!(json.contains("\"spread\":3.0"));
+        assert!(json.contains("\"skew\":0.7"));
+        assert!(json.contains("\"algorithm\":\"as\""));
+
+        // Test deserialization
+        let deserialized: CampaignParams = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.weeks, params.weeks);
+        assert_eq!(deserialized.session_hours, params.session_hours);
+        assert_eq!(deserialized.spread, params.spread);
+        assert_eq!(deserialized.skew, params.skew);
+        assert_eq!(deserialized.algorithm, params.algorithm);
+    }
+
+    #[test]
+    fn test_campaign_params_serialization_with_optionals() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .preset(Some("test-preset".to_string()))
+            .weights_file(Some(PathBuf::from("./weights.json")))
+            .output(Some(PathBuf::from("./output.json")))
+            .build()
+            .unwrap();
+
+        let json = serde_json::to_string(&params).unwrap();
+        let deserialized: CampaignParams = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.preset, params.preset);
+        assert_eq!(deserialized.weights_file, params.weights_file);
+        assert_eq!(deserialized.output, params.output);
+    }
+
+    // ============================================================================
+    // Complex Scenarios Tests
+    // ============================================================================
+
+    #[test]
+    fn test_campaign_params_all_fields_set() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .weights_file(Some(PathBuf::from("./weights.json")))
+            .weeks(8)
+            .session_hours(12.0)
+            .min_sessions_per_week(6)
+            .preset(Some("custom-preset".to_string()))
+            .spread(4.0)
+            .skew(0.8)
+            .expected_fill_rate(0.15)
+            .expected_sharpe(1.5)
+            .expected_return(0.08)
+            .min_weekly_trades(75)
+            .max_drawdown_pct(7.5)
+            .min_win_rate(0.45)
+            .campaigns_dir(PathBuf::from("./custom/campaigns"))
+            .max_inventory(0.2)
+            .quote_size(0.002)
+            .fee_rate(0.0002)
+            .naive_fills(true)
+            .fill_prob(0.15)
+            .queue_pos(0.3)
+            .output(Some(PathBuf::from("./report.json")))
+            .quiet(true)
+            .build();
+        assert!(params.is_ok());
+        let params = params.unwrap();
+        assert_eq!(params.weeks, 8);
+        assert_eq!(params.session_hours, 12.0);
+        assert_eq!(params.min_sessions_per_week, 6);
+        assert_eq!(params.preset, Some("custom-preset".to_string()));
+        assert_eq!(params.spread, 4.0);
+        assert_eq!(params.skew, 0.8);
+        assert_eq!(params.expected_fill_rate, 0.15);
+        assert_eq!(params.expected_sharpe, 1.5);
+        assert_eq!(params.expected_return, 0.08);
+        assert_eq!(params.min_weekly_trades, 75);
+        assert_eq!(params.max_drawdown_pct, 7.5);
+        assert_eq!(params.min_win_rate, 0.45);
+        assert_eq!(params.campaigns_dir, PathBuf::from("./custom/campaigns"));
+        assert_eq!(params.max_inventory, 0.2);
+        assert_eq!(params.quote_size, 0.002);
+        assert_eq!(params.fee_rate, 0.0002);
+        assert!(params.naive_fills);
+        assert_eq!(params.fill_prob, 0.15);
+        assert_eq!(params.queue_pos, 0.3);
+        assert_eq!(params.output, Some(PathBuf::from("./report.json")));
+        assert!(params.quiet);
+    }
+
+    #[test]
+    fn test_campaign_params_negative_expected_sharpe() {
+        // Sharpe can be negative
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .expected_sharpe(-0.5)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().expected_sharpe, -0.5);
+    }
+
+    #[test]
+    fn test_campaign_params_negative_expected_return() {
+        // Return can be negative
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .expected_return(-0.02)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().expected_return, -0.02);
+    }
+
+    #[test]
+    fn test_campaign_params_extreme_values() {
+        let params = CampaignParamsBuilder::new()
+            .data_path(PathBuf::from("./data"))
+            .algorithm("as".to_string())
+            .weeks(255) // Max u8
+            .session_hours(24.0)
+            .min_sessions_per_week(7)
+            .spread(100.0)
+            .skew(10.0)
+            .expected_fill_rate(0.99)
+            .expected_sharpe(10.0)
+            .expected_return(1.0)
+            .min_weekly_trades(10000)
+            .max_drawdown_pct(99.9)
+            .min_win_rate(0.99)
+            .fill_prob(0.99)
+            .queue_pos(0.99)
             .build();
         assert!(params.is_ok());
     }
