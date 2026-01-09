@@ -11798,6 +11798,64 @@ impl Default for PaperParamsBuilder {
     }
 }
 
+/// Parameters for the `list_algorithms` command (list available algorithms - info only)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListAlgorithmsParams {
+    /// Show detailed information for a specific algorithm (optional)
+    pub algo: Option<String>,
+    /// Output as JSON (for scripting)
+    pub json: bool,
+}
+
+/// Builder for `ListAlgorithmsParams` with validation
+pub struct ListAlgorithmsParamsBuilder {
+    algo: Option<String>,
+    json: Option<bool>,
+}
+
+impl ListAlgorithmsParamsBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            algo: None,
+            json: None,
+        }
+    }
+
+    /// Set algorithm name to show details for
+    pub fn algo(mut self, algo: Option<String>) -> Self {
+        self.algo = algo;
+        self
+    }
+
+    /// Set JSON output flag
+    pub fn json(mut self, enabled: bool) -> Self {
+        self.json = Some(enabled);
+        self
+    }
+
+    /// Build `ListAlgorithmsParams` with validation
+    pub fn build(self) -> Result<ListAlgorithmsParams> {
+        // Validate algorithm name if provided
+        if let Some(ref algo_str) = self.algo {
+            if algo_str.trim().is_empty() {
+                anyhow::bail!("algorithm name cannot be empty");
+            }
+        }
+
+        Ok(ListAlgorithmsParams {
+            algo: self.algo,
+            json: self.json.unwrap_or(false),
+        })
+    }
+}
+
+impl Default for ListAlgorithmsParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 
 #[cfg(test)]
 mod paper_params_tests {
@@ -11837,5 +11895,75 @@ mod paper_params_tests {
             .spread(-1.0)
             .build();
         assert!(params.is_err());
+    }
+}
+
+#[cfg(test)]
+mod list_algorithms_params_tests {
+    use super::*;
+
+    #[test]
+    fn test_list_algorithms_params_builder_new() {
+        let builder = ListAlgorithmsParamsBuilder::new();
+        assert!(builder.algo.is_none());
+    }
+
+    #[test]
+    fn test_list_algorithms_params_minimal_valid() {
+        let params = ListAlgorithmsParamsBuilder::new().build();
+        assert!(params.is_ok());
+    }
+
+    #[test]
+    fn test_list_algorithms_params_empty_algorithm_name() {
+        let params = ListAlgorithmsParamsBuilder::new()
+            .algo(Some("".to_string()))
+            .build();
+        assert!(params.is_err());
+    }
+
+    #[test]
+    fn test_list_algorithms_params_valid_algorithm_name() {
+        let params = ListAlgorithmsParamsBuilder::new()
+            .algo(Some("as".to_string()))
+            .build();
+        assert!(params.is_ok());
+    }
+
+    #[test]
+    fn test_list_algorithms_params_json_true() {
+        let params = ListAlgorithmsParamsBuilder::new()
+            .json(true)
+            .build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().json, true);
+    }
+
+    #[test]
+    fn test_list_algorithms_params_json_default() {
+        let params = ListAlgorithmsParamsBuilder::new().build();
+        assert!(params.is_ok());
+        assert_eq!(params.unwrap().json, false);
+    }
+
+    #[test]
+    fn test_list_algorithms_params_all_fields_set() {
+        let params = ListAlgorithmsParamsBuilder::new()
+            .algo(Some("ml".to_string()))
+            .json(true)
+            .build();
+        assert!(params.is_ok());
+    }
+
+    #[test]
+    fn test_list_algorithms_params_serialization() {
+        let params = ListAlgorithmsParamsBuilder::new()
+            .algo(Some("as".to_string()))
+            .json(true)
+            .build()
+            .unwrap();
+        let json = serde_json::to_string(&params).unwrap();
+        assert!(json.contains("\"algo\":\"as\""));
+        assert!(json.contains("\"json\":true"));
     }
 }
