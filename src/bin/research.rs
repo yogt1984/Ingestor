@@ -39,20 +39,17 @@
 //! - Recommendation for trading strategy
 
 use std::path::PathBuf;
-use std::time::Instant;
+use std::sync::Arc;
 
-use anyhow::{Context, Result};
-use chrono::{NaiveDate, TimeZone, Utc};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
-use indicatif::{ProgressBar, ProgressStyle};
 
-use ingestor::backtest::replay::{ParquetReplay, ReplayConfig};
-use ingestor::core::{
-    ResearchState, ResearchStore, ResearchStoreConfig, TradeableAssessment,
+use ingestor::commands::{
+    ResearchCommands,
+    common::NoOpCallback,
 };
-use ingestor::edge_detection::{
-    DefaultResearchEngine, ResearchEngine, ResearchEngineConfig, SignificantSignal,
-};
+use ingestor::commands::params::research_params::{RunParamsBuilder, StatusParamsBuilder};
+use ingestor::commands::research::{RunResult, StatusResult};
 
 // ============================================================================
 // CLI Structures
@@ -145,255 +142,11 @@ pub struct RunArgs {
 }
 
 // ============================================================================
-// Run Command Implementation
+// Output Formatting Functions
 // ============================================================================
 
-/// Configuration for the research run
-#[derive(Debug, Clone)]
-pub struct ResearchRunConfig {
-    pub data_dir: PathBuf,
-    pub output_dir: PathBuf,
-    pub symbol: String,
-    pub start_time: Option<i64>,
-    pub end_time: Option<i64>,
-    pub min_samples: usize,
-    pub checkpoint_interval: usize,
-    pub resume: bool,
-    pub quiet: bool,
-    pub json: bool,
-}
-
-impl From<&RunArgs> for ResearchRunConfig {
-    fn from(args: &RunArgs) -> Self {
-        Self {
-            data_dir: args.data.clone(),
-            output_dir: args.output.clone(),
-            symbol: args.symbol.clone(),
-            start_time: args.start.as_ref().and_then(|s| parse_date_to_millis(s)),
-            end_time: args.end.as_ref().and_then(|s| parse_date_to_millis(s)),
-            min_samples: args.min_samples,
-            checkpoint_interval: args.checkpoint_interval,
-            resume: args.resume,
-            quiet: args.quiet,
-            json: args.json,
-        }
-    }
-}
-
-/// Parse a date string (YYYY-MM-DD) to milliseconds since epoch
-fn parse_date_to_millis(date_str: &str) -> Option<i64> {
-    NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
-        .ok()
-        .map(|d| {
-            let dt = d.and_hms_opt(0, 0, 0).unwrap_or_default();
-            Utc.from_utc_datetime(&dt).timestamp_millis()
-        })
-}
-
-/// Result of a research run
-#[derive(Debug, Clone)]
-pub struct ResearchRunResult {
-    pub samples_processed: usize,
-    pub duration_seconds: f64,
-    pub midc_kappa: f64,
-    pub midc_confidence: f64,
-    pub midc_regime: String,
-    pub persistence_mean_seconds: f64,
-    pub persistence_sample_count: usize,
-    pub top_signals: Vec<SignalSummary>,
-    pub is_tradeable: bool,
-    pub tradeable_reason: String,
-    pub checkpoints_saved: usize,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct SignalSummary {
-    pub signature: String,
-    pub p_continuation: f64,
-    pub sample_count: usize,
-    pub confidence_lower: f64,
-    pub confidence_upper: f64,
-}
-
-impl From<&SignificantSignal> for SignalSummary {
-    fn from(sig: &SignificantSignal) -> Self {
-        Self {
-            signature: sig.signature_key.clone(),
-            p_continuation: sig.probability.p_continuation,
-            sample_count: sig.probability.sample_count,
-            confidence_lower: sig.probability.confidence_interval.0,
-            confidence_upper: sig.probability.confidence_interval.1,
-        }
-    }
-}
-
-/// Execute the research run
-pub fn execute_run(config: &ResearchRunConfig) -> Result<ResearchRunResult> {
-    let start_time = Instant::now();
-
-    // Validate inputs
-    validate_config(config)?;
-
-    // Setup replay engine
-    let replay_config = ReplayConfig {
-        data_dir: config.data_dir.clone(),
-        start_time: config.start_time,
-        end_time: config.end_time,
-        speed: 0.0, // As fast as possible
-    };
-
-    let mut replay = ParquetReplay::new(replay_config);
-    let event_count = replay.load().context("Failed to load Parquet data")?;
-
-    if event_count == 0 {
-        anyhow::bail!("No events found in data directory");
-    }
-
-    // Setup research store
-    let store_config = ResearchStoreConfig::with_path(&config.output_dir);
-    let store = ResearchStore::new(store_config).context("Failed to create research store")?;
-
-    // Setup research engine
-    let engine_config = ResearchEngineConfig::new(&config.symbol)
-        .with_min_samples(config.min_samples)
-        .with_checkpoint_interval(config.checkpoint_interval);
-
-    let mut engine = if config.resume {
-        DefaultResearchEngine::load_or_init(engine_config, store)
-            .context("Failed to load or init research engine")?
-    } else {
-        DefaultResearchEngine::new(engine_config, Some(store))
-            .context("Failed to create research engine")?
-    };
-
-    // Setup progress bar
-    let progress = if config.quiet {
-        None
-    } else {
-        let pb = ProgressBar::new(event_count as u64);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")
-                .unwrap()
-                .progress_chars("#>-"),
-        );
-        pb.set_message("Processing...");
-        Some(pb)
-    };
-
-    // Process events
-    let mut processed = 0;
-    while let Some(event) = replay.next() {
-        if let Err(e) = engine.on_features(&event.snapshot) {
-            log::warn!("Error processing snapshot: {}", e);
-        }
-        processed += 1;
-
-        if let Some(ref pb) = progress {
-            pb.set_position(processed as u64);
-            if processed % 1000 == 0 {
-                let stats = engine.stats();
-                pb.set_message(format!(
-                    "MIDC: {:.4}, Signals: {}",
-                    engine.state().midc.kappa,
-                    stats.conditional_updates
-                ));
-            }
-        }
-    }
-
-    if let Some(pb) = progress {
-        pb.finish_with_message("Complete");
-    }
-
-    // Final checkpoint
-    engine.checkpoint().context("Failed to save final checkpoint")?;
-
-    // Gather results
-    let state = engine.state();
-    let stats = engine.stats();
-    let assessment = engine.assess();
-
-    let top_signals: Vec<SignalSummary> = engine
-        .significant_signals()
-        .iter()
-        .take(10)
-        .map(SignalSummary::from)
-        .collect();
-
-    let tradeable_reason = if assessment.is_tradeable {
-        "All conditions met".to_string()
-    } else {
-        let mut reasons = Vec::new();
-        if !assessment.midc_ok {
-            reasons.push("MIDC out of range");
-        }
-        if !assessment.persistence_ok {
-            reasons.push("Insufficient persistence data");
-        }
-        if !assessment.entropy_ok {
-            reasons.push("Entropy too high");
-        }
-        if !assessment.signals_ok {
-            reasons.push("Low signal confidence");
-        }
-        reasons.join(", ")
-    };
-
-    let result = ResearchRunResult {
-        samples_processed: stats.samples_processed,
-        duration_seconds: start_time.elapsed().as_secs_f64(),
-        midc_kappa: state.midc.kappa,
-        midc_confidence: state.midc.confidence,
-        midc_regime: format!("{:?}", state.midc.regime()),
-        persistence_mean_seconds: state.persistence.mean_duration_seconds,
-        persistence_sample_count: state.persistence.sample_count,
-        top_signals,
-        is_tradeable: assessment.is_tradeable,
-        tradeable_reason,
-        checkpoints_saved: stats.checkpoints,
-    };
-
-    Ok(result)
-}
-
-/// Validate the run configuration
-fn validate_config(config: &ResearchRunConfig) -> Result<()> {
-    // Check data directory exists
-    if !config.data_dir.exists() {
-        anyhow::bail!("Data directory does not exist: {:?}", config.data_dir);
-    }
-
-    // Check symbol is valid
-    if config.symbol.is_empty() {
-        anyhow::bail!("Symbol cannot be empty");
-    }
-    if config.symbol.len() > 20 {
-        anyhow::bail!("Symbol too long: {}", config.symbol);
-    }
-
-    // Check date range is valid
-    if let (Some(start), Some(end)) = (config.start_time, config.end_time) {
-        if start > end {
-            anyhow::bail!("Start date must be before end date");
-        }
-    }
-
-    // Check min_samples is reasonable
-    if config.min_samples == 0 {
-        anyhow::bail!("min_samples must be greater than 0");
-    }
-
-    // Check checkpoint_interval is reasonable
-    if config.checkpoint_interval == 0 {
-        anyhow::bail!("checkpoint_interval must be greater than 0");
-    }
-
-    Ok(())
-}
-
 /// Print human-readable summary
-fn print_summary(result: &ResearchRunResult) {
+fn print_summary(result: &RunResult) {
     println!("\n{}", "=".repeat(60));
     println!("                    RESEARCH SUMMARY");
     println!("{}", "=".repeat(60));
@@ -449,37 +202,8 @@ fn print_summary(result: &ResearchRunResult) {
 }
 
 /// Print JSON output
-fn print_json(result: &ResearchRunResult) -> Result<()> {
-    #[derive(serde::Serialize)]
-    struct JsonOutput {
-        samples_processed: usize,
-        duration_seconds: f64,
-        midc_kappa: f64,
-        midc_confidence: f64,
-        midc_regime: String,
-        persistence_mean_seconds: f64,
-        persistence_sample_count: usize,
-        top_signals: Vec<SignalSummary>,
-        is_tradeable: bool,
-        tradeable_reason: String,
-        checkpoints_saved: usize,
-    }
-
-    let output = JsonOutput {
-        samples_processed: result.samples_processed,
-        duration_seconds: result.duration_seconds,
-        midc_kappa: result.midc_kappa,
-        midc_confidence: result.midc_confidence,
-        midc_regime: result.midc_regime.clone(),
-        persistence_mean_seconds: result.persistence_mean_seconds,
-        persistence_sample_count: result.persistence_sample_count,
-        top_signals: result.top_signals.clone(),
-        is_tradeable: result.is_tradeable,
-        tradeable_reason: result.tradeable_reason.clone(),
-        checkpoints_saved: result.checkpoints_saved,
-    };
-
-    println!("{}", serde_json::to_string_pretty(&output)?);
+fn print_json(result: &RunResult) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(result)?);
     Ok(())
 }
 
@@ -496,191 +220,6 @@ fn interpret_midc(kappa: f64) -> &'static str {
     } else {
         "Highly inefficient (strong trends)"
     }
-}
-
-// ============================================================================
-// Status Command Implementation (Task 1.7)
-// ============================================================================
-
-/// Configuration for status command
-#[derive(Debug, Clone)]
-pub struct StatusConfig {
-    pub store_path: PathBuf,
-    pub symbol: String,
-    pub json: bool,
-    pub verbose: bool,
-    pub top_signals: usize,
-}
-
-impl From<&StatusArgs> for StatusConfig {
-    fn from(args: &StatusArgs) -> Self {
-        Self {
-            store_path: args.store.clone(),
-            symbol: args.symbol.clone(),
-            json: args.json,
-            verbose: args.verbose,
-            top_signals: args.top_signals,
-        }
-    }
-}
-
-/// Validate status command configuration
-fn validate_status_config(config: &StatusConfig) -> Result<()> {
-    // Check store directory exists
-    if !config.store_path.exists() {
-        anyhow::bail!("Research store directory does not exist: {:?}", config.store_path);
-    }
-
-    // Check symbol is valid
-    if config.symbol.is_empty() {
-        anyhow::bail!("Symbol cannot be empty");
-    }
-    if config.symbol.len() > 20 {
-        anyhow::bail!("Symbol too long: {}", config.symbol);
-    }
-
-    // Check top_signals is reasonable
-    if config.top_signals == 0 {
-        anyhow::bail!("top_signals must be greater than 0");
-    }
-    if config.top_signals > 100 {
-        anyhow::bail!("top_signals too large (max 100)");
-    }
-
-    Ok(())
-}
-
-/// Result of status query
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct StatusResult {
-    pub symbol: String,
-    pub state_id: String,
-    pub timestamp: String,
-    pub data_start: Option<String>,
-    pub data_end: Option<String>,
-    pub midc_kappa: f64,
-    pub midc_confidence: f64,
-    pub midc_tau_half_seconds: f64,
-    pub midc_regime: String,
-    pub midc_interpretation: String,
-    pub persistence_mean_seconds: f64,
-    pub persistence_median_seconds: f64,
-    pub persistence_sample_count: usize,
-    pub persistence_reliable: bool,
-    pub entropy: f64,
-    pub top_signals: Vec<StatusSignal>,
-    pub total_signals: usize,
-    pub assessment: StatusAssessment,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct StatusSignal {
-    pub signature: String,
-    pub p_continuation: f64,
-    pub sample_count: usize,
-    pub edge: f64,
-    pub confidence_lower: f64,
-    pub confidence_upper: f64,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct StatusAssessment {
-    pub midc_ok: bool,
-    pub entropy_ok: bool,
-    pub persistence_ok: bool,
-    pub signals_ok: bool,
-    pub is_tradeable: bool,
-    pub recommended_strategy: String,
-    pub position_scale: f64,
-    pub reasoning: String,
-}
-
-impl From<&TradeableAssessment> for StatusAssessment {
-    fn from(a: &TradeableAssessment) -> Self {
-        Self {
-            midc_ok: a.midc_ok,
-            entropy_ok: a.entropy_ok,
-            persistence_ok: a.persistence_ok,
-            signals_ok: a.signals_ok,
-            is_tradeable: a.is_tradeable,
-            recommended_strategy: format!("{:?}", a.recommended_strategy),
-            position_scale: a.position_scale,
-            reasoning: a.reasoning.clone(),
-        }
-    }
-}
-
-/// Execute the status command
-pub fn execute_status(config: &StatusConfig) -> Result<StatusResult> {
-    // Validate configuration
-    validate_status_config(config)?;
-
-    // Open research store
-    let store_config = ResearchStoreConfig::with_path(&config.store_path);
-    let mut store = ResearchStore::new(store_config)
-        .context("Failed to open research store")?;
-
-    // Load latest state for symbol
-    let state = store
-        .load(&config.symbol)
-        .context("Failed to load research state")?
-        .ok_or_else(|| anyhow::anyhow!("No research state found for symbol: {}", config.symbol))?;
-
-    // Build result
-    build_status_result(&state, config.top_signals)
-}
-
-/// Build status result from research state
-fn build_status_result(state: &ResearchState, top_n: usize) -> Result<StatusResult> {
-    let midc = &state.midc;
-    let persistence = &state.persistence;
-    let assessment = &state.assessment;
-
-    // Get top signals sorted by edge magnitude
-    let mut signals: Vec<_> = state
-        .conditional_table
-        .iter()
-        .filter(|(_, p)| p.sample_count >= 10)
-        .map(|(key, p)| {
-            StatusSignal {
-                signature: key.clone(),
-                p_continuation: p.p_continuation,
-                sample_count: p.sample_count,
-                edge: p.p_continuation - 0.5,
-                confidence_lower: p.confidence_interval.0,
-                confidence_upper: p.confidence_interval.1,
-            }
-        })
-        .collect();
-
-    // Sort by absolute edge (highest first)
-    signals.sort_by(|a, b| {
-        b.edge.abs().partial_cmp(&a.edge.abs()).unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let total_signals = signals.len();
-    let top_signals: Vec<_> = signals.into_iter().take(top_n).collect();
-
-    Ok(StatusResult {
-        symbol: state.symbol.clone(),
-        state_id: state.id.clone(),
-        timestamp: state.timestamp.to_rfc3339(),
-        data_start: state.data_start.map(|dt| dt.to_rfc3339()),
-        data_end: state.data_end.map(|dt| dt.to_rfc3339()),
-        midc_kappa: midc.kappa,
-        midc_confidence: midc.confidence,
-        midc_tau_half_seconds: midc.tau_half_seconds,
-        midc_regime: format!("{:?}", midc.regime()),
-        midc_interpretation: interpret_midc(midc.kappa).to_string(),
-        persistence_mean_seconds: persistence.mean_duration_seconds,
-        persistence_median_seconds: persistence.median_duration_seconds,
-        persistence_sample_count: persistence.sample_count,
-        persistence_reliable: persistence.is_reliable(),
-        entropy: state.entropy,
-        top_signals,
-        total_signals,
-        assessment: StatusAssessment::from(assessment),
-    })
 }
 
 /// Print human-readable status output
@@ -835,26 +374,40 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Run(args) => {
-            let config = ResearchRunConfig::from(&args);
+            // Convert CLI args to params using builder
+            let params = RunParamsBuilder::new()
+                .with_data(args.data.clone())
+                .with_output(args.output.clone())
+                .with_symbol(args.symbol.clone())
+                .with_start(args.start.clone())
+                .with_end(args.end.clone())
+                .with_min_samples(args.min_samples)
+                .with_checkpoint_interval(args.checkpoint_interval)
+                .with_resume(args.resume)
+                .with_quiet(args.quiet)
+                .with_json(args.json)
+                .build()?;
 
             if !args.quiet && !args.json {
                 println!("\nResearch Run Configuration:");
-                println!("  Data directory:     {:?}", config.data_dir);
-                println!("  Output directory:   {:?}", config.output_dir);
-                println!("  Symbol:             {}", config.symbol);
-                println!("  Min samples:        {}", config.min_samples);
-                println!("  Checkpoint interval:{}", config.checkpoint_interval);
-                if let Some(start) = &args.start {
+                println!("  Data directory:     {:?}", params.data);
+                println!("  Output directory:   {:?}", params.output);
+                println!("  Symbol:             {}", params.symbol);
+                println!("  Min samples:        {}", params.min_samples);
+                println!("  Checkpoint interval:{}", params.checkpoint_interval);
+                if let Some(ref start) = params.start {
                     println!("  Start date:         {}", start);
                 }
-                if let Some(end) = &args.end {
+                if let Some(ref end) = params.end {
                     println!("  End date:           {}", end);
                 }
-                println!("  Resume:             {}", config.resume);
+                println!("  Resume:             {}", params.resume);
                 println!();
             }
 
-            let result = execute_run(&config)?;
+            // Use extracted command with no-op callback (progress shown via logs)
+            let callback: Arc<dyn ingestor::commands::common::ProgressCallback> = Arc::new(NoOpCallback);
+            let result = ResearchCommands::run(params, callback)?;
 
             if args.json {
                 print_json(&result)?;
@@ -868,9 +421,18 @@ fn main() -> Result<()> {
         }
 
         Commands::Status(args) => {
-            let config = StatusConfig::from(&args);
+            // Convert CLI args to params using builder
+            let params = StatusParamsBuilder::new()
+                .with_store(args.store.clone())
+                .with_symbol(args.symbol.clone())
+                .with_json(args.json)
+                .with_verbose(args.verbose)
+                .with_top_signals(args.top_signals)
+                .build()?;
 
-            let result = execute_status(&config)?;
+            // Use extracted command with no-op callback
+            let callback: Arc<dyn ingestor::commands::common::ProgressCallback> = Arc::new(NoOpCallback);
+            let result = ResearchCommands::status(params, callback)?;
 
             if args.json {
                 print_status_json(&result)?;
