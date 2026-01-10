@@ -349,6 +349,109 @@ cargo run --release --bin backtest -- algorithms --algo as
 cargo run --release --bin backtest -- algorithms --json
 ```
 
+---
+
+### Research Commands
+
+The research CLI provides tools for analyzing historical market data to understand market microstructure and generate trading insights.
+
+#### `run` (alias: `r`)
+Run research analysis on historical feature data to build a research state containing MIDC estimates, persistence statistics, and conditional signals.
+
+```bash
+# Basic research run
+cargo run --release --bin research -- run \
+    --data ./data/features \
+    --output ./research/
+
+# With date range filtering
+cargo run --release --bin research -- run \
+    --data ./data/features \
+    --start 2024-01-01 \
+    --end 2024-01-31 \
+    --output ./research/
+
+# With custom symbol
+cargo run --release --bin research -- run \
+    --data ./data/features \
+    --symbol ETHUSDT \
+    --output ./research/
+
+# Resume from previous state
+cargo run --release --bin research -- run \
+    --data ./data/features \
+    --resume
+
+# Quiet mode (no progress output)
+cargo run --release --bin research -- run \
+    --data ./data/features \
+    --quiet
+
+# JSON output (for scripting)
+cargo run --release --bin research -- run \
+    --data ./data/features \
+    --json
+```
+
+**Output:**
+- MIDC estimate (kappa) with interpretation
+- Persistence statistics across regimes
+- Top conditional probability signals
+- Tradeable assessment with regime classification
+- Recommendation for trading strategy
+
+**Options:**
+- `--data`: Path to data directory containing Parquet feature files
+- `--output`: Path to output directory for research state (default: `./research`)
+- `--symbol`: Trading symbol (default: `BTCUSDT`)
+- `--start`: Start date for filtering (YYYY-MM-DD)
+- `--end`: End date for filtering (YYYY-MM-DD)
+- `--min-samples`: Minimum samples before engine is ready (default: 100)
+- `--checkpoint-interval`: Number of samples between saves (default: 10000)
+- `--resume`: Resume from previous state if available
+- `--quiet`: Quiet mode (disable progress output)
+- `--json`: Output results as JSON
+
+#### `status` (alias: `s`)
+Display current research status for a given symbol, showing MIDC estimates, persistence statistics, and top signals.
+
+```bash
+# Basic status
+cargo run --release --bin research -- status
+
+# With custom store and symbol
+cargo run --release --bin research -- status \
+    --store ./research/ \
+    --symbol ETHUSDT
+
+# Verbose output with all details
+cargo run --release --bin research -- status \
+    --verbose
+
+# Show top 10 signals
+cargo run --release --bin research -- status \
+    --top-signals 10
+
+# JSON output (for scripting)
+cargo run --release --bin research -- status \
+    --json
+```
+
+**Output:**
+- State metadata (ID, timestamp, data period)
+- MIDC analysis (kappa, tau-half, confidence, regime, interpretation)
+- Persistence analysis (mean/median duration, sample count, reliability)
+- Market entropy
+- Top conditional signals with edge calculations
+- Tradeable assessment with recommendation
+
+**Options:**
+- `--store`: Path to research store directory (default: `./research`)
+- `--symbol`: Trading symbol to query (default: `BTCUSDT`)
+- `--top-signals`: Number of top signals to display (default: 5, max: 100)
+- `--verbose`: Show verbose output with all details
+- `--json`: Output results as JSON
+
 **Features:**
 - List all available trading algorithms
 - Show detailed information for specific algorithms

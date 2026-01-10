@@ -16,10 +16,7 @@ pub mod research_params;
 pub mod validate_params;
 pub mod algorithm_params;
 
-// Re-export for convenience (will be added as parameters are implemented)
-// pub use backtest_params::*;
-// pub use research_params::*;
-// pub use validate_params::*;
-// pub use algorithm_params::*;
+// Re-export for convenience
+pub use research_params::{RunParams, RunParamsBuilder, StatusParams, StatusParamsBuilder};
 
 

@@ -9802,9 +9802,6 @@ mod tests {
         // Full integration tests would be in integration test files
         assert!(true);
     }
-}
-
-
 
     // ============================================================================
     // ListAlgorithmsResult Tests
