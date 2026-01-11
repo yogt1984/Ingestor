@@ -452,6 +452,80 @@ cargo run --release --bin research -- status \
 - `--verbose`: Show verbose output with all details
 - `--json`: Output results as JSON
 
+### Validate Commands
+
+The validate CLI provides tools for running comprehensive validation pipelines on algorithm configurations across multiple stages (backtest, forward, OOS, paper, live).
+
+#### `run` (default)
+Run the validation pipeline on an algorithm configuration.
+
+```bash
+# Run full pipeline with config file
+cargo run --release --bin validate -- --config ./configs/algo.json
+
+# Run specific stages
+cargo run --release --bin validate -- --config ./configs/algo.json --stages backtest,forward,oos
+
+# Generate config from research and validate
+cargo run --release --bin validate -- --from-research ./research/ --stages backtest,forward
+
+# Run with a preset configuration
+cargo run --release --bin validate -- --config ./configs/algo.json --preset research
+
+# Quiet mode (minimal output)
+cargo run --release --bin validate -- --config ./configs/algo.json --quiet
+
+# Output results as JSON
+cargo run --release --bin validate -- --config ./configs/algo.json --json
+```
+
+**Key Options:**
+- `--config`: Path to algorithm configuration JSON file
+- `--from-research`: Generate config from research state (alternative to --config)
+- `--data`: Path to data directory (default: `./data`)
+- `--results`: Path to results store directory (default: `./results`)
+- `--stages`: Comma-separated list of stages to run (backtest,forward,oos,paper,live)
+- `--from`: Start from a specific stage (partial run)
+- `--preset`: Use a preset configuration (default, production, research, fast)
+- `--quiet`: Minimal output
+- `--json`: Output results as JSON
+
+#### `presets`
+List available pipeline presets with descriptions.
+
+```bash
+cargo run --release --bin validate -- presets
+```
+
+#### `stages`
+List available validation stages with descriptions.
+
+```bash
+cargo run --release --bin validate -- stages
+```
+
+#### `status`
+Show status of recent validation runs.
+
+```bash
+cargo run --release --bin validate -- status
+```
+
+**Key Options:**
+- `--results`: Path to results store directory (default: `./results`)
+- `--last`: Number of recent runs to show (default: 10)
+
+#### `show`
+Show detailed information about a specific validation run.
+
+```bash
+cargo run --release --bin validate -- show <run-id>
+```
+
+**Key Options:**
+- `--results`: Path to results store directory (default: `./results`)
+- `--json`: Output as JSON
+
 **Features:**
 - List all available trading algorithms
 - Show detailed information for specific algorithms

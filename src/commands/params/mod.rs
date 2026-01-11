@@ -18,5 +18,12 @@ pub mod algorithm_params;
 
 // Re-export for convenience
 pub use research_params::{RunParams, RunParamsBuilder, StatusParams, StatusParamsBuilder};
+pub use validate_params::{
+    RunParams as ValidateRunParams, RunParamsBuilder as ValidateRunParamsBuilder,
+    PresetsParams, PresetsParamsBuilder,
+    StagesParams, StagesParamsBuilder,
+    StatusParams as ValidateStatusParams, StatusParamsBuilder as ValidateStatusParamsBuilder,
+    ShowParams, ShowParamsBuilder,
+};
 
 
