@@ -526,6 +526,92 @@ cargo run --release --bin validate -- show <run-id>
 - `--results`: Path to results store directory (default: `./results`)
 - `--json`: Output as JSON
 
+### Algorithm Commands
+
+The algorithm CLI provides tools for creating and managing algorithm configurations from research state.
+
+#### `create` (alias: `c`)
+Create a new algorithm configuration from research state.
+
+```bash
+# Create algorithm config from research state
+cargo run --release --bin algorithm -- create --research ./research --output ./data/configs
+
+# Create with custom name
+cargo run --release --bin algorithm -- create --research ./research --name "BTC_Momentum_v1"
+
+# Create and validate through pipeline
+cargo run --release --bin algorithm -- create --research ./research --validate --data ./data/features
+
+# Create with preset strategy type override
+cargo run --release --bin algorithm -- create --research ./research --strategy momentum
+
+# Dry run (show what would be created without saving)
+cargo run --release --bin algorithm -- create --research ./research --dry-run
+```
+
+**Key Options:**
+- `--research`: Path to research store directory (default: `./research`)
+- `--output`: Path to config store directory (default: `./data/configs`)
+- `--symbol`: Trading symbol to load research for (default: `BTCUSDT`)
+- `--name`: Custom name for the algorithm config
+- `--strategy`: Override strategy type (momentum, marketmaking, hybrid)
+- `--validate`: Run validation pipeline after creation
+- `--data`: Path to data directory (required if --validate is used)
+- `--stages`: Validation stages to run (comma-separated, default: `backtest`)
+- `--dry-run`: Show what would be created without saving
+- `--quiet`: Minimal output
+- `--json`: Output results as JSON
+
+#### `list` (alias: `ls`)
+List existing algorithm configurations.
+
+```bash
+# List all configs
+cargo run --release --bin algorithm -- list
+
+# Filter by symbol
+cargo run --release --bin algorithm -- list --symbol BTCUSDT
+
+# Filter by strategy
+cargo run --release --bin algorithm -- list --strategy momentum
+
+# Show only active configs
+cargo run --release --bin algorithm -- list --active-only
+
+# Limit results
+cargo run --release --bin algorithm -- list --limit 10
+```
+
+**Key Options:**
+- `--store`: Path to config store directory (default: `./data/configs`)
+- `--symbol`: Filter by symbol
+- `--strategy`: Filter by strategy type (momentum, marketmaking, hybrid)
+- `--name`: Filter by name (partial match)
+- `--active-only`: Show only active configs
+- `--limit`: Maximum number of configs to show (default: 20, max: 1000)
+- `--json`: Output results as JSON
+
+#### `show` (alias: `s`)
+Show details of a specific algorithm configuration.
+
+```bash
+# Show config details
+cargo run --release --bin algorithm -- show --id <config-id>
+
+# Show verbose details
+cargo run --release --bin algorithm -- show --id <config-id> --verbose
+
+# Show as JSON
+cargo run --release --bin algorithm -- show --id <config-id> --json
+```
+
+**Key Options:**
+- `--store`: Path to config store directory (default: `./data/configs`)
+- `--id`: Config ID to show (partial match supported)
+- `--verbose`: Show verbose details including all parameters
+- `--json`: Output as JSON
+
 **Features:**
 - List all available trading algorithms
 - Show detailed information for specific algorithms
