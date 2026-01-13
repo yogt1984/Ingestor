@@ -18,3 +18,4 @@ pub use params::number_input::NumberInputWidget;
 pub use params::comma_list::CommaListWidget;
 pub use params::toggle::ToggleWidget;
 pub use params::path_input::PathInputWidget;
+pub use params::dropdown::DropdownWidget;
