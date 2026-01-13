@@ -16,3 +16,4 @@ pub use status_bar::{StatusBar, draw_status_bar};
 pub use params::text_input::TextInputWidget;
 pub use params::number_input::NumberInputWidget;
 pub use params::comma_list::CommaListWidget;
+pub use params::toggle::ToggleWidget;

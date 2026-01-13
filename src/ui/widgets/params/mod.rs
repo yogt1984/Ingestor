@@ -6,8 +6,10 @@
 pub mod text_input;
 pub mod number_input;
 pub mod comma_list;
+pub mod toggle;
 
 pub use text_input::TextInputWidget;
 pub use number_input::NumberInputWidget;
 pub use comma_list::CommaListWidget;
+pub use toggle::ToggleWidget;
 
