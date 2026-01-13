@@ -17,3 +17,4 @@ pub use params::text_input::TextInputWidget;
 pub use params::number_input::NumberInputWidget;
 pub use params::comma_list::CommaListWidget;
 pub use params::toggle::ToggleWidget;
+pub use params::path_input::PathInputWidget;
