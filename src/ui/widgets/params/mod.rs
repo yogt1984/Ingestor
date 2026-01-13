@@ -4,6 +4,8 @@
 //! These widgets are used for interactive parameter editing.
 
 pub mod text_input;
+pub mod number_input;
 
 pub use text_input::TextInputWidget;
+pub use number_input::NumberInputWidget;
 
