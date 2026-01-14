@@ -9,6 +9,7 @@ pub mod comma_list;
 pub mod toggle;
 pub mod path_input;
 pub mod dropdown;
+pub mod slider;
 
 pub use text_input::TextInputWidget;
 pub use number_input::NumberInputWidget;
@@ -16,4 +17,5 @@ pub use comma_list::CommaListWidget;
 pub use toggle::ToggleWidget;
 pub use path_input::PathInputWidget;
 pub use dropdown::DropdownWidget;
+pub use slider::SliderWidget;
 
