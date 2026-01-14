@@ -1,9 +1,11 @@
 # MARS MVP Implementation Tasks - Entropy Feature Suite
 
-**Version:** 1.26
-**Date:** 2026-01-12
+**Version:** 1.27
+**Date:** 2026-01-14
 **Status:** Planning
 **Goal:** Implement entropy-based MVP for regime detection and filtered trading strategies
+
+**Latest Update:** Added Phase 1.5 (Advanced Entropy Features) with 4 new critical tasks: Permutation Entropy, Sample Entropy, Order Book Entropy, and KL Divergence. Enhanced regime classifier to use multi-feature approach. See changelog at end for full details.
 
 This document defines all tasks required to implement the MARS MVP focused on entropy features as the core differentiator, as specified in BRAINSTORMING_0.md.
 
@@ -132,6 +134,206 @@ Tasks are organized by:
 
 ---
 
+## Phase 1.5: Advanced Entropy Features (Week 1.5) 🆕
+
+### E-1.5: Implement Permutation Entropy
+**Priority:** 🔴 Critical
+**Dependencies:** Phase 1 complete
+**Estimated Time:** 2 hours
+
+**Description:** Implement permutation entropy for pattern-based complexity measurement.
+
+**Mathematical Formula:**
+```
+For embedding dimension m, map sequence to ordinal patterns:
+  [x₁, x₂, ..., xₘ] → permutation π
+
+Count frequencies p(π) for all m! possible patterns:
+  H_perm = -∑ p(π) log₂(p(π))
+
+Normalized: H_norm = H_perm / log₂(m!)
+```
+
+**Tasks:**
+- [ ] Create `src/features/permutation_entropy.rs`
+- [ ] Implement `PermutationEntropyCalculator` struct
+- [ ] Implement pattern extraction for m=3 (6 patterns)
+- [ ] Implement pattern counting with HashMap
+- [ ] Implement rolling window calculation
+- [ ] Add `perm_entropy_10s: Option<f64>` to FeaturesSnapshot
+- [ ] Add `perm_entropy_1m: Option<f64>` to FeaturesSnapshot
+- [ ] Add `perm_entropy_5m: Option<f64>` to FeaturesSnapshot
+- [ ] Update Parquet schema
+- [ ] Write unit tests (test with known sequences)
+- [ ] Benchmark performance (<1ms per calculation)
+
+**Acceptance Criteria:**
+- [ ] Permutation entropy correctly identifies random vs structured patterns
+- [ ] Normalized values in [0, 1] range
+- [ ] Performance target met
+- [ ] Integration with FeaturesSnapshot complete
+
+**Regime Interpretation:**
+- H_norm → 1.0: Random/efficient (all patterns equal)
+- H_norm → 0.0: Structured (few dominant patterns)
+- H_norm < 0.5: Strong exploitable structure
+
+---
+
+### E-1.6: Implement Sample Entropy
+**Priority:** 🔴 Critical
+**Dependencies:** Phase 1 complete
+**Estimated Time:** 3 hours
+
+**Description:** Implement sample entropy for regularity and predictability measurement.
+
+**Mathematical Formula:**
+```
+For embedding dimension m, tolerance r:
+
+1. Create template vectors: X_m(i) = [x_i, ..., x_{i+m-1}]
+2. Count matches within tolerance r:
+   B^m(r) = matches for dimension m
+   A^m(r) = matches for dimension m+1
+3. SampEn(m, r, N) = -ln(A^m(r) / B^m(r))
+
+Parameters: m=2, r=0.15×std(data)
+```
+
+**Tasks:**
+- [ ] Create `src/features/sample_entropy.rs`
+- [ ] Implement `SampleEntropyCalculator` struct
+- [ ] Implement template vector creation
+- [ ] Implement pairwise distance calculation (Chebyshev distance)
+- [ ] Implement match counting within tolerance
+- [ ] Add efficient nearest-neighbor search (optional: k-d tree)
+- [ ] Add `sample_entropy_30s: Option<f64>` to FeaturesSnapshot
+- [ ] Add `sample_entropy_1m: Option<f64>` to FeaturesSnapshot
+- [ ] Add `sample_entropy_5m: Option<f64>` to FeaturesSnapshot
+- [ ] Update Parquet schema
+- [ ] Write unit tests (test with sine wave, random walk)
+- [ ] Handle edge case (A=0)
+
+**Acceptance Criteria:**
+- [ ] Sample entropy correctly identifies regular vs irregular patterns
+- [ ] Values in expected range (0-2+)
+- [ ] Edge cases handled
+- [ ] Integration complete
+
+**Regime Interpretation:**
+- SampEn → 0: Highly regular, predictable (trending)
+- SampEn → 2+: Irregular, complex (mean-reverting)
+- SampEn < 0.5: Strong trend
+- SampEn > 1.5: Noisy, low predictability
+
+---
+
+### E-1.7: Implement Order Book Entropy
+**Priority:** 🔴 Critical
+**Dependencies:** Phase 1 complete
+**Estimated Time:** 3 hours
+
+**Description:** Implement order book entropy to measure liquidity distribution across price levels.
+
+**Mathematical Formula:**
+```
+Price Level Entropy (volume distribution):
+  For N levels with volumes [v₁, v₂, ..., vₙ]:
+    V = ∑vᵢ
+    pᵢ = vᵢ / V
+    H_levels = -∑ pᵢ log₂(pᵢ)
+  Normalized: H_norm = H_levels / log₂(N)
+
+Bid-Ask Entropy Asymmetry:
+  ΔH = H_bid - H_ask
+
+Order Flow Entropy (trade size distribution):
+  Discretize trades into buckets
+  H_flow = -∑∑ p(size,side) log₂(p(size,side))
+```
+
+**Tasks:**
+- [ ] Create `src/features/orderbook_entropy.rs`
+- [ ] Implement `OrderBookEntropyCalculator` struct
+- [ ] Implement price level entropy (top 10 levels)
+- [ ] Implement separate bid/ask entropy calculation
+- [ ] Implement entropy asymmetry (H_bid - H_ask)
+- [ ] Implement order flow entropy (rolling 1m, 5m windows)
+- [ ] Add `orderbook_entropy: Option<f64>` to FeaturesSnapshot
+- [ ] Add `orderbook_bid_entropy: Option<f64>` to FeaturesSnapshot
+- [ ] Add `orderbook_ask_entropy: Option<f64>` to FeaturesSnapshot
+- [ ] Add `orderbook_entropy_asymmetry: Option<f64>` to FeaturesSnapshot
+- [ ] Add `orderflow_entropy_1m: Option<f64>` to FeaturesSnapshot
+- [ ] Add `orderflow_entropy_5m: Option<f64>` to FeaturesSnapshot
+- [ ] Update Parquet schema
+- [ ] Write unit tests
+- [ ] Test with real order book data
+
+**Acceptance Criteria:**
+- [ ] Order book entropy correctly measures liquidity distribution
+- [ ] Asymmetry detects bid/ask pressure
+- [ ] Order flow entropy works with trade size buckets
+- [ ] Integration complete
+
+**Regime Interpretation:**
+- H_levels → 1.0: Deep book (volume spread across levels)
+- H_levels → 0.0: Thin book (concentrated volume)
+- ΔH > 0: Bid side more spread (selling pressure)
+- ΔH < 0: Ask side more spread (buying pressure)
+
+---
+
+### E-1.8: Implement KL Divergence (Relative Entropy)
+**Priority:** 🔴 Critical
+**Dependencies:** Phase 1 complete
+**Estimated Time:** 2 hours
+
+**Description:** Implement KL divergence to detect regime transitions by measuring distribution changes.
+
+**Mathematical Formula:**
+```
+Kullback-Leibler divergence:
+  D_KL(P || Q) = ∑ P(x) log₂(P(x) / Q(x))
+
+Where:
+  P = current distribution (rolling window)
+  Q = reference distribution (baseline)
+
+Jensen-Shannon divergence (symmetric):
+  M = (P + Q) / 2
+  JSD(P,Q) = [D_KL(P||M) + D_KL(Q||M)] / 2
+```
+
+**Tasks:**
+- [ ] Create `src/features/kl_divergence.rs`
+- [ ] Implement `KLDivergenceCalculator` struct
+- [ ] Implement reference distribution tracking (sliding baseline)
+- [ ] Implement current distribution (rolling window)
+- [ ] Implement KL divergence calculation (with smoothing for zero probs)
+- [ ] Implement JSD calculation (symmetric version)
+- [ ] Add `kl_div_tick_1m: Option<f64>` to FeaturesSnapshot (tick distribution)
+- [ ] Add `kl_div_tick_5m: Option<f64>` to FeaturesSnapshot
+- [ ] Add `kl_div_volatility_1m: Option<f64>` to FeaturesSnapshot (return distribution)
+- [ ] Add `kl_div_volatility_5m: Option<f64>` to FeaturesSnapshot
+- [ ] Add `regime_transition_score: Option<f64>` to FeaturesSnapshot (composite)
+- [ ] Update Parquet schema
+- [ ] Write unit tests
+- [ ] Test with known distribution shifts
+
+**Acceptance Criteria:**
+- [ ] KL divergence correctly detects distribution changes
+- [ ] Zero probability handling works (smoothing)
+- [ ] Regime transition score combines multiple KL divergences
+- [ ] Integration complete
+
+**Regime Interpretation:**
+- D_KL → 0.0: Stable (same as reference)
+- D_KL > 0.5: Moderate divergence (regime shift)
+- D_KL > 1.0: Strong divergence (transition)
+- D_KL > 2.0: Extreme divergence (avoid trading)
+
+---
+
 ## Phase 2: Regime Classification (Week 2)
 
 ### E-2.1: Define Regime Types and Thresholds
@@ -163,37 +365,52 @@ Tasks are organized by:
 
 ---
 
-### E-2.2: Implement Regime Classifier
+### E-2.2: Implement Enhanced Regime Classifier
 **Priority:** 🔴 Critical
-**Dependencies:** E-2.1, Phase 1
-**Estimated Time:** 6 hours
+**Dependencies:** E-2.1, Phase 1, Phase 1.5
+**Estimated Time:** 8 hours
 
-**Description:** Implement rule-based regime classifier.
+**Description:** Implement rule-based regime classifier using both basic and advanced entropy features.
 
 **Tasks:**
 - [ ] Create `src/regime/classifier.rs`
 - [ ] Implement `RegimeClassifier` struct
 - [ ] Implement `new(thresholds: RegimeThresholds)` constructor
 - [ ] Implement `classify(features: &EntropyFeatures) -> RegimeConfidence`
-- [ ] Implement TREND detection logic:
+- [ ] Implement TREND detection logic (enhanced):
   ```
-  entropy_medium < threshold AND entropy_zscore < zscore_threshold
+  Primary: sample_entropy < 0.5 AND permutation_entropy < 0.6
+  Confirming: entropy_medium < threshold AND entropy_zscore < zscore_threshold
+  Additional: kl_div_tick < 0.5 (stable distribution)
+  Confidence boost: orderbook_entropy > 0.7 (deep liquidity)
   ```
-- [ ] Implement AVOID detection logic:
+- [ ] Implement AVOID detection logic (enhanced):
   ```
-  entropy_medium > threshold OR entropy_zscore > zscore_threshold
-  OR vol_zscore > vol_threshold
+  Primary: kl_div_tick > 1.0 OR kl_div_volatility > 1.0 (regime transition)
+  OR: sample_entropy > 1.5 (highly irregular)
+  OR: entropy_medium > threshold OR entropy_zscore > zscore_threshold
+  OR: vol_zscore > vol_threshold
+  Additional: orderbook_entropy < 0.5 (thin liquidity - risky)
   ```
-- [ ] Implement REVERT detection (default when not TREND or AVOID)
-- [ ] Implement confidence calculation
+- [ ] Implement REVERT detection (enhanced):
+  ```
+  Primary: sample_entropy in [0.8, 1.5] (moderate irregularity)
+  Confirming: permutation_entropy > 0.7 (high pattern diversity)
+  Additional: kl_div_tick < 0.5 (stable)
+  ```
+- [ ] Implement multi-level confidence calculation (using 4+ features)
 - [ ] Add hysteresis to prevent rapid regime flipping
+- [ ] Implement feature weighting (primary features weight more)
 - [ ] Write unit tests for each regime
 - [ ] Write integration tests with real data samples
+- [ ] Add diagnostic output (which features triggered which regime)
 
 **Acceptance Criteria:**
-- [ ] Classifier correctly identifies all 3 regimes
-- [ ] Confidence scores are in [0, 1]
+- [ ] Classifier correctly identifies all 3 regimes with enhanced logic
+- [ ] Confidence scores are in [0, 1] and reflect feature agreement
 - [ ] Hysteresis prevents flipping
+- [ ] Feature weighting implemented
+- [ ] Diagnostic output available for debugging
 - [ ] Unit tests pass
 - [ ] Integration tests pass
 
@@ -563,21 +780,23 @@ Tasks are organized by:
 
 ## Summary
 
-### Total Tasks: 22
+### Total Tasks: 26 (Updated)
 - **Phase 1:** 4 tasks (Core Entropy Features)
-- **Phase 2:** 4 tasks (Regime Classification)
+- **Phase 1.5:** 4 tasks (Advanced Entropy Features) 🆕
+- **Phase 2:** 4 tasks (Regime Classification - Enhanced)
 - **Phase 3:** 4 tasks (Helper Features)
 - **Phase 4:** 2 tasks (Visual Validation)
 - **Phase 5:** 8 tasks (Strategy Integration)
 
-### Estimated Time: ~80 hours (~2 weeks @ 40 hours/week)
+### Estimated Time: ~90 hours (~2.25 weeks @ 40 hours/week)
 
 ### Critical Path:
 1. Phase 1 (Entropy Features) - Must complete first
-2. Phase 2 (Regime Classification) - Depends on Phase 1
-3. Phase 4 (Validation) - Can start after Phase 2, CRITICAL GATE
-4. Phase 3 (Helper Features) - Can run parallel to Phase 2
-5. Phase 5 (Strategy Integration) - Only after validation positive
+2. **Phase 1.5 (Advanced Entropy Features)** - Builds on Phase 1 🆕
+3. Phase 2 (Enhanced Regime Classification) - Depends on Phase 1 + 1.5
+4. Phase 4 (Validation) - Can start after Phase 2, CRITICAL GATE
+5. Phase 3 (Helper Features) - Can run parallel to Phase 2
+6. Phase 5 (Strategy Integration) - Only after validation positive
 
 ### Go/No-Go Gate:
 **After Phase 4 (E-4.2)**: If validation shows entropy does NOT predict regime quality:
@@ -601,7 +820,13 @@ Use this section to track task completion:
 - [ ] E-1.3: Integrate Entropy Features into FeaturesSnapshot
 - [ ] E-1.4: Implement Entropy Feature Calculator
 
-### Phase 2: Regime Classification
+### Phase 1.5: Advanced Entropy Features 🆕
+- [ ] E-1.5: Implement Permutation Entropy
+- [ ] E-1.6: Implement Sample Entropy
+- [ ] E-1.7: Implement Order Book Entropy
+- [ ] E-1.8: Implement KL Divergence (Relative Entropy)
+
+### Phase 2: Regime Classification (Enhanced)
 - [ ] E-2.1: Define Regime Types and Thresholds
 - [ ] E-2.2: Implement Regime Classifier
 - [ ] E-2.3: Add Regime to FeaturesSnapshot
@@ -641,7 +866,7 @@ Use this section to track task completion:
 
 ## Feature Summary
 
-### New Features (16 total)
+### New Features (30 total, updated)
 
 **Entropy Core (10 features):**
 1. `tick_entropy` - EXISTS
@@ -655,23 +880,70 @@ Use this section to track task completion:
 9. `entropy_slow` - ADD
 10. `entropy_divergence` - ADD
 
+**Advanced Entropy (14 features):** 🆕
+11. `perm_entropy_10s` - ADD
+12. `perm_entropy_1m` - ADD
+13. `perm_entropy_5m` - ADD
+14. `sample_entropy_30s` - ADD
+15. `sample_entropy_1m` - ADD
+16. `sample_entropy_5m` - ADD
+17. `orderbook_entropy` - ADD
+18. `orderbook_bid_entropy` - ADD
+19. `orderbook_ask_entropy` - ADD
+20. `orderbook_entropy_asymmetry` - ADD
+21. `orderflow_entropy_1m` - ADD
+22. `orderflow_entropy_5m` - ADD
+23. `kl_div_tick_1m` - ADD
+24. `kl_div_tick_5m` - ADD
+25. `kl_div_volatility_1m` - ADD
+26. `kl_div_volatility_5m` - ADD
+27. `regime_transition_score` - ADD
+
 **Helper Features (3 features):**
-11. `autocorr_20` - ADD
-12. `vol_zscore` - ADD
-13. `price_r2_50` - ADD
+28. `autocorr_20` - ADD
+29. `vol_zscore` - ADD
+30. `price_r2_50` - ADD
 
 **Composite Signals (4 features):**
-14. `trend_quality` - ADD
-15. `reversion_risk` - ADD
-16. `flow_clarity` - ADD
-17. `regime_stability` - ADD
+31. `trend_quality` - ADD
+32. `reversion_risk` - ADD
+33. `flow_clarity` - ADD
+34. `regime_stability` - ADD
 
 **Classification (2 fields):**
-18. `regime` - ADD
-19. `regime_confidence` - ADD
+35. `regime` - ADD
+36. `regime_confidence` - ADD
+
+**Total: 36 new features + existing features = 96+ total features in FeaturesSnapshot**
 
 ---
 
-*Document Version: 1.26*
-*Last Updated: 2026-01-12*
+*Document Version: 1.27*
+*Last Updated: 2026-01-14*
 *Status: Ready for Implementation*
+
+## Changelog
+
+### Version 1.27 (2026-01-14)
+**Added:**
+- Phase 1.5: Advanced Entropy Features (4 new tasks)
+  - E-1.5: Permutation Entropy (pattern-based complexity)
+  - E-1.6: Sample Entropy (regularity detection)
+  - E-1.7: Order Book Entropy (liquidity structure)
+  - E-1.8: KL Divergence (regime transition detection)
+- Enhanced E-2.2: Regime Classifier now uses advanced features
+- +14 new advanced entropy features in FeaturesSnapshot
+- Total features increased from 19 to 36 new features (96+ total)
+- Total tasks increased from 22 to 26
+- Estimated time increased from ~80h to ~90h
+
+**Changed:**
+- Phase 2 dependencies now include Phase 1.5
+- Regime classification logic enhanced with multi-feature approach
+- Critical path updated to include Phase 1.5
+
+**References:**
+- See `docs/ENTROPY_FEATURES_ANALYSIS.md` for detailed mathematical descriptions and implementation guide
+
+### Version 1.26 (2026-01-12)
+- Original planning document
