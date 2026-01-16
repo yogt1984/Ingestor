@@ -584,7 +584,12 @@ impl BacktestEvaluateConfigScreen {
                 true
             }
             KeyCode::Enter => {
-                // TODO: Implement save/load preset
+                // Preset save/load can be implemented using PresetManager:
+                // use crate::ui::presets::{PresetManager, PresetType, Preset, PresetMetadata};
+                // let manager = PresetManager::new()?;
+                // let preset = Preset { ... };
+                // manager.save_preset(&preset)?;
+                // or: let preset = manager.load_preset(&self.preset_name, PresetType::BacktestEvaluate)?;
                 self.preset_mode = false;
                 self.preset_name.clear();
                 true

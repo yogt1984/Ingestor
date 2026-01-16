@@ -22,6 +22,7 @@ pub mod state;
 pub mod submenu;
 pub mod tui_integration;
 pub mod algorithm_persistence;
+pub mod presets;
 
 pub use tui::run_tui;
 
@@ -89,4 +90,12 @@ pub use algorithm_persistence::{
     load_selected_algorithm,
     save_selected_algorithm,
     clear_selected_algorithm,
+};
+
+// Preset Management (T-2.12)
+pub use presets::{
+    PresetManager,
+    Preset,
+    PresetMetadata,
+    PresetType,
 };
