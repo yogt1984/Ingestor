@@ -3,11 +3,13 @@
 //! This module contains reusable UI widgets for the TUI interface:
 //! - StatusBar (Task TUI-6.0): Persistent status bar at bottom of screens
 //! - params: Parameter input widgets (Task T-2.1+)
+//! - results: Results display widgets (Phase 3)
 //!
 //! Widgets are self-contained components that can be rendered in any screen.
 
 pub mod status_bar;
 pub mod params;
+pub mod results;
 
 // StatusBar (TUI-6.0)
 pub use status_bar::{StatusBar, draw_status_bar};
@@ -20,3 +22,6 @@ pub use params::toggle::ToggleWidget;
 pub use params::path_input::PathInputWidget;
 pub use params::dropdown::DropdownWidget;
 pub use params::slider::SliderWidget;
+
+// Results widgets (Phase 3)
+pub use results::table::{TableWidget, TableHeader, TableRow, SortDirection};
