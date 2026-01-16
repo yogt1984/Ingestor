@@ -1129,7 +1129,8 @@ mod tests {
     fn test_y_to_screen_same_min_max() {
         let chart = ChartWidget::new();
         let y = chart.y_to_screen(5.0, 5.0, 5.0, 100);
-        assert_eq!(y, 49); // height - 1 / 2
+        // When min == max, should return height / 2 (middle)
+        assert_eq!(y, 50); // height / 2
     }
 
     #[test]
