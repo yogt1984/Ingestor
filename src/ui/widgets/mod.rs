@@ -26,3 +26,4 @@ pub use params::slider::SliderWidget;
 // Results widgets (Phase 3)
 pub use results::metrics_dashboard::{MetricsDashboardWidget, Metric, MetricValue, MetricFormat, Trend, LayoutStyle};
 pub use results::table::{TableWidget, TableHeader, TableRow, SortDirection};
+pub use results::chart::{ChartWidget, ChartType, DataPoint, DataSeries, AxisConfig, LegendPosition};

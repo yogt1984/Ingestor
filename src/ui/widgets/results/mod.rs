@@ -9,3 +9,5 @@ pub mod table;
 
 pub use metrics_dashboard::{MetricsDashboardWidget, Metric, MetricValue, MetricFormat, Trend, LayoutStyle};
 pub use table::{TableWidget, TableHeader, TableRow, SortDirection};
+pub mod chart;
+pub use chart::{ChartWidget, ChartType, DataPoint, DataSeries, AxisConfig, LegendPosition};
