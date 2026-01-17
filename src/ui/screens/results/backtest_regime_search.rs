@@ -256,14 +256,13 @@ impl BacktestRegimeSearchResultsScreen {
                 let x = item.high_spread;
                 let y = item.high_skew;
                 let label = format!("{:.4}", item.sharpe);
-                DataPoint::new(x, y).with_label(Some(label))
+                DataPoint::new(x, y).with_label(label)
             })
             .collect();
 
         DataSeries::new("Regime Search Results".to_string())
             .with_points(points)
-            .with_color(Some(Color::Green))
-            .with_symbol(None)
+            .with_color(Color::Green)
     }
 
     /// Export to JSON
@@ -304,7 +303,7 @@ impl BacktestRegimeSearchResultsScreen {
         // Render content based on view mode
         match self.view_mode {
             RegimeSearchViewMode::TopResults => {
-                self.render_top_results(frame, chunks[1]);
+                self.render_top_results(f, chunks[1]);
             }
             RegimeSearchViewMode::FullTable => {
                 self.render_full_table(f, chunks[1]);
@@ -325,9 +324,8 @@ impl BacktestRegimeSearchResultsScreen {
 
         let mut table = TableWidget::new()
             .with_headers(headers)
-            .with_rows(rows)
-            .set_focused(self.focused);
-
+            .with_rows(rows);
+        table.set_focused(self.focused);
         table.render(area, f.buffer_mut());
     }
 
@@ -338,19 +336,15 @@ impl BacktestRegimeSearchResultsScreen {
 
         let mut table = TableWidget::new()
             .with_headers(headers)
-            .with_rows(rows)
-            .set_focused(self.focused);
-
-        if let Some(selected_idx) = self.selected_index {
-        }
-
+            .with_rows(rows);
+        table.set_focused(self.focused);
         table.render(area, f.buffer_mut());
     }
 
     /// Render heatmap view
     fn render_heatmap(&self, f: &mut Frame, area: Rect) {
         let series = self.create_heatmap_series();
-        let chart = ChartWidget::new()
+        let mut chart = ChartWidget::new()
             .with_chart_type(ChartType::Scatter)
             .with_series(vec![series])
             .with_x_axis(AxisConfig::default().with_label("High Spread (bps)"))
@@ -371,14 +365,14 @@ impl BacktestRegimeSearchResultsScreen {
 
         // Summary metrics
         let metrics = vec![
-            Metric::new("Total Combinations".to_string(), MetricValue::Number(self.result.total_combinations as f64), MetricFormat::Integer),
-            Metric::new("Best Sharpe".to_string(), MetricValue::Number(self.result.best.as_ref().map(|b| b.sharpe).unwrap_or(0.0)), MetricFormat::Decimal(4)),
-            Metric::new("Avg Sharpe (With Quote)".to_string(), MetricValue::Number(self.result.avg_sharpe_with_quote.unwrap_or(0.0)), MetricFormat::Decimal(4)),
-            Metric::new("Avg Sharpe (No Quote)".to_string(), MetricValue::Number(self.result.avg_sharpe_without_quote.unwrap_or(0.0)), MetricFormat::Decimal(4)),
+            Metric::new("Total Combinations".to_string(), MetricValue::Number(self.result.total_combinations as f64)),
+            Metric::new("Best Sharpe".to_string(), MetricValue::Number(self.result.best.as_ref().map(|b| b.sharpe).unwrap_or(0.0))).with_format(MetricFormat::Decimal(4)),
+            Metric::new("Avg Sharpe (With Quote)".to_string(), MetricValue::Number(self.result.avg_sharpe_with_quote.unwrap_or(0.0))).with_format(MetricFormat::Decimal(4)),
+            Metric::new("Avg Sharpe (No Quote)".to_string(), MetricValue::Number(self.result.avg_sharpe_without_quote.unwrap_or(0.0))).with_format(MetricFormat::Decimal(4)),
         ];
 
         let dashboard = MetricsDashboardWidget::new().with_metrics(metrics);
-        dashboard.render(frame, chunks[0]);
+        dashboard.render(chunks[0], f.buffer_mut());
 
         // Best result details
         if let Some(best) = &self.result.best {
