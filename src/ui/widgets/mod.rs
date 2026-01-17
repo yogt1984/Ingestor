@@ -28,3 +28,4 @@ pub use results::metrics_dashboard::{MetricsDashboardWidget, Metric, MetricValue
 pub use results::table::{TableWidget, TableHeader, TableRow, SortDirection};
 pub use results::chart::{ChartWidget, ChartType, DataPoint, DataSeries, AxisConfig, LegendPosition};
 pub use results::pareto::{ParetoFrontierWidget, ParetoSolution};
+pub use results::progress::ProgressWidget;
