@@ -24,6 +24,9 @@ pub mod data_menu;
 // Parameter configuration screens (T-2.8+)
 pub mod params;
 
+// Results display screens (T-3.6+)
+pub mod results;
+
 // Main Menu (Task 4.0)
 pub use main_menu::{
     MainMenuItem,
