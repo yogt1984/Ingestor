@@ -27,3 +27,4 @@ pub use params::slider::SliderWidget;
 pub use results::metrics_dashboard::{MetricsDashboardWidget, Metric, MetricValue, MetricFormat, Trend, LayoutStyle};
 pub use results::table::{TableWidget, TableHeader, TableRow, SortDirection};
 pub use results::chart::{ChartWidget, ChartType, DataPoint, DataSeries, AxisConfig, LegendPosition};
+pub use results::pareto::{ParetoFrontierWidget, ParetoSolution};
