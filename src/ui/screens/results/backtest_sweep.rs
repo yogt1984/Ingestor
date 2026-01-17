@@ -244,14 +244,14 @@ impl BacktestSweepResultsScreen {
                 let x = item.spread;
                 let y = item.skew;
                 let label = format!("{:.4}", item.sharpe);
-                DataPoint::new(x, y).with_label(Some(label))
+                DataPoint::new(x, y).with_label(label)
             })
             .collect();
 
         DataSeries::new("Sweep Results".to_string())
             .with_points(points)
-            .with_color(Some(Color::Green))
-            .with_symbol(None)
+            .with_color(Color::Green)
+            
     }
 
     /// Export to JSON
@@ -292,13 +292,13 @@ impl BacktestSweepResultsScreen {
         // Render content based on view mode
         match self.view_mode {
             SweepViewMode::TopResults => {
-                self.render_top_results(frame, chunks[1]);
+                self.render_top_results(f, chunks[1]);
             }
             SweepViewMode::FullTable => {
-                self.render_full_table(frame, chunks[1]);
+                self.render_full_table(f, chunks[1]);
             }
             SweepViewMode::Heatmap => {
-                self.render_heatmap(frame, chunks[1]);
+                self.render_heatmap(f, chunks[1]);
             }
         }
     }
@@ -311,7 +311,8 @@ impl BacktestSweepResultsScreen {
         let mut table = TableWidget::new()
             .with_headers(headers)
             .with_rows(rows)
-            .set_focused(self.focused);
+            ;
+        table.set_focused(self.focused);
 
         table.render(area, f.buffer_mut());
     }
@@ -324,7 +325,8 @@ impl BacktestSweepResultsScreen {
         let mut table = TableWidget::new()
             .with_headers(headers)
             .with_rows(rows)
-            .set_focused(self.focused);
+            ;
+        table.set_focused(self.focused);
 
         if let Some(selected_idx) = self.selected_index {
         }
@@ -335,7 +337,7 @@ impl BacktestSweepResultsScreen {
     /// Render heatmap view
     fn render_heatmap(&self, f: &mut Frame, area: Rect) {
         let series = self.create_heatmap_series();
-        let chart = ChartWidget::new()
+        let mut chart = ChartWidget::new()
             .with_chart_type(ChartType::Scatter)
             .with_series(vec![series])
             .with_x_axis(AxisConfig::default().with_label("Spread (bps)"))

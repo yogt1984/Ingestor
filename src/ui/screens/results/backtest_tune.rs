@@ -19,6 +19,7 @@ use crate::ui::widgets::{
     ChartWidget, ChartType, DataPoint, DataSeries, AxisConfig,
     ParetoFrontierWidget, ParetoSolution,
 };
+use serde_json;
 
 // ============================================================================
 // Types
@@ -302,7 +303,8 @@ impl BacktestTuneResultsScreen {
             return;
         }
 
-        let (headers, rows) = self.create_results_table(&self.tune_result.all_results);
+        let all: Vec<&TuneResultItem> = self.tune_result.all_results.iter().collect();
+        let (headers, rows) = self.create_results_table(&all);
         let mut table = TableWidget::new()
             .with_headers(headers)
             .with_rows(rows)
@@ -454,15 +456,16 @@ impl BacktestTuneResultsScreen {
                     -item.max_drawdown, // Negate drawdown so higher is better
                 ],
             )
-            .with_metadata(format!(
-                "Spread={:.2}, Skew={:.2}, Sharpe={:.4}",
-                item.spread, item.skew, item.sharpe
-            ));
+            .with_metadata(serde_json::json!({
+                "spread": item.spread,
+                "skew": item.skew,
+                "sharpe": item.sharpe
+            }));
 
             widget.add_solution(solution);
         }
 
-        widget.update_frontier();
+        // Frontier is automatically updated when solutions are added via add_solution()
         widget
     }
 
