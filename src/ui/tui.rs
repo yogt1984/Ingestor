@@ -40,7 +40,7 @@ const MAX_HISTORY: usize = 60; // 60 seconds of history at 1Hz
 const UPDATE_INTERVAL_MS: u64 = 1000; // 1Hz update rate
 
 /// Application mode
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 enum AppMode {
     Menu,
     Live,
@@ -58,6 +58,13 @@ enum AppMode {
     OOSValidation,   // Out-of-sample validation (CLI parity)
     Research,        // Research Dashboard (Task 4.1)
     NewMenu,         // New TUI v0.1 menu (under development)
+    // T-4.5: Config and results screens
+    ConfigScreen(crate::ui::submenu::NavigationTarget),
+    ResultsScreen(crate::ui::submenu::NavigationTarget),
+    ExecutingCommand {
+        config_target: crate::ui::submenu::NavigationTarget,
+        command_name: String,
+    },
 }
 
 /// Settings for the application
@@ -792,6 +799,43 @@ fn main_loop(
                             mode = AppMode::Menu;
                         }
                     },
+                    // T-4.5: Handle config screen input
+                    AppMode::ConfigScreen(ref target) => {
+                        // TODO: Handle config screen input
+                        // For now, just allow escape to go back
+                        match key.code {
+                            KeyCode::Esc | KeyCode::Char('q') => {
+                                mode = AppMode::NewMenu;
+                            }
+                            KeyCode::Enter => {
+                                // Execute command - TODO: implement
+                                // For now, just show a message
+                                menu_integration.set_message("Command execution not yet implemented".to_string());
+                            }
+                            _ => {}
+                        }
+                    }
+                    // T-4.5: Handle results screen input
+                    AppMode::ResultsScreen(ref _target) => {
+                        match key.code {
+                            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('b') => {
+                                mode = AppMode::NewMenu;
+                            }
+                            _ => {}
+                        }
+                    }
+                    // T-4.5: Handle executing command (show progress, allow cancel)
+                    AppMode::ExecutingCommand { ref config_target, ref command_name } => {
+                        match key.code {
+                            KeyCode::Esc | KeyCode::Char('c') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                                // Cancel command execution
+                                let cmd_name = command_name.clone();
+                                mode = AppMode::NewMenu;
+                                menu_integration.set_message(format!("Cancelled: {}", cmd_name));
+                            }
+                            _ => {}
+                        }
+                    }
                     AppMode::NewMenu => {
                         // TUI-7.0: Handle new TUI main menu with submenu navigation
                         if menu_integration.current.is_main_menu() {
@@ -879,12 +923,9 @@ fn main_loop(
                                     menu_integration.go_back();
                                 }
                                 ActionResult::NavigateToConfigScreen(target) => {
-                                    // T-4.4: Navigate to config screen
-                                    // TODO: Implement config screen display and command execution
-                                    menu_integration.set_message(format!(
-                                        "Config screen for {} - Implementation in progress",
-                                        target.display_name()
-                                    ));
+                                    // T-4.5: Navigate to config screen
+                                    mode = AppMode::ConfigScreen(target.clone());
+                                    menu_integration.go_back(); // Exit submenu
                                 }
                                 ActionResult::NavigateToResultsScreen(target) => {
                                     // T-4.4: Navigate to results screen
@@ -1108,6 +1149,99 @@ fn main_loop(
                     let _ = research_screen.refresh();
                 }
                 terminal.draw(|f| draw_research_screen(f, &research_screen.state))?;
+            }
+            // T-4.5: Draw config screen
+            AppMode::ConfigScreen(ref target) => {
+                // TODO: Draw config screen based on target
+                terminal.draw(|f| {
+                    use ratatui::widgets::Paragraph;
+                    use ratatui::layout::Alignment;
+                    use ratatui::style::Style;
+                    use ratatui::text::Line;
+                    let area = f.size();
+                    let text = vec![
+                        Line::from(""),
+                        Line::from(format!("Config Screen: {}", target.display_name())),
+                        Line::from(""),
+                        Line::from("Implementation in progress..."),
+                        Line::from(""),
+                        Line::from("Press ESC or 'q' to go back"),
+                        Line::from("Press Enter to execute (when implemented)"),
+                    ];
+                    let para = Paragraph::new(text)
+                        .style(Style::default().fg(ratatui::style::Color::Yellow))
+                        .alignment(Alignment::Center)
+                        .block(ratatui::widgets::Block::default()
+                            .borders(ratatui::widgets::Borders::ALL)
+                            .title("Config Screen"));
+                    f.render_widget(para, area);
+                })?;
+            }
+            // T-4.5: Draw results screen
+            AppMode::ResultsScreen(ref target) => {
+                // TODO: Draw results screen based on target
+                terminal.draw(|f| {
+                    use ratatui::widgets::Paragraph;
+                    use ratatui::layout::Alignment;
+                    use ratatui::style::Style;
+                    use ratatui::text::Line;
+                    let area = f.size();
+                    let text = vec![
+                        Line::from(""),
+                        Line::from(format!("Results Screen: {}", target.display_name())),
+                        Line::from(""),
+                        Line::from("Implementation in progress..."),
+                        Line::from(""),
+                        Line::from("Press ESC, 'q', or 'b' to go back"),
+                    ];
+                    let para = Paragraph::new(text)
+                        .style(Style::default().fg(ratatui::style::Color::Green))
+                        .alignment(Alignment::Center)
+                        .block(ratatui::widgets::Block::default()
+                            .borders(ratatui::widgets::Borders::ALL)
+                            .title("Results Screen"));
+                    f.render_widget(para, area);
+                })?;
+            }
+            // T-4.5: Draw executing command (progress screen)
+            AppMode::ExecutingCommand { ref command_name, .. } => {
+                terminal.draw(|f| {
+                    use ratatui::widgets::{Paragraph, Gauge};
+                    use ratatui::layout::{Alignment, Constraint, Direction, Layout};
+                    use ratatui::style::Style;
+                    use ratatui::text::Line;
+                    let area = f.size();
+                    let chunks = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([
+                            Constraint::Length(3),
+                            Constraint::Length(3),
+                            Constraint::Min(1),
+                        ])
+                        .split(area);
+                    let text = vec![
+                        Line::from(""),
+                        Line::from(format!("Executing: {}", command_name)),
+                        Line::from(""),
+                    ];
+                    let para = Paragraph::new(text)
+                        .style(Style::default().fg(ratatui::style::Color::Cyan))
+                        .alignment(Alignment::Center)
+                        .block(ratatui::widgets::Block::default()
+                            .borders(ratatui::widgets::Borders::ALL)
+                            .title("Executing Command"));
+                    f.render_widget(para, chunks[0]);
+                    // Progress bar (placeholder - would show actual progress)
+                    let gauge = Gauge::default()
+                        .block(ratatui::widgets::Block::default().borders(ratatui::widgets::Borders::ALL).title("Progress"))
+                        .gauge_style(Style::default().fg(ratatui::style::Color::Yellow))
+                        .percent(50); // Placeholder
+                    f.render_widget(gauge, chunks[1]);
+                    let help = Paragraph::new("Press Ctrl+C to cancel")
+                        .style(Style::default().fg(ratatui::style::Color::DarkGray))
+                        .alignment(Alignment::Center);
+                    f.render_widget(help, chunks[2]);
+                })?;
             }
             AppMode::NewMenu => {
                 // TUI-7.0: Draw the new TUI with submenu support

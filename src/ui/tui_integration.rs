@@ -632,6 +632,123 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
+    // Navigation Flow Tests (T-4.5)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_navigation_flow_menu_to_config() {
+        // Test that menu navigation to config screen works
+        let action = SubMenuAction::Navigate(NavigationTarget::BacktestEvaluateConfig);
+        let result = process_action(action);
+        assert_eq!(
+            result,
+            ActionResult::NavigateToConfigScreen(NavigationTarget::BacktestEvaluateConfig)
+        );
+    }
+
+    #[test]
+    fn test_navigation_flow_config_to_results() {
+        // Test that config screen can navigate to results screen
+        let action = SubMenuAction::Navigate(NavigationTarget::BacktestEvaluateResults);
+        let result = process_action(action);
+        assert_eq!(
+            result,
+            ActionResult::NavigateToResultsScreen(NavigationTarget::BacktestEvaluateResults)
+        );
+    }
+
+    #[test]
+    fn test_navigation_flow_back_from_config() {
+        // Test that back navigation from config screen works
+        let action = SubMenuAction::Back;
+        let result = process_action(action);
+        assert_eq!(result, ActionResult::NavigateToSubMenu(CurrentSubMenu::None));
+    }
+
+    #[test]
+    fn test_all_backtest_config_screens_are_detected() {
+        // Test that all backtest config screens are properly detected
+        let config_targets = vec![
+            NavigationTarget::BacktestEvaluateConfig,
+            NavigationTarget::BacktestTuneConfig,
+            NavigationTarget::BacktestRegimeSearchConfig,
+            NavigationTarget::BacktestMultiObjectiveConfig,
+            NavigationTarget::BacktestRegimeOptimizeConfig,
+            NavigationTarget::BacktestTrainConfig,
+            NavigationTarget::BacktestWalkForwardMLConfig,
+            NavigationTarget::BacktestSweepConfig,
+            NavigationTarget::BacktestWalkForwardConfig,
+            NavigationTarget::BacktestOOSValidateConfig,
+            NavigationTarget::BacktestSimulateConfig,
+            NavigationTarget::BacktestGridConfig,
+            NavigationTarget::BacktestCampaignConfig,
+            NavigationTarget::BacktestPaperConfig,
+        ];
+
+        for target in config_targets {
+            assert!(
+                is_config_screen_target(&target),
+                "Config screen target {:?} should be detected",
+                target
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_backtest_results_screens_are_detected() {
+        // Test that all backtest results screens are properly detected
+        let results_targets = vec![
+            NavigationTarget::BacktestEvaluateResults,
+            NavigationTarget::BacktestTuneResults,
+            NavigationTarget::BacktestRegimeSearchResults,
+            NavigationTarget::BacktestMultiObjectiveResults,
+            NavigationTarget::BacktestRegimeOptimizeResults,
+            NavigationTarget::BacktestTrainResults,
+            NavigationTarget::BacktestWalkForwardMLResults,
+            NavigationTarget::BacktestSweepResults,
+            NavigationTarget::BacktestWalkForwardResults,
+            NavigationTarget::BacktestOOSValidateResults,
+            NavigationTarget::BacktestSimulateResults,
+            NavigationTarget::BacktestGridResults,
+            NavigationTarget::BacktestCampaignResults,
+            NavigationTarget::BacktestPaperResults,
+        ];
+
+        for target in results_targets {
+            assert!(
+                is_results_screen_target(&target),
+                "Results screen target {:?} should be detected",
+                target
+            );
+        }
+    }
+
+    #[test]
+    fn test_navigation_flow_complete_cycle() {
+        // Test a complete navigation cycle: menu -> config -> results -> menu
+        // Menu to config
+        let action1 = SubMenuAction::Navigate(NavigationTarget::BacktestEvaluateConfig);
+        let result1 = process_action(action1);
+        assert_eq!(
+            result1,
+            ActionResult::NavigateToConfigScreen(NavigationTarget::BacktestEvaluateConfig)
+        );
+
+        // Config to results (simulated - would happen after command execution)
+        let action2 = SubMenuAction::Navigate(NavigationTarget::BacktestEvaluateResults);
+        let result2 = process_action(action2);
+        assert_eq!(
+            result2,
+            ActionResult::NavigateToResultsScreen(NavigationTarget::BacktestEvaluateResults)
+        );
+
+        // Results back to menu
+        let action3 = SubMenuAction::Back;
+        let result3 = process_action(action3);
+        assert_eq!(result3, ActionResult::NavigateToSubMenu(CurrentSubMenu::None));
+    }
+
+    // -------------------------------------------------------------------------
     // Navigation Flow Tests
     // -------------------------------------------------------------------------
 
