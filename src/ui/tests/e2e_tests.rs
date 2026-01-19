@@ -783,3 +783,271 @@ mod integration_tests {
         assert!(validate_mm_algorithm_for_command(&mom_algo, "evaluate").is_ok());
     }
 }
+
+// ============================================================================
+// Cancellation Tests
+// ============================================================================
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn test_cancel_during_execution() {
+        let (mut manager, _rx) = CommandWorkflowManager::new();
+        
+        // Start execution
+        manager.start_execution("test command".to_string());
+        assert!(matches!(manager.state(), WorkflowState::Executing { .. }));
+
+        // Cancel execution
+        manager.cancel_execution();
+        assert!(manager.executor().is_cancelled());
+
+        // Back to menu
+        manager.back_to_menu();
+        assert_eq!(manager.state(), &WorkflowState::Menu);
+    }
+
+    #[test]
+    fn test_cancel_before_execution() {
+        let (manager, _rx) = CommandWorkflowManager::new();
+        
+        // Cancel before starting (should work)
+        manager.cancel_execution();
+        assert!(manager.executor().is_cancelled());
+    }
+
+    #[test]
+    fn test_reset_after_cancel() {
+        let (manager, _rx) = CommandWorkflowManager::new();
+        
+        manager.cancel_execution();
+        assert!(manager.executor().is_cancelled());
+        
+        manager.executor().reset_cancellation();
+        assert!(!manager.executor().is_cancelled());
+    }
+}
+
+// ============================================================================
+// All 24 Commands Coverage Tests
+// ============================================================================
+
+#[cfg(test)]
+mod all_commands_coverage_tests {
+    use super::*;
+
+    #[test]
+    fn test_all_backtest_commands_have_config_screens() {
+        let commands = vec![
+            ("evaluate", NavigationTarget::BacktestEvaluateConfig),
+            ("tune", NavigationTarget::BacktestTuneConfig),
+            ("regime-search", NavigationTarget::BacktestRegimeSearchConfig),
+            ("multi-objective", NavigationTarget::BacktestMultiObjectiveConfig),
+            ("regime-optimize", NavigationTarget::BacktestRegimeOptimizeConfig),
+            ("train", NavigationTarget::BacktestTrainConfig),
+            ("walk-forward-ml", NavigationTarget::BacktestWalkForwardMLConfig),
+            ("sweep", NavigationTarget::BacktestSweepConfig),
+            ("walk-forward", NavigationTarget::BacktestWalkForwardConfig),
+            ("oos-validate", NavigationTarget::BacktestOOSValidateConfig),
+            ("simulate", NavigationTarget::BacktestSimulateConfig),
+            ("grid", NavigationTarget::BacktestGridConfig),
+            ("campaign", NavigationTarget::BacktestCampaignConfig),
+            ("paper", NavigationTarget::BacktestPaperConfig),
+        ];
+
+        for (_cmd_name, config_target) in commands {
+            assert!(
+                is_config_screen_target(&config_target),
+                "Command should have config screen: {:?}",
+                config_target
+            );
+            let cmd_name = get_command_name_from_config(&config_target);
+            assert!(
+                cmd_name.is_some(),
+                "Config screen should have command name: {:?}",
+                config_target
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_research_commands_have_config_screens() {
+        let commands = vec![
+            ("run", NavigationTarget::ResearchRunConfig),
+            ("status", NavigationTarget::ResearchStatusConfig),
+        ];
+
+        for (_cmd_name, config_target) in commands {
+            assert!(
+                is_config_screen_target(&config_target),
+                "Command should have config screen: {:?}",
+                config_target
+            );
+            let cmd_name = get_command_name_from_config(&config_target);
+            assert!(
+                cmd_name.is_some(),
+                "Config screen should have command name: {:?}",
+                config_target
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_validate_commands_have_config_screens() {
+        let commands = vec![
+            ("run", NavigationTarget::ValidateRunConfig),
+            ("show", NavigationTarget::ValidateShowConfig),
+            ("status", NavigationTarget::ValidateStatusConfig),
+        ];
+
+        for (_cmd_name, config_target) in commands {
+            assert!(
+                is_config_screen_target(&config_target),
+                "Command should have config screen: {:?}",
+                config_target
+            );
+            let cmd_name = get_command_name_from_config(&config_target);
+            assert!(
+                cmd_name.is_some(),
+                "Config screen should have command name: {:?}",
+                config_target
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_algorithm_commands_have_config_screens() {
+        let commands = vec![
+            ("list", NavigationTarget::AlgorithmListConfig),
+            ("show", NavigationTarget::AlgorithmShowConfig),
+        ];
+
+        for (_cmd_name, config_target) in commands {
+            assert!(
+                is_config_screen_target(&config_target),
+                "Command should have config screen: {:?}",
+                config_target
+            );
+            let cmd_name = get_command_name_from_config(&config_target);
+            assert!(
+                cmd_name.is_some(),
+                "Config screen should have command name: {:?}",
+                config_target
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_commands_have_results_screens() {
+        // Test that all config screens map to results screens
+        let config_targets = vec![
+            NavigationTarget::BacktestEvaluateConfig,
+            NavigationTarget::BacktestTuneConfig,
+            NavigationTarget::BacktestRegimeSearchConfig,
+            NavigationTarget::BacktestMultiObjectiveConfig,
+            NavigationTarget::BacktestRegimeOptimizeConfig,
+            NavigationTarget::BacktestTrainConfig,
+            NavigationTarget::BacktestWalkForwardMLConfig,
+            NavigationTarget::BacktestSweepConfig,
+            NavigationTarget::BacktestWalkForwardConfig,
+            NavigationTarget::BacktestOOSValidateConfig,
+            NavigationTarget::BacktestSimulateConfig,
+            NavigationTarget::BacktestGridConfig,
+            NavigationTarget::BacktestCampaignConfig,
+            NavigationTarget::BacktestPaperConfig,
+            NavigationTarget::ResearchRunConfig,
+            NavigationTarget::ValidateRunConfig,
+            NavigationTarget::AlgorithmCreate,
+        ];
+
+        for config_target in config_targets {
+            let results_target = config_to_results_target(&config_target);
+            assert!(
+                results_target.is_some(),
+                "Config screen {:?} should map to results screen",
+                config_target
+            );
+            if let Some(results) = results_target {
+                assert!(
+                    is_results_screen_target(&results),
+                    "Results target {:?} should be detected as results screen",
+                    results
+                );
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Performance Tests
+// ============================================================================
+
+#[cfg(test)]
+mod performance_tests {
+    use super::*;
+    use std::time::Instant;
+
+    #[test]
+    fn test_navigation_action_processing_performance() {
+        // Test that navigation action processing is fast (<1ms)
+        let start = Instant::now();
+        for _ in 0..1000 {
+            let action = SubMenuAction::Navigate(NavigationTarget::BacktestEvaluateConfig);
+            let _result = process_action(action);
+        }
+        let duration = start.elapsed();
+        let avg_time = duration.as_micros() / 1000;
+        assert!(
+            avg_time < 1000,
+            "Navigation action processing should be <1ms, got {}μs",
+            avg_time
+        );
+    }
+
+    #[test]
+    fn test_workflow_state_transition_performance() {
+        // Test that workflow state transitions are fast
+        let (mut manager, _rx) = CommandWorkflowManager::new();
+        let start = Instant::now();
+        
+        for _ in 0..100 {
+            manager.navigate_to_config(NavigationTarget::BacktestEvaluateConfig);
+            manager.start_execution("test".to_string());
+            manager.back_to_menu();
+        }
+        
+        let duration = start.elapsed();
+        let avg_time = duration.as_micros() / 100;
+        assert!(
+            avg_time < 1000,
+            "Workflow state transition should be <1ms, got {}μs",
+            avg_time
+        );
+    }
+
+    #[test]
+    fn test_algorithm_validation_performance() {
+        // Test that algorithm validation is fast
+        let algo = Some(AlgorithmConfigSummary {
+            id: "test".to_string(),
+            name: "Test".to_string(),
+            strategy_type: StrategyType::MarketMaking,
+            algorithm_type: "as".to_string(),
+            created_at: chrono::Utc::now(),
+        });
+
+        let start = Instant::now();
+        for _ in 0..1000 {
+            let _ = validate_mm_algorithm_for_command(&algo, "tune");
+        }
+        let duration = start.elapsed();
+        let avg_time = duration.as_micros() / 1000;
+        assert!(
+            avg_time < 1000,
+            "Algorithm validation should be <1ms, got {}μs",
+            avg_time
+        );
+    }
+}
