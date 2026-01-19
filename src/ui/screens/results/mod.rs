@@ -12,6 +12,7 @@
 //! - Backtest Walk-Forward ML Results Screen (T-3.8): Display walk-forward ML training results
 //! - Backtest Walk-Forward Results Screen (T-3.8): Display walk-forward validation results
 //! - Backtest OOS Validate Results Screen (T-3.8): Display out-of-sample validation results
+//! - Backtest Simulate Results Screen (T-3.8): Display simulation campaign results
 
 pub mod backtest_evaluate;
 pub mod backtest_tune;
@@ -24,6 +25,7 @@ pub mod backtest_train;
 pub mod backtest_walk_forward_ml;
 pub mod backtest_walk_forward;
 pub mod backtest_oos_validate;
+pub mod backtest_simulate;
 
 pub use backtest_evaluate::{BacktestEvaluateResultsScreen, ViewMode};
 pub use backtest_tune::{BacktestTuneResultsScreen, TuneViewMode};
@@ -36,3 +38,4 @@ pub use backtest_train::{BacktestTrainResultsScreen, TrainViewMode};
 pub use backtest_walk_forward_ml::{BacktestWalkForwardMLResultsScreen, WalkForwardMLViewMode};
 pub use backtest_walk_forward::{BacktestWalkForwardResultsScreen, WalkForwardViewMode};
 pub use backtest_oos_validate::{BacktestOOSValidateResultsScreen, OOSValidateViewMode};
+pub use backtest_simulate::{BacktestSimulateResultsScreen, SimulateViewMode};
