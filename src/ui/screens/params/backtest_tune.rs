@@ -23,6 +23,7 @@ use crate::ui::widgets::{
     TextInputWidget, NumberInputWidget, ToggleWidget,
     PathInputWidget, DropdownWidget, CommaListWidget,
 };
+use crate::strategies::AlgorithmType;
 
 // ============================================================================
 // Types
@@ -575,10 +576,28 @@ impl BacktestTuneConfigScreen {
                 );
             } else if let Some(alg) = w.selected_option() {
                 // Validate algorithm is MM type
-                if !["as", "ml", "fixed"].contains(&alg.as_str()) {
+                if let Ok(algo_type) = AlgorithmType::from_str(alg) {
+                    match algo_type {
+                        AlgorithmType::AvellanedaStoikov
+                        | AlgorithmType::MLSpreadSkew
+                        | AlgorithmType::FixedSpread => {
+                            // Valid MM algorithm
+                        }
+                        _ => {
+                            self.validation_errors.insert(
+                                TuneField::Algorithm,
+                                format!(
+                                    "Algorithm '{}' is not a Market Making algorithm. \
+                                     Tune command is only available for MM algorithms: as, ml, fixed",
+                                    alg
+                                ),
+                            );
+                        }
+                    }
+                } else {
                     self.validation_errors.insert(
                         TuneField::Algorithm,
-                        "Algorithm must be MM type: as, ml, or fixed".to_string(),
+                        format!("Invalid algorithm: '{}'", alg),
                     );
                 }
             }

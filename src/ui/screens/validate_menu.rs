@@ -20,6 +20,7 @@ use crate::ui::submenu::{
     SubMenu, SubMenuAction, SubMenuItem, NavigationTarget, CliCommand,
     key_to_char, is_back_key,
 };
+use crate::ui::algorithm_validation;
 
 // ============================================================================
 // ValidateMenu
@@ -129,7 +130,10 @@ impl SubMenu for ValidateMenu {
 
             // Optimization section
             SubMenuItem::new('G', "Grid Search (MM)", "Parameter optimization")
-                .with_enabled(has_algo),
+                .with_enabled(has_algo && state.active_algorithm
+                    .as_ref()
+                    .map(|a| algorithm_validation::is_mm_algorithm(a))
+                    .unwrap_or(false)),
             SubMenuItem::new('W', "Sweep", "Sensitivity analysis")
                 .with_enabled(has_algo),
 
@@ -198,9 +202,19 @@ impl SubMenu for ValidateMenu {
                     }
                 }
                 'g' => {
-                    // Grid search
-                    if has_algo {
-                        SubMenuAction::Navigate(NavigationTarget::GridSearch)
+                    // Grid search (MM only)
+                    if !has_algo {
+                        SubMenuAction::ShowMessage(
+                            "No algorithm selected. Select one in Algorithms menu.".to_string()
+                        )
+                    } else if let Some(algo) = &state.active_algorithm {
+                        match algorithm_validation::validate_mm_algorithm_for_command(
+                            Some(algo),
+                            "grid"
+                        ) {
+                            Ok(_) => SubMenuAction::Navigate(NavigationTarget::GridSearch),
+                            Err(msg) => SubMenuAction::ShowMessage(msg),
+                        }
                     } else {
                         SubMenuAction::ShowMessage(
                             "No algorithm selected. Select one in Algorithms menu.".to_string()
@@ -522,6 +536,107 @@ mod tests {
 
         // OOS should show failed status
         assert!(items[2].status.as_ref().unwrap().contains("✗"));
+    }
+
+    #[test]
+    fn test_grid_search_disabled_for_non_mm_algorithm() {
+        let menu = ValidateMenu::new();
+        let algo = create_algorithm_summary("momentum_algo", StrategyType::Momentum);
+        let state = create_test_state(Some(algo), ValidationStatus::default());
+        let items = menu.items(&state);
+
+        // Find Grid Search item (key 'G')
+        let grid_item = items.iter().find(|item| item.key == 'G').unwrap();
+        assert!(!grid_item.enabled, "Grid Search should be disabled for non-MM algorithm");
+    }
+
+    #[test]
+    fn test_grid_search_enabled_for_mm_algorithm() {
+        let menu = ValidateMenu::new();
+        let algo = create_algorithm_summary("mm_algo", StrategyType::MarketMaking);
+        let state = create_test_state(Some(algo), ValidationStatus::default());
+        let items = menu.items(&state);
+
+        // Find Grid Search item (key 'G')
+        let grid_item = items.iter().find(|item| item.key == 'G').unwrap();
+        assert!(grid_item.enabled, "Grid Search should be enabled for MM algorithm");
+    }
+
+    #[test]
+    fn test_grid_search_disabled_for_hybrid_algorithm() {
+        let menu = ValidateMenu::new();
+        let algo = create_algorithm_summary("hybrid_algo", StrategyType::Hybrid);
+        let state = create_test_state(Some(algo), ValidationStatus::default());
+        let items = menu.items(&state);
+
+        // Find Grid Search item (key 'G')
+        let grid_item = items.iter().find(|item| item.key == 'G').unwrap();
+        assert!(!grid_item.enabled, "Grid Search should be disabled for Hybrid algorithm");
+    }
+
+    #[test]
+    fn test_grid_search_disabled_without_algorithm() {
+        let menu = ValidateMenu::new();
+        let state = create_test_state(None, ValidationStatus::default());
+        let items = menu.items(&state);
+
+        // Find Grid Search item (key 'G')
+        let grid_item = items.iter().find(|item| item.key == 'G').unwrap();
+        assert!(!grid_item.enabled, "Grid Search should be disabled without algorithm");
+    }
+
+    #[test]
+    fn test_handle_key_g_with_mm_algorithm() {
+        let mut menu = ValidateMenu::new();
+        let algo = create_algorithm_summary("mm_algo", StrategyType::MarketMaking);
+        let state = create_test_state(Some(algo), ValidationStatus::default());
+
+        let action = menu.handle_key(KeyCode::Char('g'), &state);
+        assert_eq!(action, SubMenuAction::Navigate(NavigationTarget::GridSearch));
+    }
+
+    #[test]
+    fn test_handle_key_g_with_momentum_algorithm() {
+        let mut menu = ValidateMenu::new();
+        let algo = create_algorithm_summary("momentum_algo", StrategyType::Momentum);
+        let state = create_test_state(Some(algo), ValidationStatus::default());
+
+        let action = menu.handle_key(KeyCode::Char('g'), &state);
+        if let SubMenuAction::ShowMessage(msg) = action {
+            assert!(msg.contains("only available for Market Making"));
+            assert!(msg.contains("grid"));
+            assert!(msg.contains("momentum_algo"));
+        } else {
+            panic!("Expected ShowMessage action for non-MM algorithm");
+        }
+    }
+
+    #[test]
+    fn test_handle_key_g_with_hybrid_algorithm() {
+        let mut menu = ValidateMenu::new();
+        let algo = create_algorithm_summary("hybrid_algo", StrategyType::Hybrid);
+        let state = create_test_state(Some(algo), ValidationStatus::default());
+
+        let action = menu.handle_key(KeyCode::Char('g'), &state);
+        if let SubMenuAction::ShowMessage(msg) = action {
+            assert!(msg.contains("only available for Market Making"));
+            assert!(msg.contains("grid"));
+        } else {
+            panic!("Expected ShowMessage action for non-MM algorithm");
+        }
+    }
+
+    #[test]
+    fn test_handle_key_g_without_algorithm() {
+        let mut menu = ValidateMenu::new();
+        let state = create_test_state(None, ValidationStatus::default());
+
+        let action = menu.handle_key(KeyCode::Char('g'), &state);
+        if let SubMenuAction::ShowMessage(msg) = action {
+            assert!(msg.contains("No algorithm selected"));
+        } else {
+            panic!("Expected ShowMessage action when no algorithm");
+        }
     }
 
     #[test]
