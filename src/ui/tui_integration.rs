@@ -152,6 +152,10 @@ pub enum ActionResult {
     NavigateToSubMenu(CurrentSubMenu),
     /// Navigate to an operational mode (requires AppMode change)
     NavigateToMode(NavigationTarget),
+    /// Navigate to a config screen (T-4.4)
+    NavigateToConfigScreen(NavigationTarget),
+    /// Navigate to a results screen (T-4.4)
+    NavigateToResultsScreen(NavigationTarget),
     /// Show a message dialog
     ShowMessage(String),
     /// Execute a CLI command (the tui.rs will handle execution)
@@ -166,8 +170,16 @@ pub fn process_action(action: SubMenuAction) -> ActionResult {
         SubMenuAction::None => ActionResult::None,
         SubMenuAction::Back => ActionResult::NavigateToSubMenu(CurrentSubMenu::None),
         SubMenuAction::Navigate(target) => {
-            // Check if it's a submenu navigation or mode change
-            if let Some(submenu) = CurrentSubMenu::from_navigation_target(&target) {
+            // Check if it's a config screen (T-4.4)
+            if is_config_screen_target(&target) {
+                ActionResult::NavigateToConfigScreen(target)
+            }
+            // Check if it's a results screen (T-4.4)
+            else if is_results_screen_target(&target) {
+                ActionResult::NavigateToResultsScreen(target)
+            }
+            // Check if it's a submenu navigation
+            else if let Some(submenu) = CurrentSubMenu::from_navigation_target(&target) {
                 ActionResult::NavigateToSubMenu(submenu)
             } else {
                 ActionResult::NavigateToMode(target)
@@ -177,6 +189,56 @@ pub fn process_action(action: SubMenuAction) -> ActionResult {
         SubMenuAction::ShowMessage(msg) => ActionResult::ShowMessage(msg),
         SubMenuAction::Refresh => ActionResult::Stay,
     }
+}
+
+/// Check if a NavigationTarget is a config screen (T-4.4)
+pub fn is_config_screen_target(target: &NavigationTarget) -> bool {
+    matches!(target,
+        NavigationTarget::BacktestEvaluateConfig
+        | NavigationTarget::BacktestTuneConfig
+        | NavigationTarget::BacktestRegimeSearchConfig
+        | NavigationTarget::BacktestMultiObjectiveConfig
+        | NavigationTarget::BacktestRegimeOptimizeConfig
+        | NavigationTarget::BacktestTrainConfig
+        | NavigationTarget::BacktestWalkForwardMLConfig
+        | NavigationTarget::BacktestSweepConfig
+        | NavigationTarget::BacktestWalkForwardConfig
+        | NavigationTarget::BacktestOOSValidateConfig
+        | NavigationTarget::BacktestSimulateConfig
+        | NavigationTarget::BacktestGridConfig
+        | NavigationTarget::BacktestCampaignConfig
+        | NavigationTarget::BacktestPaperConfig
+        | NavigationTarget::ResearchRunConfig
+        | NavigationTarget::ResearchStatusConfig
+        | NavigationTarget::ValidateRunConfig
+        | NavigationTarget::ValidateShowConfig
+        | NavigationTarget::ValidateStatusConfig
+        | NavigationTarget::AlgorithmListConfig
+        | NavigationTarget::AlgorithmShowConfig
+    )
+}
+
+/// Check if a NavigationTarget is a results screen (T-4.4)
+pub fn is_results_screen_target(target: &NavigationTarget) -> bool {
+    matches!(target,
+        NavigationTarget::BacktestEvaluateResults
+        | NavigationTarget::BacktestTuneResults
+        | NavigationTarget::BacktestRegimeSearchResults
+        | NavigationTarget::BacktestMultiObjectiveResults
+        | NavigationTarget::BacktestRegimeOptimizeResults
+        | NavigationTarget::BacktestTrainResults
+        | NavigationTarget::BacktestWalkForwardMLResults
+        | NavigationTarget::BacktestSweepResults
+        | NavigationTarget::BacktestWalkForwardResults
+        | NavigationTarget::BacktestOOSValidateResults
+        | NavigationTarget::BacktestSimulateResults
+        | NavigationTarget::BacktestGridResults
+        | NavigationTarget::BacktestCampaignResults
+        | NavigationTarget::BacktestPaperResults
+        | NavigationTarget::ResearchRunResults
+        | NavigationTarget::ValidateRunResults
+        | NavigationTarget::AlgorithmCreateResults
+    )
 }
 
 // ============================================================================
@@ -526,6 +588,47 @@ mod tests {
     fn test_process_action_refresh() {
         let result = process_action(SubMenuAction::Refresh);
         assert_eq!(result, ActionResult::Stay);
+    }
+
+    #[test]
+    fn test_process_action_navigate_to_config_screen() {
+        let action = SubMenuAction::Navigate(NavigationTarget::BacktestEvaluateConfig);
+        let result = process_action(action);
+        assert_eq!(
+            result,
+            ActionResult::NavigateToConfigScreen(NavigationTarget::BacktestEvaluateConfig)
+        );
+    }
+
+    #[test]
+    fn test_process_action_navigate_to_results_screen() {
+        let action = SubMenuAction::Navigate(NavigationTarget::BacktestEvaluateResults);
+        let result = process_action(action);
+        assert_eq!(
+            result,
+            ActionResult::NavigateToResultsScreen(NavigationTarget::BacktestEvaluateResults)
+        );
+    }
+
+    #[test]
+    fn test_is_config_screen_target() {
+        assert!(is_config_screen_target(&NavigationTarget::BacktestEvaluateConfig));
+        assert!(is_config_screen_target(&NavigationTarget::BacktestTuneConfig));
+        assert!(is_config_screen_target(&NavigationTarget::ResearchRunConfig));
+        assert!(is_config_screen_target(&NavigationTarget::ValidateRunConfig));
+        assert!(is_config_screen_target(&NavigationTarget::AlgorithmListConfig));
+        assert!(!is_config_screen_target(&NavigationTarget::MainMenu));
+        assert!(!is_config_screen_target(&NavigationTarget::BacktestEvaluateResults));
+    }
+
+    #[test]
+    fn test_is_results_screen_target() {
+        assert!(is_results_screen_target(&NavigationTarget::BacktestEvaluateResults));
+        assert!(is_results_screen_target(&NavigationTarget::BacktestTuneResults));
+        assert!(is_results_screen_target(&NavigationTarget::ResearchRunResults));
+        assert!(is_results_screen_target(&NavigationTarget::ValidateRunResults));
+        assert!(!is_results_screen_target(&NavigationTarget::MainMenu));
+        assert!(!is_results_screen_target(&NavigationTarget::BacktestEvaluateConfig));
     }
 
     // -------------------------------------------------------------------------

@@ -878,6 +878,22 @@ fn main_loop(
                                     // Reset submenu state when leaving
                                     menu_integration.go_back();
                                 }
+                                ActionResult::NavigateToConfigScreen(target) => {
+                                    // T-4.4: Navigate to config screen
+                                    // TODO: Implement config screen display and command execution
+                                    menu_integration.set_message(format!(
+                                        "Config screen for {} - Implementation in progress",
+                                        target.display_name()
+                                    ));
+                                }
+                                ActionResult::NavigateToResultsScreen(target) => {
+                                    // T-4.4: Navigate to results screen
+                                    // TODO: Implement results screen display
+                                    menu_integration.set_message(format!(
+                                        "Results screen for {} - Implementation in progress",
+                                        target.display_name()
+                                    ));
+                                }
                                 ActionResult::ShowMessage(msg) => {
                                     menu_integration.set_message(msg);
                                 }
