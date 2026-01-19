@@ -14,6 +14,7 @@
 //! - Backtest OOS Validate Results Screen (T-3.8): Display out-of-sample validation results
 //! - Backtest Simulate Results Screen (T-3.8): Display simulation campaign results
 //! - Backtest Campaign Results Screen (T-3.8): Display validation campaign results
+//! - Backtest Paper Results Screen (T-3.8): Display paper trading session results
 
 pub mod backtest_evaluate;
 pub mod backtest_tune;
@@ -28,6 +29,7 @@ pub mod backtest_walk_forward;
 pub mod backtest_oos_validate;
 pub mod backtest_simulate;
 pub mod backtest_campaign;
+pub mod backtest_paper;
 
 pub use backtest_evaluate::{BacktestEvaluateResultsScreen, ViewMode};
 pub use backtest_tune::{BacktestTuneResultsScreen, TuneViewMode};
@@ -42,3 +44,4 @@ pub use backtest_walk_forward::{BacktestWalkForwardResultsScreen, WalkForwardVie
 pub use backtest_oos_validate::{BacktestOOSValidateResultsScreen, OOSValidateViewMode};
 pub use backtest_simulate::{BacktestSimulateResultsScreen, SimulateViewMode};
 pub use backtest_campaign::{BacktestCampaignResultsScreen, CampaignViewMode};
+pub use backtest_paper::{BacktestPaperResultsScreen, PaperViewMode};
