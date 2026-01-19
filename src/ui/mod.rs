@@ -23,6 +23,7 @@ pub mod submenu;
 pub mod tui_integration;
 pub mod algorithm_persistence;
 pub mod presets;
+pub mod command_executor;
 
 pub use tui::run_tui;
 
