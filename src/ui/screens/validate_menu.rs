@@ -129,12 +129,50 @@ impl SubMenu for ValidateMenu {
                 .with_enabled(has_algo),
 
             // Optimization section
-            SubMenuItem::new('G', "Grid Search (MM)", "Parameter optimization")
+            SubMenuItem::new('T', "Tune (MM)", "Parameter optimization")
+                .with_enabled(has_algo && state.active_algorithm
+                    .as_ref()
+                    .map(|a| algorithm_validation::is_mm_algorithm(a))
+                    .unwrap_or(false)),
+            SubMenuItem::new('G', "Grid Search (MM)", "Grid parameter optimization")
                 .with_enabled(has_algo && state.active_algorithm
                     .as_ref()
                     .map(|a| algorithm_validation::is_mm_algorithm(a))
                     .unwrap_or(false)),
             SubMenuItem::new('W', "Sweep", "Sensitivity analysis")
+                .with_enabled(has_algo),
+            SubMenuItem::new('M', "Multi-Objective (MM)", "Pareto optimization")
+                .with_enabled(has_algo && state.active_algorithm
+                    .as_ref()
+                    .map(|a| algorithm_validation::is_mm_algorithm(a))
+                    .unwrap_or(false)),
+            
+            // Regime section
+            SubMenuItem::new('R', "Regime → Search (MM)", "Find optimal regimes")
+                .with_enabled(has_algo && state.active_algorithm
+                    .as_ref()
+                    .map(|a| algorithm_validation::is_mm_algorithm(a))
+                    .unwrap_or(false)),
+            SubMenuItem::new('O', "Regime → Optimize (MM)", "Optimize regime parameters")
+                .with_enabled(has_algo && state.active_algorithm
+                    .as_ref()
+                    .map(|a| algorithm_validation::is_mm_algorithm(a))
+                    .unwrap_or(false)),
+            
+            // ML section
+            SubMenuItem::new('N', "Train (MM)", "Train ML model")
+                .with_enabled(has_algo && state.active_algorithm
+                    .as_ref()
+                    .map(|a| algorithm_validation::is_mm_algorithm(a))
+                    .unwrap_or(false)),
+            SubMenuItem::new('F', "Walk-Forward ML (MM)", "ML walk-forward validation")
+                .with_enabled(has_algo && state.active_algorithm
+                    .as_ref()
+                    .map(|a| algorithm_validation::is_mm_algorithm(a))
+                    .unwrap_or(false)),
+            
+            // Simulation section
+            SubMenuItem::new('I', "Simulate", "Simulate trading")
                 .with_enabled(has_algo),
 
             // Results section
@@ -154,11 +192,9 @@ impl SubMenu for ValidateMenu {
         if let Some(c) = key_to_char(key) {
             match c.to_ascii_lowercase() {
                 '1' => {
-                    // Run backtest
+                    // Run backtest - navigate to config screen
                     if has_algo {
-                        SubMenuAction::ExecuteCommand(
-                            CliCommand::validate("run", vec!["--stages", "backtest"])
-                        )
+                        SubMenuAction::Navigate(NavigationTarget::BacktestEvaluateConfig)
                     } else {
                         SubMenuAction::ShowMessage(
                             "No algorithm selected. Select one in Algorithms menu.".to_string()
@@ -166,11 +202,9 @@ impl SubMenu for ValidateMenu {
                     }
                 }
                 '2' => {
-                    // Run walk-forward
+                    // Run walk-forward - navigate to config screen
                     if has_algo {
-                        SubMenuAction::ExecuteCommand(
-                            CliCommand::validate("run", vec!["--stages", "forward"])
-                        )
+                        SubMenuAction::Navigate(NavigationTarget::BacktestWalkForwardConfig)
                     } else {
                         SubMenuAction::ShowMessage(
                             "No algorithm selected. Select one in Algorithms menu.".to_string()
@@ -178,11 +212,9 @@ impl SubMenu for ValidateMenu {
                     }
                 }
                 '3' => {
-                    // Run OOS
+                    // Run OOS - navigate to config screen
                     if has_algo {
-                        SubMenuAction::ExecuteCommand(
-                            CliCommand::validate("run", vec!["--stages", "oos"])
-                        )
+                        SubMenuAction::Navigate(NavigationTarget::BacktestOOSValidateConfig)
                     } else {
                         SubMenuAction::ShowMessage(
                             "No algorithm selected. Select one in Algorithms menu.".to_string()
@@ -190,11 +222,9 @@ impl SubMenu for ValidateMenu {
                     }
                 }
                 'a' => {
-                    // Run all stages
+                    // Run all stages - navigate to validate run config
                     if has_algo {
-                        SubMenuAction::ExecuteCommand(
-                            CliCommand::validate("run", vec![])
-                        )
+                        SubMenuAction::Navigate(NavigationTarget::ValidateRunConfig)
                     } else {
                         SubMenuAction::ShowMessage(
                             "No algorithm selected. Select one in Algorithms menu.".to_string()
@@ -212,7 +242,7 @@ impl SubMenu for ValidateMenu {
                             Some(algo),
                             "grid"
                         ) {
-                            Ok(_) => SubMenuAction::Navigate(NavigationTarget::GridSearch),
+                            Ok(_) => SubMenuAction::Navigate(NavigationTarget::BacktestGridConfig),
                             Err(msg) => SubMenuAction::ShowMessage(msg),
                         }
                     } else {
@@ -222,9 +252,139 @@ impl SubMenu for ValidateMenu {
                     }
                 }
                 'w' => {
-                    // Sweep
+                    // Sweep - navigate to config screen
                     if has_algo {
-                        SubMenuAction::Navigate(NavigationTarget::Sweep)
+                        SubMenuAction::Navigate(NavigationTarget::BacktestSweepConfig)
+                    } else {
+                        SubMenuAction::ShowMessage(
+                            "No algorithm selected. Select one in Algorithms menu.".to_string()
+                        )
+                    }
+                }
+                't' => {
+                    // Tune (MM only) - navigate to config screen
+                    if !has_algo {
+                        SubMenuAction::ShowMessage(
+                            "No algorithm selected. Select one in Algorithms menu.".to_string()
+                        )
+                    } else if let Some(algo) = &state.active_algorithm {
+                        match algorithm_validation::validate_mm_algorithm_for_command(
+                            Some(algo),
+                            "tune"
+                        ) {
+                            Ok(_) => SubMenuAction::Navigate(NavigationTarget::BacktestTuneConfig),
+                            Err(msg) => SubMenuAction::ShowMessage(msg),
+                        }
+                    } else {
+                        SubMenuAction::ShowMessage(
+                            "No algorithm selected. Select one in Algorithms menu.".to_string()
+                        )
+                    }
+                }
+                'm' => {
+                    // Multi-Objective (MM only) - navigate to config screen
+                    if !has_algo {
+                        SubMenuAction::ShowMessage(
+                            "No algorithm selected. Select one in Algorithms menu.".to_string()
+                        )
+                    } else if let Some(algo) = &state.active_algorithm {
+                        match algorithm_validation::validate_mm_algorithm_for_command(
+                            Some(algo),
+                            "multi-objective"
+                        ) {
+                            Ok(_) => SubMenuAction::Navigate(NavigationTarget::BacktestMultiObjectiveConfig),
+                            Err(msg) => SubMenuAction::ShowMessage(msg),
+                        }
+                    } else {
+                        SubMenuAction::ShowMessage(
+                            "No algorithm selected. Select one in Algorithms menu.".to_string()
+                        )
+                    }
+                }
+                'r' => {
+                    // Regime Search (MM only) - navigate to config screen
+                    if !has_algo {
+                        SubMenuAction::ShowMessage(
+                            "No algorithm selected. Select one in Algorithms menu.".to_string()
+                        )
+                    } else if let Some(algo) = &state.active_algorithm {
+                        match algorithm_validation::validate_mm_algorithm_for_command(
+                            Some(algo),
+                            "regime-search"
+                        ) {
+                            Ok(_) => SubMenuAction::Navigate(NavigationTarget::BacktestRegimeSearchConfig),
+                            Err(msg) => SubMenuAction::ShowMessage(msg),
+                        }
+                    } else {
+                        SubMenuAction::ShowMessage(
+                            "No algorithm selected. Select one in Algorithms menu.".to_string()
+                        )
+                    }
+                }
+                'o' => {
+                    // Regime Optimize (MM only) - navigate to config screen
+                    if !has_algo {
+                        SubMenuAction::ShowMessage(
+                            "No algorithm selected. Select one in Algorithms menu.".to_string()
+                        )
+                    } else if let Some(algo) = &state.active_algorithm {
+                        match algorithm_validation::validate_mm_algorithm_for_command(
+                            Some(algo),
+                            "regime-optimize"
+                        ) {
+                            Ok(_) => SubMenuAction::Navigate(NavigationTarget::BacktestRegimeOptimizeConfig),
+                            Err(msg) => SubMenuAction::ShowMessage(msg),
+                        }
+                    } else {
+                        SubMenuAction::ShowMessage(
+                            "No algorithm selected. Select one in Algorithms menu.".to_string()
+                        )
+                    }
+                }
+                'n' => {
+                    // Train (MM only) - navigate to config screen
+                    if !has_algo {
+                        SubMenuAction::ShowMessage(
+                            "No algorithm selected. Select one in Algorithms menu.".to_string()
+                        )
+                    } else if let Some(algo) = &state.active_algorithm {
+                        match algorithm_validation::validate_mm_algorithm_for_command(
+                            Some(algo),
+                            "train"
+                        ) {
+                            Ok(_) => SubMenuAction::Navigate(NavigationTarget::BacktestTrainConfig),
+                            Err(msg) => SubMenuAction::ShowMessage(msg),
+                        }
+                    } else {
+                        SubMenuAction::ShowMessage(
+                            "No algorithm selected. Select one in Algorithms menu.".to_string()
+                        )
+                    }
+                }
+                'f' => {
+                    // Walk-Forward ML (MM only) - navigate to config screen
+                    if !has_algo {
+                        SubMenuAction::ShowMessage(
+                            "No algorithm selected. Select one in Algorithms menu.".to_string()
+                        )
+                    } else if let Some(algo) = &state.active_algorithm {
+                        match algorithm_validation::validate_mm_algorithm_for_command(
+                            Some(algo),
+                            "walk-forward-ml"
+                        ) {
+                            Ok(_) => SubMenuAction::Navigate(NavigationTarget::BacktestWalkForwardMLConfig),
+                            Err(msg) => SubMenuAction::ShowMessage(msg),
+                        }
+                    } else {
+                        SubMenuAction::ShowMessage(
+                            "No algorithm selected. Select one in Algorithms menu.".to_string()
+                        )
+                    }
+                }
+                'i' => {
+                    // Simulate - navigate to config screen
+                    if has_algo {
+                        SubMenuAction::Navigate(NavigationTarget::BacktestSimulateConfig)
                     } else {
                         SubMenuAction::ShowMessage(
                             "No algorithm selected. Select one in Algorithms menu.".to_string()
@@ -232,11 +392,9 @@ impl SubMenu for ValidateMenu {
                     }
                 }
                 'h' => {
-                    // History
+                    // History - navigate to validate status config
                     if has_algo {
-                        SubMenuAction::ExecuteCommand(
-                            CliCommand::validate("status", vec![])
-                        )
+                        SubMenuAction::Navigate(NavigationTarget::ValidateStatusConfig)
                     } else {
                         SubMenuAction::ShowMessage(
                             "No algorithm selected. Select one in Algorithms menu.".to_string()
@@ -244,7 +402,7 @@ impl SubMenu for ValidateMenu {
                     }
                 }
                 'p' => {
-                    // Presets - always available
+                    // Presets - execute directly (no config needed)
                     SubMenuAction::ExecuteCommand(
                         CliCommand::validate("presets", vec![])
                     )

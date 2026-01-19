@@ -153,11 +153,9 @@ impl SubMenu for TradeMenu {
         if let Some(c) = key_to_char(key) {
             match c.to_ascii_lowercase() {
                 'p' => {
-                    // Paper trading
+                    // Paper trading - navigate to config screen
                     if has_algo {
-                        SubMenuAction::ExecuteCommand(
-                            CliCommand::validate("run", vec!["--stages", "paper"])
-                        )
+                        SubMenuAction::Navigate(NavigationTarget::BacktestPaperConfig)
                     } else {
                         SubMenuAction::ShowMessage(
                             "No algorithm selected. Select one in Algorithms menu.".to_string()
@@ -165,11 +163,9 @@ impl SubMenu for TradeMenu {
                     }
                 }
                 'c' => {
-                    // Campaign simulation
+                    // Campaign simulation - navigate to config screen
                     if has_algo {
-                        SubMenuAction::ExecuteCommand(
-                            CliCommand::backtest("simulate-campaign", vec![])
-                        )
+                        SubMenuAction::Navigate(NavigationTarget::BacktestCampaignConfig)
                     } else {
                         SubMenuAction::ShowMessage(
                             "No algorithm selected. Select one in Algorithms menu.".to_string()
