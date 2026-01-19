@@ -26,7 +26,6 @@ pub mod presets;
 pub mod command_executor;
 pub mod algorithm_validation;
 pub mod command_workflow;
-pub mod config_screen_manager;
 
 pub use tui::run_tui;
 
