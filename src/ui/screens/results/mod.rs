@@ -16,6 +16,7 @@
 //! - Backtest Campaign Results Screen (T-3.8): Display validation campaign results
 //! - Backtest Paper Results Screen (T-3.8): Display paper trading session results
 //! - Research Run Results Screen (T-3.8): Display research analysis results
+//! - Validate Run Results Screen (T-3.8): Display validation pipeline results
 
 pub mod backtest_evaluate;
 pub mod backtest_tune;
@@ -32,6 +33,7 @@ pub mod backtest_simulate;
 pub mod backtest_campaign;
 pub mod backtest_paper;
 pub mod research_run;
+pub mod validate_run;
 
 pub use backtest_evaluate::{BacktestEvaluateResultsScreen, ViewMode};
 pub use backtest_tune::{BacktestTuneResultsScreen, TuneViewMode};
@@ -48,3 +50,4 @@ pub use backtest_simulate::{BacktestSimulateResultsScreen, SimulateViewMode};
 pub use backtest_campaign::{BacktestCampaignResultsScreen, CampaignViewMode};
 pub use backtest_paper::{BacktestPaperResultsScreen, PaperViewMode};
 pub use research_run::{ResearchRunResultsScreen, ResearchRunViewMode};
+pub use validate_run::{ValidateRunResultsScreen, ValidateRunViewMode};
