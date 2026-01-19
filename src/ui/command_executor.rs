@@ -33,6 +33,7 @@ use crate::commands::params::validate_params::{
 use crate::commands::params::algorithm_params::{
     CreateParams, ListParams, ShowParams as AlgorithmShowParams,
 };
+use crate::ui::algorithm_validation;
 
 // ============================================================================
 // Types
