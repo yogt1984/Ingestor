@@ -27,6 +27,10 @@ pub mod command_executor;
 pub mod algorithm_validation;
 pub mod command_workflow;
 
+#[cfg(test)]
+#[path = "tests/e2e_tests.rs"]
+mod e2e_tests;
+
 pub use tui::run_tui;
 
 // Main Menu (Task 4.0)
