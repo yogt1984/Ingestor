@@ -78,6 +78,58 @@ pub enum NavigationTarget {
     // Algorithm management modes (TUI-2.0)
     AlgorithmSelect,
     AlgorithmCreate,
+
+    // Config screens (T-4.4)
+    // Backtest config screens
+    BacktestEvaluateConfig,
+    BacktestTuneConfig,
+    BacktestRegimeSearchConfig,
+    BacktestMultiObjectiveConfig,
+    BacktestRegimeOptimizeConfig,
+    BacktestTrainConfig,
+    BacktestWalkForwardMLConfig,
+    BacktestSweepConfig,
+    BacktestWalkForwardConfig,
+    BacktestOOSValidateConfig,
+    BacktestSimulateConfig,
+    BacktestGridConfig,
+    BacktestCampaignConfig,
+    BacktestPaperConfig,
+
+    // Research config screens
+    ResearchRunConfig,
+    ResearchStatusConfig,
+
+    // Validate config screens
+    ValidateRunConfig,
+    ValidateShowConfig,
+    ValidateStatusConfig,
+
+    // Algorithm config screens
+    AlgorithmListConfig,
+    AlgorithmShowConfig,
+
+    // Results screens (T-4.4)
+    // Backtest results screens
+    BacktestEvaluateResults,
+    BacktestTuneResults,
+    BacktestRegimeSearchResults,
+    BacktestMultiObjectiveResults,
+    BacktestRegimeOptimizeResults,
+    BacktestTrainResults,
+    BacktestWalkForwardMLResults,
+    BacktestSweepResults,
+    BacktestWalkForwardResults,
+    BacktestOOSValidateResults,
+    BacktestSimulateResults,
+    BacktestGridResults,
+    BacktestCampaignResults,
+    BacktestPaperResults,
+
+    // Research results screens
+    ResearchRunResults,
+    ValidateRunResults,
+    AlgorithmCreateResults,
 }
 
 impl NavigationTarget {
@@ -106,6 +158,46 @@ impl NavigationTarget {
             Self::PaperTradePreset => "Paper Trading",
             Self::AlgorithmSelect => "Algorithm Selection",
             Self::AlgorithmCreate => "Create Algorithm",
+            // Config screens
+            Self::BacktestEvaluateConfig => "Backtest Evaluate Config",
+            Self::BacktestTuneConfig => "Backtest Tune Config",
+            Self::BacktestRegimeSearchConfig => "Backtest Regime Search Config",
+            Self::BacktestMultiObjectiveConfig => "Backtest Multi-Objective Config",
+            Self::BacktestRegimeOptimizeConfig => "Backtest Regime Optimize Config",
+            Self::BacktestTrainConfig => "Backtest Train Config",
+            Self::BacktestWalkForwardMLConfig => "Backtest Walk-Forward ML Config",
+            Self::BacktestSweepConfig => "Backtest Sweep Config",
+            Self::BacktestWalkForwardConfig => "Backtest Walk-Forward Config",
+            Self::BacktestOOSValidateConfig => "Backtest OOS Validate Config",
+            Self::BacktestSimulateConfig => "Backtest Simulate Config",
+            Self::BacktestGridConfig => "Backtest Grid Config",
+            Self::BacktestCampaignConfig => "Backtest Campaign Config",
+            Self::BacktestPaperConfig => "Backtest Paper Config",
+            Self::ResearchRunConfig => "Research Run Config",
+            Self::ResearchStatusConfig => "Research Status Config",
+            Self::ValidateRunConfig => "Validate Run Config",
+            Self::ValidateShowConfig => "Validate Show Config",
+            Self::ValidateStatusConfig => "Validate Status Config",
+            Self::AlgorithmListConfig => "Algorithm List Config",
+            Self::AlgorithmShowConfig => "Algorithm Show Config",
+            // Results screens
+            Self::BacktestEvaluateResults => "Backtest Evaluate Results",
+            Self::BacktestTuneResults => "Backtest Tune Results",
+            Self::BacktestRegimeSearchResults => "Backtest Regime Search Results",
+            Self::BacktestMultiObjectiveResults => "Backtest Multi-Objective Results",
+            Self::BacktestRegimeOptimizeResults => "Backtest Regime Optimize Results",
+            Self::BacktestTrainResults => "Backtest Train Results",
+            Self::BacktestWalkForwardMLResults => "Backtest Walk-Forward ML Results",
+            Self::BacktestSweepResults => "Backtest Sweep Results",
+            Self::BacktestWalkForwardResults => "Backtest Walk-Forward Results",
+            Self::BacktestOOSValidateResults => "Backtest OOS Validate Results",
+            Self::BacktestSimulateResults => "Backtest Simulate Results",
+            Self::BacktestGridResults => "Backtest Grid Results",
+            Self::BacktestCampaignResults => "Backtest Campaign Results",
+            Self::BacktestPaperResults => "Backtest Paper Results",
+            Self::ResearchRunResults => "Research Run Results",
+            Self::ValidateRunResults => "Validate Run Results",
+            Self::AlgorithmCreateResults => "Algorithm Create Results",
         }
     }
 }

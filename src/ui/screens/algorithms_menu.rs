@@ -156,19 +156,17 @@ impl SubMenu for AlgorithmsMenu {
         if let Some(c) = key_to_char(key) {
             match c.to_ascii_lowercase() {
                 'l' => {
-                    // List algorithms with current filter
-                    SubMenuAction::ExecuteCommand(self.build_list_command())
+                    // List algorithms - navigate to config screen
+                    SubMenuAction::Navigate(NavigationTarget::AlgorithmListConfig)
                 }
                 's' => {
                     // Select/activate algorithm - interactive
                     SubMenuAction::Navigate(NavigationTarget::AlgorithmSelect)
                 }
                 'v' => {
-                    // View active config
+                    // View active config - navigate to config screen
                     if let Some(algo) = &state.active_algorithm {
-                        SubMenuAction::ExecuteCommand(
-                            CliCommand::algorithm("show", vec![algo.id.as_str()])
-                        )
+                        SubMenuAction::Navigate(NavigationTarget::AlgorithmShowConfig)
                     } else {
                         SubMenuAction::ShowMessage(
                             "No algorithm selected. Use [S] Select first.".to_string()

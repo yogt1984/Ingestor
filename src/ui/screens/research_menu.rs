@@ -78,12 +78,12 @@ impl SubMenu for ResearchMenu {
         if let Some(c) = key_to_char(key) {
             match c.to_ascii_lowercase() {
                 'r' => {
-                    // Run research - execute CLI command
-                    SubMenuAction::ExecuteCommand(CliCommand::research("run"))
+                    // Run research - navigate to config screen
+                    SubMenuAction::Navigate(NavigationTarget::ResearchRunConfig)
                 }
                 's' => {
-                    // Show status - navigate to research dashboard
-                    SubMenuAction::Navigate(NavigationTarget::Research)
+                    // Show status - navigate to status config screen
+                    SubMenuAction::Navigate(NavigationTarget::ResearchStatusConfig)
                 }
                 'c' => {
                     // Create config - only if research complete
