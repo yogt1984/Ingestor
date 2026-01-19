@@ -211,7 +211,7 @@ impl ValidateRunResultsScreen {
         match stage_type {
             ValidationStageType::Backtest => "Backtest",
             ValidationStageType::Forward => "Forward",
-            ValidationStageType::OOS => "OOS",
+            ValidationStageType::OutOfSample => "OutOfSample",
             ValidationStageType::Paper => "Paper",
             ValidationStageType::Live => "Live",
         }
