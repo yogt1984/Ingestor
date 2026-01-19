@@ -444,7 +444,10 @@ impl BacktestSimulateResultsScreen {
 
         // Verdict reasons
         let reasons_text: Vec<Line> = report.verdict_reasons.iter()
-            .map(|r| Line::from(format!("• {}", r).as_str()))
+            .map(|r| {
+                let s = format!("• {}", r);
+                Line::from(s.as_str())
+            })
             .collect();
         let reasons_para = Paragraph::new(reasons_text)
             .block(Block::default().borders(Borders::ALL).title("Verdict Reasons"))
