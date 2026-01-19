@@ -128,7 +128,7 @@ impl SubMenu for ValidateMenu {
                 .with_enabled(has_algo),
 
             // Optimization section
-            SubMenuItem::new('G', "Grid Search", "Parameter optimization")
+            SubMenuItem::new('G', "Grid Search (MM)", "Parameter optimization")
                 .with_enabled(has_algo),
             SubMenuItem::new('W', "Sweep", "Sensitivity analysis")
                 .with_enabled(has_algo),
@@ -522,6 +522,31 @@ mod tests {
 
         // OOS should show failed status
         assert!(items[2].status.as_ref().unwrap().contains("✗"));
+    }
+
+    #[test]
+    fn test_grid_search_shows_mm_indicator() {
+        let menu = ValidateMenu::new();
+        let algo = create_algorithm_summary("test_algo", StrategyType::Momentum);
+        let state = create_test_state(Some(algo), ValidationStatus::default());
+        let items = menu.items(&state);
+
+        // Find Grid Search item (key 'G')
+        let grid_item = items.iter().find(|item| item.key == 'G').unwrap();
+        assert!(grid_item.label.contains("(MM)"), "Grid Search should show (MM) indicator");
+        assert_eq!(grid_item.label, "Grid Search (MM)");
+    }
+
+    #[test]
+    fn test_mm_indicator_displayed_correctly() {
+        let menu = ValidateMenu::new();
+        let algo = create_algorithm_summary("test_algo", StrategyType::MarketMaking);
+        let state = create_test_state(Some(algo), ValidationStatus::default());
+        let items = menu.items(&state);
+
+        // Grid Search should always show (MM) indicator regardless of algorithm type
+        let grid_item = items.iter().find(|item| item.key == 'G').unwrap();
+        assert!(grid_item.label.ends_with("(MM)"));
     }
 
     // -------------------------------------------------------------------------
