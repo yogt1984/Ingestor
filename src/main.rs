@@ -10,6 +10,8 @@ mod backtest;
 mod forward_testing;
 mod core;
 mod edge_detection;
+mod validation;
+mod commands;
 
 use crossbeam::channel;
 use std::sync::Arc;
