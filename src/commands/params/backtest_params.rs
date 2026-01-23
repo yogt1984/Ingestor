@@ -61,6 +61,38 @@ pub struct EvaluateParams {
     pub stats: bool,
 }
 
+impl Default for EvaluateParams {
+    fn default() -> Self {
+        Self {
+            data_path: PathBuf::from("./data/features"),
+            algorithm: "as".to_string(),
+            weights_file: None,
+            spread: 2.0,
+            skew: 0.5,
+            max_inventory: 1000.0,
+            quote_size: 0.1,
+            fee_rate: 0.0001,
+            naive_fills: false,
+            fill_prob: 0.1,
+            queue_pos: 0.5,
+            high_entropy: 0.7,
+            low_entropy: 0.3,
+            regime_params: false,
+            high_spread: 1.0,
+            med_spread: 2.0,
+            low_spread: 3.0,
+            high_skew: 0.3,
+            med_skew: 0.5,
+            low_skew: 0.7,
+            quote_low_entropy: true,
+            output: None,
+            json: false,
+            quiet: false,
+            stats: false,
+        }
+    }
+}
+
 /// Builder for `EvaluateParams` with validation
 pub struct EvaluateParamsBuilder {
     data_path: Option<PathBuf>,
@@ -371,6 +403,27 @@ pub struct TuneParams {
     pub output: Option<PathBuf>,
 }
 
+impl Default for TuneParams {
+    fn default() -> Self {
+        Self {
+            data_path: PathBuf::from("./data/features"),
+            algorithm: "as".to_string(),
+            weights_file: None,
+            spreads: "1,2,3".to_string(),
+            skews: "0.3,0.5,0.7".to_string(),
+            high_entropies: "0.6,0.7,0.8".to_string(),
+            fill_probs: "0.1".to_string(),
+            max_inventory: 1000.0,
+            quote_size: 0.1,
+            fee_rate: 0.0001,
+            naive_fills: false,
+            queue_pos: 0.5,
+            low_entropy: 0.3,
+            output: None,
+        }
+    }
+}
+
 /// Builder for `TuneParams` with validation
 pub struct TuneParamsBuilder {
     data_path: Option<PathBuf>,
@@ -618,6 +671,31 @@ pub struct RegimeSearchParams {
     pub low_entropy: f64,
     /// Output file for results (JSON)
     pub output: Option<PathBuf>,
+}
+
+impl Default for RegimeSearchParams {
+    fn default() -> Self {
+        Self {
+            data_path: PathBuf::from("./data/features"),
+            algorithm: "as".to_string(),
+            weights_file: None,
+            high_spreads: "2,3,4".to_string(),
+            med_spreads: "3,4,5".to_string(),
+            low_spreads: "5,6,none".to_string(),
+            high_skews: "0.3,0.5".to_string(),
+            med_skews: "0.5,0.7".to_string(),
+            low_skews: "0.7,0.9".to_string(),
+            fill_probs: "0.05,0.10".to_string(),
+            max_inventory: 10.0,
+            quote_size: 1.0,
+            fee_rate: 0.0001,
+            naive_fills: false,
+            queue_pos: 0.5,
+            high_entropy: 0.7,
+            low_entropy: 0.3,
+            output: None,
+        }
+    }
 }
 
 /// Builder for `RegimeSearchParams` with validation
@@ -947,6 +1025,32 @@ pub struct MultiObjectiveParams {
     pub output: Option<PathBuf>,
 }
 
+impl Default for MultiObjectiveParams {
+    fn default() -> Self {
+        Self {
+            data_path: PathBuf::from("./data/features"),
+            algorithm: "as".to_string(),
+            weights_file: None,
+            spreads: "1,2,3,4,5".to_string(),
+            skews: "0.3,0.5,0.7".to_string(),
+            fill_probs: "0.05,0.10,0.15".to_string(),
+            high_entropies: "0.6,0.7,0.8".to_string(),
+            min_trades: 100,
+            w_sharpe: 0.4,
+            w_drawdown: 0.3,
+            w_fill: 0.2,
+            w_turnover: 0.1,
+            max_inventory: 10.0,
+            quote_size: 1.0,
+            fee_rate: 0.0001,
+            naive_fills: false,
+            queue_pos: 0.5,
+            low_entropy: 0.3,
+            output: None,
+        }
+    }
+}
+
 /// Builder for `MultiObjectiveParams` with validation
 pub struct MultiObjectiveParamsBuilder {
     data_path: Option<PathBuf>,
@@ -1266,6 +1370,29 @@ pub struct RegimeOptimizeParams {
     pub queue_pos: f64,
     /// Output file for results (JSON)
     pub output: Option<PathBuf>,
+}
+
+impl Default for RegimeOptimizeParams {
+    fn default() -> Self {
+        Self {
+            data_path: PathBuf::from("./data/features"),
+            algorithm: "as".to_string(),
+            weights_file: None,
+            spreads: "1,2,3,4,5".to_string(),
+            skews: "0.3,0.5,0.7".to_string(),
+            fill_prob: 0.10,
+            min_trades: 100,
+            allow_no_quote: true,
+            high_entropy: 0.7,
+            low_entropy: 0.3,
+            max_inventory: 10.0,
+            quote_size: 1.0,
+            fee_rate: 0.0001,
+            naive_fills: false,
+            queue_pos: 0.5,
+            output: None,
+        }
+    }
 }
 
 /// Builder for `RegimeOptimizeParams` with validation
@@ -5781,6 +5908,33 @@ pub struct WalkForwardMLParams {
     pub weights_output: Option<PathBuf>,
 }
 
+impl Default for WalkForwardMLParams {
+    fn default() -> Self {
+        Self {
+            data_path: PathBuf::from("./data/features"),
+            algorithm: "ml".to_string(),
+            folds: 5,
+            min_train_hours: 168.0,
+            test_hours: 24.0,
+            rolling: true,
+            embargo_hours: 1.0,
+            spread_intercepts: "2.0,3.0,4.0".to_string(),
+            spread_entropy_weights: "-3.0,-2.0,-1.0".to_string(),
+            spread_vol_weights: "100.0,150.0,200.0".to_string(),
+            skew_intercepts: "0.3,0.5,0.7".to_string(),
+            skew_inv_weights: "-1.5,-1.0,-0.5".to_string(),
+            max_inventory: 10.0,
+            quote_size: 1.0,
+            fill_prob: 0.10,
+            fee_rate: 0.0001,
+            naive_fills: false,
+            queue_pos: 0.5,
+            output: None,
+            weights_output: None,
+        }
+    }
+}
+
 /// Builder for `WalkForwardMLParams` with validation
 pub struct WalkForwardMLParamsBuilder {
     data_path: Option<PathBuf>,
@@ -6112,6 +6266,28 @@ pub struct TrainParams {
     pub output: Option<PathBuf>,
 }
 
+impl Default for TrainParams {
+    fn default() -> Self {
+        Self {
+            data_path: PathBuf::from("./data/features"),
+            algorithm: "ml".to_string(),
+            train_ratio: 0.8,
+            spread_intercepts: "2.0,3.0,4.0".to_string(),
+            spread_entropy_weights: "-3.0,-2.0,-1.0".to_string(),
+            spread_vol_weights: "100.0,150.0,200.0".to_string(),
+            skew_intercepts: "0.3,0.5,0.7".to_string(),
+            skew_inv_weights: "-1.5,-1.0,-0.5".to_string(),
+            max_inventory: 10.0,
+            quote_size: 1.0,
+            fill_prob: 0.10,
+            fee_rate: 0.0001,
+            naive_fills: false,
+            queue_pos: 0.5,
+            output: None,
+        }
+    }
+}
+
 /// Builder for `TrainParams` with validation
 pub struct TrainParamsBuilder {
     data_path: Option<PathBuf>,
@@ -6376,6 +6552,26 @@ pub struct SweepParams {
     pub quiet: bool,
 }
 
+impl Default for SweepParams {
+    fn default() -> Self {
+        Self {
+            data_path: PathBuf::from("./data/features"),
+            algorithm: "as".to_string(),
+            weights_file: None,
+            spreads: "1,2,3".to_string(),
+            skews: "0.3,0.5,0.7".to_string(),
+            max_inventory: 1000.0,
+            quote_size: 0.1,
+            fee_rate: 0.0001,
+            naive_fills: false,
+            fill_prob: 0.1,
+            queue_pos: 0.5,
+            output: None,
+            quiet: false,
+        }
+    }
+}
+
 /// Builder for `SweepParams` with validation
 pub struct SweepParamsBuilder {
     data_path: Option<PathBuf>,
@@ -6633,6 +6829,31 @@ pub struct WalkForwardParams {
     pub output: Option<PathBuf>,
     /// Quiet mode (no progress output)
     pub quiet: bool,
+}
+
+impl Default for WalkForwardParams {
+    fn default() -> Self {
+        Self {
+            data_path: PathBuf::from("./data/features"),
+            algorithm: "as".to_string(),
+            weights_file: None,
+            folds: 5,
+            test_hours: 24.0,
+            rolling: true,
+            min_train_hours: 168.0,
+            embargo_hours: 1.0,
+            spreads: "1,2,3,4,5".to_string(),
+            skews: "0.3,0.5,0.7".to_string(),
+            fill_probs: "0.05,0.10,0.15".to_string(),
+            max_inventory: 10.0,
+            quote_size: 1.0,
+            fee_rate: 0.0001,
+            naive_fills: false,
+            queue_pos: 0.5,
+            output: None,
+            quiet: false,
+        }
+    }
 }
 
 /// Builder for `WalkForwardParams` with validation
@@ -8120,6 +8341,28 @@ pub struct OOSValidateParams {
     pub quiet: bool,
 }
 
+impl Default for OOSValidateParams {
+    fn default() -> Self {
+        Self {
+            data_path: PathBuf::from("./data/features"),
+            algorithm: "as".to_string(),
+            weights_file: None,
+            holdout: 0.2,
+            embargo_hours: 1.0,
+            spreads: "1,2,3,4,5".to_string(),
+            skews: "0.3,0.5,0.7".to_string(),
+            fill_probs: "0.05,0.10,0.15".to_string(),
+            max_inventory: 10.0,
+            quote_size: 1.0,
+            fee_rate: 0.0001,
+            naive_fills: false,
+            queue_pos: 0.5,
+            output: None,
+            quiet: false,
+        }
+    }
+}
+
 /// Builder for `OOSValidateParams` with validation
 pub struct OOSValidateParamsBuilder {
     data_path: Option<PathBuf>,
@@ -8440,6 +8683,37 @@ pub struct SimulateParams {
     pub output: Option<PathBuf>,
     /// Quiet mode (no progress output)
     pub quiet: bool,
+}
+
+impl Default for SimulateParams {
+    fn default() -> Self {
+        Self {
+            data_path: PathBuf::from("./data/features"),
+            algorithm: "as".to_string(),
+            weights_file: None,
+            weeks: 4,
+            session_hours: 8.0,
+            min_sessions_per_week: 3,
+            preset: None,
+            spread: 2.0,
+            skew: 0.5,
+            expected_fill_rate: 0.10,
+            expected_sharpe: 1.0,
+            expected_return: 0.05,
+            min_weekly_trades: 100,
+            max_drawdown_pct: 10.0,
+            min_win_rate: 0.50,
+            campaigns_dir: PathBuf::from("./campaigns"),
+            max_inventory: 10.0,
+            quote_size: 1.0,
+            fee_rate: 0.0001,
+            naive_fills: false,
+            fill_prob: 0.10,
+            queue_pos: 0.5,
+            output: None,
+            quiet: false,
+        }
+    }
 }
 
 /// Builder for `SimulateParams` with validation
@@ -8808,6 +9082,26 @@ pub struct GridParams {
     pub quiet: bool,
 }
 
+impl Default for GridParams {
+    fn default() -> Self {
+        Self {
+            data_path: PathBuf::from("./data/features"),
+            algorithm: "as".to_string(),
+            weights_file: None,
+            spreads: "1,2,3,4,5".to_string(),
+            skews: "0.3,0.5,0.7".to_string(),
+            max_inventory: 10.0,
+            quote_size: 1.0,
+            fee_rate: 0.0001,
+            naive_fills: false,
+            fill_prob: 0.10,
+            queue_pos: 0.5,
+            output: None,
+            quiet: false,
+        }
+    }
+}
+
 /// Builder for `GridParams` with validation
 pub struct GridParamsBuilder {
     data_path: Option<PathBuf>,
@@ -9101,6 +9395,37 @@ pub struct CampaignParams {
     pub output: Option<PathBuf>,
     /// Quiet mode (no progress output)
     pub quiet: bool,
+}
+
+impl Default for CampaignParams {
+    fn default() -> Self {
+        Self {
+            data_path: PathBuf::from("./data/features"),
+            algorithm: "as".to_string(),
+            weights_file: None,
+            weeks: 4,
+            session_hours: 8.0,
+            min_sessions_per_week: 3,
+            preset: None,
+            spread: 2.0,
+            skew: 0.5,
+            expected_fill_rate: 0.10,
+            expected_sharpe: 1.0,
+            expected_return: 0.05,
+            min_weekly_trades: 100,
+            max_drawdown_pct: 10.0,
+            min_win_rate: 0.50,
+            campaigns_dir: PathBuf::from("./campaigns"),
+            max_inventory: 10.0,
+            quote_size: 1.0,
+            fee_rate: 0.0001,
+            naive_fills: false,
+            fill_prob: 0.10,
+            queue_pos: 0.5,
+            output: None,
+            quiet: false,
+        }
+    }
 }
 
 /// Builder for `CampaignParams` with validation
@@ -11549,6 +11874,31 @@ pub struct PaperParams {
     pub quiet: bool,
 }
 
+impl Default for PaperParams {
+    fn default() -> Self {
+        Self {
+            data_path: PathBuf::from("./data/features"),
+            algorithm: "as".to_string(),
+            weights_file: None,
+            duration: 8.0,
+            preset: None,
+            spread: 2.0,
+            skew: 0.5,
+            sessions_dir: PathBuf::from("./sessions"),
+            max_inventory: 10.0,
+            quote_size: 1.0,
+            fee_rate: 0.0001,
+            naive_fills: false,
+            fill_prob: 0.10,
+            queue_pos: 0.5,
+            min_duration_hours: 4.0,
+            min_trades: 50,
+            output: None,
+            quiet: false,
+        }
+    }
+}
+
 /// Builder for `PaperParams` with validation
 pub struct PaperParamsBuilder {
     data_path: Option<PathBuf>,
@@ -11807,6 +12157,15 @@ pub struct ListAlgorithmsParams {
     pub json: bool,
 }
 
+impl Default for ListAlgorithmsParams {
+    fn default() -> Self {
+        Self {
+            algo: None,
+            json: false,
+        }
+    }
+}
+
 /// Builder for `ListAlgorithmsParams` with validation
 pub struct ListAlgorithmsParamsBuilder {
     algo: Option<String>,
@@ -11851,6 +12210,387 @@ impl ListAlgorithmsParamsBuilder {
 }
 
 impl Default for ListAlgorithmsParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Parameters for the `info` command (data statistics display)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InfoParams {
+    /// Path to data directory containing Parquet files
+    pub data_path: PathBuf,
+}
+
+impl Default for InfoParams {
+    fn default() -> Self {
+        Self {
+            data_path: PathBuf::from("./data/features"),
+        }
+    }
+}
+
+/// Builder for `InfoParams` with validation
+pub struct InfoParamsBuilder {
+    data_path: Option<PathBuf>,
+}
+
+impl InfoParamsBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            data_path: None,
+        }
+    }
+
+    /// Set data directory path
+    pub fn data_path(mut self, path: PathBuf) -> Self {
+        self.data_path = Some(path);
+        self
+    }
+
+    /// Build `InfoParams` with validation
+    pub fn build(self) -> Result<InfoParams> {
+        let data_path = self.data_path.unwrap_or_else(|| PathBuf::from("./data/features"));
+
+        // Validate data path
+        if !data_path.exists() {
+            anyhow::bail!("Data directory does not exist: {:?}", data_path);
+        }
+
+        if !data_path.is_dir() {
+            anyhow::bail!("Data path is not a directory: {:?}", data_path);
+        }
+
+        Ok(InfoParams { data_path })
+    }
+}
+
+impl Default for InfoParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Parameters for the `validate-data` command (data quality validation)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidateDataParams {
+    /// Path to data directory containing Parquet files
+    pub data_path: PathBuf,
+    /// Output file for report (JSON)
+    pub output: Option<PathBuf>,
+}
+
+impl Default for ValidateDataParams {
+    fn default() -> Self {
+        Self {
+            data_path: PathBuf::from("./data/features"),
+            output: None,
+        }
+    }
+}
+
+/// Builder for `ValidateDataParams` with validation
+pub struct ValidateDataParamsBuilder {
+    data_path: Option<PathBuf>,
+    output: Option<PathBuf>,
+}
+
+impl ValidateDataParamsBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            data_path: None,
+            output: None,
+        }
+    }
+
+    /// Set data directory path
+    pub fn data_path(mut self, path: PathBuf) -> Self {
+        self.data_path = Some(path);
+        self
+    }
+
+    /// Set output file path
+    pub fn output(mut self, path: Option<PathBuf>) -> Self {
+        self.output = path;
+        self
+    }
+
+    /// Build `ValidateDataParams` with validation
+    pub fn build(self) -> Result<ValidateDataParams> {
+        let data_path = self.data_path.unwrap_or_else(|| PathBuf::from("./data/features"));
+
+        // Validate data path
+        if !data_path.exists() {
+            anyhow::bail!("Data directory does not exist: {:?}", data_path);
+        }
+
+        if !data_path.is_dir() {
+            anyhow::bail!("Data path is not a directory: {:?}", data_path);
+        }
+
+        Ok(ValidateDataParams {
+            data_path,
+            output: self.output,
+        })
+    }
+}
+
+impl Default for ValidateDataParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Parameters for the `compare` command (ML vs AS baseline comparison)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompareParams {
+    /// Path to data directory containing Parquet files
+    pub data_path: PathBuf,
+    /// ML algorithm to compare (e.g., "ml")
+    pub ml_algorithm: String,
+    /// Path to ML weights file (required for ML algorithm)
+    pub weights_file: Option<PathBuf>,
+    /// Base spread in basis points (per side)
+    pub spread: f64,
+    /// Inventory skew factor
+    pub skew: f64,
+    /// Maximum inventory
+    pub max_inventory: f64,
+    /// Quote size
+    pub quote_size: f64,
+    /// Fee rate (e.g., 0.0001 = 1 bps)
+    pub fee_rate: f64,
+    /// Fill probability (0.0-1.0) for realistic simulation
+    pub fill_prob: f64,
+    /// Queue position (0.0=front, 1.0=back)
+    pub queue_pos: f64,
+    /// High entropy threshold
+    pub high_entropy: f64,
+    /// Low entropy threshold
+    pub low_entropy: f64,
+    /// Output file for JSON results (optional)
+    pub output: Option<PathBuf>,
+}
+
+impl Default for CompareParams {
+    fn default() -> Self {
+        Self {
+            data_path: PathBuf::from("./data/features"),
+            ml_algorithm: "ml".to_string(),
+            weights_file: None,
+            spread: 2.0,
+            skew: 0.5,
+            max_inventory: 0.1,
+            quote_size: 0.001,
+            fee_rate: 0.0001,
+            fill_prob: 0.1,
+            queue_pos: 0.5,
+            high_entropy: 0.7,
+            low_entropy: 0.3,
+            output: None,
+        }
+    }
+}
+
+/// Builder for `CompareParams` with validation
+pub struct CompareParamsBuilder {
+    data_path: Option<PathBuf>,
+    ml_algorithm: Option<String>,
+    weights_file: Option<PathBuf>,
+    spread: Option<f64>,
+    skew: Option<f64>,
+    max_inventory: Option<f64>,
+    quote_size: Option<f64>,
+    fee_rate: Option<f64>,
+    fill_prob: Option<f64>,
+    queue_pos: Option<f64>,
+    high_entropy: Option<f64>,
+    low_entropy: Option<f64>,
+    output: Option<PathBuf>,
+}
+
+impl CompareParamsBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            data_path: None,
+            ml_algorithm: None,
+            weights_file: None,
+            spread: None,
+            skew: None,
+            max_inventory: None,
+            quote_size: None,
+            fee_rate: None,
+            fill_prob: None,
+            queue_pos: None,
+            high_entropy: None,
+            low_entropy: None,
+            output: None,
+        }
+    }
+
+    /// Set data directory path
+    pub fn data_path(mut self, path: PathBuf) -> Self {
+        self.data_path = Some(path);
+        self
+    }
+
+    /// Set ML algorithm
+    pub fn ml_algorithm(mut self, algorithm: String) -> Self {
+        self.ml_algorithm = Some(algorithm);
+        self
+    }
+
+    /// Set ML weights file
+    pub fn weights_file(mut self, path: Option<PathBuf>) -> Self {
+        self.weights_file = path;
+        self
+    }
+
+    /// Set spread
+    pub fn spread(mut self, spread: f64) -> Self {
+        self.spread = Some(spread);
+        self
+    }
+
+    /// Set skew
+    pub fn skew(mut self, skew: f64) -> Self {
+        self.skew = Some(skew);
+        self
+    }
+
+    /// Set max inventory
+    pub fn max_inventory(mut self, max_inventory: f64) -> Self {
+        self.max_inventory = Some(max_inventory);
+        self
+    }
+
+    /// Set quote size
+    pub fn quote_size(mut self, quote_size: f64) -> Self {
+        self.quote_size = Some(quote_size);
+        self
+    }
+
+    /// Set fee rate
+    pub fn fee_rate(mut self, fee_rate: f64) -> Self {
+        self.fee_rate = Some(fee_rate);
+        self
+    }
+
+    /// Set fill probability
+    pub fn fill_prob(mut self, fill_prob: f64) -> Self {
+        self.fill_prob = Some(fill_prob);
+        self
+    }
+
+    /// Set queue position
+    pub fn queue_pos(mut self, queue_pos: f64) -> Self {
+        self.queue_pos = Some(queue_pos);
+        self
+    }
+
+    /// Set high entropy threshold
+    pub fn high_entropy(mut self, high_entropy: f64) -> Self {
+        self.high_entropy = Some(high_entropy);
+        self
+    }
+
+    /// Set low entropy threshold
+    pub fn low_entropy(mut self, low_entropy: f64) -> Self {
+        self.low_entropy = Some(low_entropy);
+        self
+    }
+
+    /// Set output file path
+    pub fn output(mut self, path: Option<PathBuf>) -> Self {
+        self.output = path;
+        self
+    }
+
+    /// Build `CompareParams` with validation
+    pub fn build(self) -> Result<CompareParams> {
+        let data_path = self.data_path.unwrap_or_else(|| PathBuf::from("./data/features"));
+
+        // Validate data path
+        if !data_path.exists() {
+            anyhow::bail!("Data directory does not exist: {:?}", data_path);
+        }
+
+        if !data_path.is_dir() {
+            anyhow::bail!("Data path is not a directory: {:?}", data_path);
+        }
+
+        // Validate numeric parameters
+        let spread = self.spread.unwrap_or(2.0);
+        if spread <= 0.0 {
+            anyhow::bail!("Spread must be positive");
+        }
+
+        let skew = self.skew.unwrap_or(0.5);
+        if !(0.0..=1.0).contains(&skew) {
+            anyhow::bail!("Skew must be between 0.0 and 1.0");
+        }
+
+        let max_inventory = self.max_inventory.unwrap_or(0.1);
+        if max_inventory <= 0.0 {
+            anyhow::bail!("Max inventory must be positive");
+        }
+
+        let quote_size = self.quote_size.unwrap_or(0.001);
+        if quote_size <= 0.0 {
+            anyhow::bail!("Quote size must be positive");
+        }
+
+        let fee_rate = self.fee_rate.unwrap_or(0.0001);
+        if fee_rate < 0.0 {
+            anyhow::bail!("Fee rate cannot be negative");
+        }
+
+        let fill_prob = self.fill_prob.unwrap_or(0.1);
+        if !(0.0..=1.0).contains(&fill_prob) {
+            anyhow::bail!("Fill probability must be between 0.0 and 1.0");
+        }
+
+        let queue_pos = self.queue_pos.unwrap_or(0.5);
+        if !(0.0..=1.0).contains(&queue_pos) {
+            anyhow::bail!("Queue position must be between 0.0 and 1.0");
+        }
+
+        let high_entropy = self.high_entropy.unwrap_or(0.7);
+        if !(0.0..=1.0).contains(&high_entropy) {
+            anyhow::bail!("High entropy threshold must be between 0.0 and 1.0");
+        }
+
+        let low_entropy = self.low_entropy.unwrap_or(0.3);
+        if !(0.0..=1.0).contains(&low_entropy) {
+            anyhow::bail!("Low entropy threshold must be between 0.0 and 1.0");
+        }
+
+        if low_entropy >= high_entropy {
+            anyhow::bail!("Low entropy threshold must be less than high entropy threshold");
+        }
+
+        Ok(CompareParams {
+            data_path,
+            ml_algorithm: self.ml_algorithm.unwrap_or_else(|| "ml".to_string()),
+            weights_file: self.weights_file,
+            spread,
+            skew,
+            max_inventory,
+            quote_size,
+            fee_rate,
+            fill_prob,
+            queue_pos,
+            high_entropy,
+            low_entropy,
+            output: self.output,
+        })
+    }
+}
+
+impl Default for CompareParamsBuilder {
     fn default() -> Self {
         Self::new()
     }

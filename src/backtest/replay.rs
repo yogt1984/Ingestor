@@ -348,6 +348,25 @@ impl ParquetReplay {
         }
     }
 
+    /// Get the number of Parquet files in the data directory
+    pub fn file_count(&self) -> usize {
+        let data_dir = &self.config.data_dir;
+
+        if !data_dir.exists() {
+            return 0;
+        }
+
+        std::fs::read_dir(data_dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().map(|e| e == "parquet").unwrap_or(false))
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
     /// Create an iterator over all events
     pub fn iter(&self) -> impl Iterator<Item = &ReplayEvent> {
         self.events.iter()
