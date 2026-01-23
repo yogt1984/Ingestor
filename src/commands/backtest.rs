@@ -30,7 +30,7 @@ use num::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::common::{ProgressCallback, ProgressEvent, LogLevel};
-use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams, WalkForwardMLParams, SweepParams, WalkForwardParams, OOSValidateParams, SimulateParams, GridParams, CampaignParams, PaperParams, ListAlgorithmsParams};
+use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams, WalkForwardMLParams, SweepParams, WalkForwardParams, OOSValidateParams, SimulateParams, GridParams, CampaignParams, PaperParams, ListAlgorithmsParams, InfoParams, ValidateDataParams, CompareParams};
 use crate::backtest::{
     BacktestEngine, BacktestConfig, BacktestResults,
     replay::{ParquetReplay, ReplayConfig},
@@ -125,7 +125,7 @@ pub struct RegimeSearchResult {
 }
 
 /// Metrics for a single regime from optimization
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RegimeOptimizeMetrics {
     pub regime: String,
     pub event_count: usize,
@@ -142,7 +142,7 @@ pub struct RegimeOptimizeMetrics {
 }
 
 /// Optimal parameter set for a regime
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RegimeParamSet {
     pub spread_bps: f64,
     pub skew_factor: f64,
@@ -150,7 +150,7 @@ pub struct RegimeParamSet {
 }
 
 /// Optimal regime parameters (one set per regime)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct OptimalRegimeParams {
     pub high: RegimeParamSet,
     pub medium: RegimeParamSet,
@@ -158,7 +158,7 @@ pub struct OptimalRegimeParams {
 }
 
 /// Strategy comparison metrics
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StrategyComparison {
     pub uniform_sharpe: f64,
     pub uniform_return: f64,
@@ -550,6 +550,23 @@ pub struct EvaluateMetrics {
     pub sortino_ratio: f64,
     pub calmar_ratio: f64,
     pub profit_factor: f64,
+}
+
+impl Default for EvaluateMetrics {
+    fn default() -> Self {
+        Self {
+            sharpe_ratio: 0.0,
+            total_return: 0.0,
+            max_drawdown: 0.0,
+            num_trades: 0,
+            win_rate: 0.0,
+            avg_trade_pnl: 0.0,
+            annualized_return: 0.0,
+            sortino_ratio: 0.0,
+            calmar_ratio: 0.0,
+            profit_factor: 0.0,
+        }
+    }
 }
 
 impl From<&BacktestResults> for EvaluateMetrics {
@@ -3760,6 +3777,332 @@ impl BacktestCommands {
             total_combinations,
         })
     }
+
+    /// Display data statistics (file count, date range, event count, etc.)
+    ///
+    /// This command provides an overview of the data available for backtesting,
+    /// including the total number of events, time range, duration, and event rate.
+    ///
+    /// Returns `InfoResult` with data statistics.
+    pub fn info(
+        params: InfoParams,
+        callback: Arc<dyn ProgressCallback>,
+    ) -> Result<InfoResult> {
+        callback.on_event(ProgressEvent::Started {
+            total: None,
+            message: "Loading data...".to_string(),
+        });
+
+        let config = ReplayConfig {
+            data_dir: params.data_path.clone(),
+            ..Default::default()
+        };
+
+        let mut replay = ParquetReplay::new(config);
+        let num_events = replay.load()?;
+
+        callback.on_event(ProgressEvent::Progress {
+            current: num_events,
+            total: Some(num_events),
+            message: format!("Loaded {} events", num_events),
+        });
+
+        let (time_start_ms, time_end_ms, duration_hours, duration_days, event_rate) =
+            if let Some((start, end)) = replay.time_range() {
+                let duration_ms = end - start;
+                let hours = duration_ms as f64 / (1000.0 * 60.0 * 60.0);
+                let days = hours / 24.0;
+                let rate = if duration_ms > 0 {
+                    num_events as f64 / (duration_ms as f64 / 1000.0)
+                } else {
+                    0.0
+                };
+                (Some(start), Some(end), Some(hours), Some(days), Some(rate))
+            } else {
+                (None, None, None, None, None)
+            };
+
+        let num_files = replay.file_count();
+
+        callback.on_event(ProgressEvent::Completed {
+            message: format!("Data info loaded: {} events in {} files", num_events, num_files),
+        });
+
+        Ok(InfoResult {
+            data_path: params.data_path,
+            total_events: num_events,
+            time_start_ms,
+            time_end_ms,
+            duration_hours,
+            duration_days,
+            event_rate,
+            num_files,
+        })
+    }
+
+    /// Validate data quality (missing values, gaps, integrity checks)
+    ///
+    /// This command runs comprehensive data quality checks on the historical data,
+    /// including missing value detection, price sanity checks, timestamp continuity,
+    /// feature range validation, and data gap detection.
+    ///
+    /// Returns `ValidateDataResult` with a detailed quality report.
+    pub fn validate_data(
+        params: ValidateDataParams,
+        callback: Arc<dyn ProgressCallback>,
+    ) -> Result<ValidateDataResult> {
+        use crate::backtest::data_quality::DataValidator;
+
+        callback.on_event(ProgressEvent::Started {
+            total: None,
+            message: "Validating data quality...".to_string(),
+        });
+
+        let validator = DataValidator::new();
+        let report = validator.validate_directory(&params.data_path)?;
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!(
+                "Validation complete: {}/{} events valid ({:.1}% quality score)",
+                report.valid_events,
+                report.total_events,
+                report.quality_score * 100.0
+            ),
+        });
+
+        // Save report if output path specified
+        let output_file = if let Some(ref output_path) = params.output {
+            report.save_json(output_path.to_str().unwrap())?;
+            callback.on_event(ProgressEvent::Log {
+                level: LogLevel::Info,
+                message: format!("Report saved to: {:?}", output_path),
+            });
+            Some(output_path.clone())
+        } else {
+            None
+        };
+
+        callback.on_event(ProgressEvent::Completed {
+            message: format!(
+                "Data validation complete: {:.1}% quality score",
+                report.quality_score * 100.0
+            ),
+        });
+
+        Ok(ValidateDataResult {
+            report,
+            output_file,
+        })
+    }
+
+    /// Compare ML algorithm vs Avellaneda-Stoikov baseline
+    ///
+    /// This command runs two backtests side-by-side:
+    /// 1. ML algorithm with specified weights
+    /// 2. Avellaneda-Stoikov baseline (same parameters)
+    ///
+    /// Returns `CompareResult` with side-by-side metrics and relative performance.
+    pub fn compare(
+        params: CompareParams,
+        callback: Arc<dyn ProgressCallback>,
+    ) -> Result<CompareResult> {
+        callback.on_event(ProgressEvent::Started {
+            total: Some(2),
+            message: "Starting ML vs AS comparison".to_string(),
+        });
+
+        // Parse ML algorithm type
+        let ml_algo_type = AlgorithmType::from_str(&params.ml_algorithm)
+            .map_err(|_| anyhow::anyhow!(
+                "Unknown ML algorithm '{}'. Valid options: {}",
+                params.ml_algorithm,
+                AlgorithmRegistry::all_type_strings().join(", ")
+            ))?;
+
+        let ml_algo_name = ml_algo_type.display_name().to_string();
+
+        // Load ML weights if needed
+        let ml_weights = Self::load_ml_weights_if_needed(
+            ml_algo_type,
+            params.weights_file.as_deref(),
+            &callback,
+        )?;
+
+        // Load data
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: "Loading market data...".to_string(),
+        });
+
+        let replay_config = ReplayConfig {
+            data_dir: params.data_path.clone(),
+            ..Default::default()
+        };
+
+        let mut replay = ParquetReplay::new(replay_config.clone());
+        let num_events = replay.load()
+            .context("Failed to load market data")?;
+        let events = replay.into_events();
+
+        let time_span_hours = if let Some((start, end)) = events.first().zip(events.last()) {
+            (end.timestamp_ms - start.timestamp_ms) as f64 / (1000.0 * 60.0 * 60.0)
+        } else {
+            0.0
+        };
+
+        // Run ML algorithm backtest
+        callback.on_event(ProgressEvent::Progress {
+            current: 1,
+            total: Some(2),
+            message: format!("Running {} backtest", ml_algo_name),
+        });
+
+        let ml_algo_params = BacktestAlgorithmParams::new(
+            Decimal::from_f64_retain(params.max_inventory).unwrap_or(dec!(0.1)),
+            Decimal::from_f64_retain(params.quote_size).unwrap_or(dec!(0.001)),
+            params.spread,
+            params.skew,
+        ).with_ml_weights(ml_weights.unwrap_or_default());
+
+        let ml_algorithm = AlgorithmRegistry::create_for_backtest(ml_algo_type, &ml_algo_params)
+            .map_err(|e| anyhow::anyhow!("Failed to create ML algorithm: {}", e))?;
+
+        let backtest_config = BacktestConfig {
+            replay: replay_config.clone(),
+            mm: MMConfig::default(),
+            simulator: SimulatorConfig {
+                fee_rate: Decimal::from_f64_retain(params.fee_rate).unwrap_or(dec!(0.0001)),
+                ..Default::default()
+            },
+            fill_sim: FillSimulatorConfig {
+                base_fill_probability: params.fill_prob,
+                queue_position: params.queue_pos,
+                fee_rate: Decimal::from_f64_retain(params.fee_rate).unwrap_or(dec!(0.0001)),
+                ..Default::default()
+            },
+            verbose: false,
+            use_realistic_fills: true,
+            ..Default::default()
+        };
+
+        let mut ml_engine = BacktestEngine::from_events_with_algorithm(
+            backtest_config.clone(),
+            events.clone(),
+            ml_algorithm,
+        );
+        let ml_results = ml_engine.run()
+            .context("Failed to run ML backtest")?;
+
+        // Extract ML metrics
+        let ml_metrics = CompareMetrics {
+            algorithm: params.ml_algorithm.clone(),
+            algorithm_name: ml_algo_name.clone(),
+            sharpe_ratio: ml_results.metrics.sharpe_ratio,
+            total_return: ml_results.metrics.total_return,
+            max_drawdown: ml_results.metrics.max_drawdown,
+            num_trades: ml_results.metrics.num_trades,
+            win_rate: ml_results.metrics.win_rate,
+            avg_trade_pnl: ml_results.metrics.avg_trade_pnl.to_f64().unwrap_or(0.0),
+            annualized_return: ml_results.metrics.annualized_return,
+            sortino_ratio: ml_results.metrics.sortino_ratio,
+            calmar_ratio: ml_results.metrics.calmar_ratio,
+            profit_factor: ml_results.metrics.profit_factor,
+        };
+
+        // Run AS baseline backtest
+        callback.on_event(ProgressEvent::Progress {
+            current: 2,
+            total: Some(2),
+            message: "Running Avellaneda-Stoikov baseline".to_string(),
+        });
+
+        let as_algo_params = BacktestAlgorithmParams::new(
+            Decimal::from_f64_retain(params.max_inventory).unwrap_or(dec!(0.1)),
+            Decimal::from_f64_retain(params.quote_size).unwrap_or(dec!(0.001)),
+            params.spread,
+            params.skew,
+        );
+
+        let as_algorithm = AlgorithmRegistry::create_for_backtest(AlgorithmType::AvellanedaStoikov, &as_algo_params)
+            .map_err(|e| anyhow::anyhow!("Failed to create AS algorithm: {}", e))?;
+
+        let mut as_engine = BacktestEngine::from_events_with_algorithm(
+            backtest_config,
+            events,
+            as_algorithm,
+        );
+        let as_results = as_engine.run()
+            .context("Failed to run AS backtest")?;
+
+        // Extract AS metrics
+        let as_metrics = CompareMetrics {
+            algorithm: "as".to_string(),
+            algorithm_name: "Avellaneda-Stoikov".to_string(),
+            sharpe_ratio: as_results.metrics.sharpe_ratio,
+            total_return: as_results.metrics.total_return,
+            max_drawdown: as_results.metrics.max_drawdown,
+            num_trades: as_results.metrics.num_trades,
+            win_rate: as_results.metrics.win_rate,
+            avg_trade_pnl: as_results.metrics.avg_trade_pnl.to_f64().unwrap_or(0.0),
+            annualized_return: as_results.metrics.annualized_return,
+            sortino_ratio: as_results.metrics.sortino_ratio,
+            calmar_ratio: as_results.metrics.calmar_ratio,
+            profit_factor: as_results.metrics.profit_factor,
+        };
+
+        // Calculate relative performance
+        let sharpe_diff = ml_metrics.sharpe_ratio - as_metrics.sharpe_ratio;
+        let sharpe_improvement_pct = if as_metrics.sharpe_ratio != 0.0 {
+            (sharpe_diff / as_metrics.sharpe_ratio.abs()) * 100.0
+        } else {
+            0.0
+        };
+
+        let return_diff = ml_metrics.total_return - as_metrics.total_return;
+        let return_improvement_pct = if as_metrics.total_return != 0.0 {
+            (return_diff / as_metrics.total_return.abs()) * 100.0
+        } else {
+            0.0
+        };
+
+        let drawdown_diff = ml_metrics.max_drawdown - as_metrics.max_drawdown;
+        let trade_diff = ml_metrics.num_trades as i64 - as_metrics.num_trades as i64;
+
+        // Determine winner (primarily by Sharpe ratio)
+        let (winner, winner_name) = if ml_metrics.sharpe_ratio > as_metrics.sharpe_ratio {
+            (params.ml_algorithm.clone(), ml_algo_name.clone())
+        } else {
+            ("as".to_string(), "Avellaneda-Stoikov".to_string())
+        };
+
+        let relative_performance = RelativePerformance {
+            sharpe_diff,
+            sharpe_improvement_pct,
+            return_diff,
+            return_improvement_pct,
+            drawdown_diff,
+            trade_diff,
+            winner,
+            winner_name,
+        };
+
+        callback.on_event(ProgressEvent::Completed {
+            message: format!(
+                "Comparison complete: {} vs AS (Winner: {})",
+                ml_algo_name, relative_performance.winner_name
+            ),
+        });
+
+        Ok(CompareResult {
+            ml_metrics,
+            as_metrics,
+            relative_performance,
+            params,
+            events_processed: num_events,
+            time_span_hours,
+        })
+    }
 }
 
 /// Result of a campaign simulation
@@ -3842,6 +4185,103 @@ pub struct GridResult {
     pub all_results: Vec<GridResultItem>,
     pub best: Option<GridResultItem>,
     pub total_combinations: usize,
+}
+
+/// Result of the `info` command (data statistics display)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InfoResult {
+    /// Path to data directory
+    pub data_path: PathBuf,
+    /// Total number of events
+    pub total_events: usize,
+    /// Time range start (milliseconds since epoch)
+    pub time_start_ms: Option<i64>,
+    /// Time range end (milliseconds since epoch)
+    pub time_end_ms: Option<i64>,
+    /// Duration in hours
+    pub duration_hours: Option<f64>,
+    /// Duration in days
+    pub duration_days: Option<f64>,
+    /// Event rate (events/second)
+    pub event_rate: Option<f64>,
+    /// Number of files loaded
+    pub num_files: usize,
+}
+
+/// Result of the `validate-data` command (data quality validation)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidateDataResult {
+    /// Data quality report
+    pub report: crate::backtest::data_quality::DataQualityReport,
+    /// Output file path (if saved)
+    pub output_file: Option<PathBuf>,
+}
+
+/// Comparison metrics for a single algorithm run
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompareMetrics {
+    /// Algorithm identifier
+    pub algorithm: String,
+    /// Algorithm display name
+    pub algorithm_name: String,
+    /// Sharpe ratio
+    pub sharpe_ratio: f64,
+    /// Total return (%)
+    pub total_return: f64,
+    /// Maximum drawdown (%)
+    pub max_drawdown: f64,
+    /// Number of trades
+    pub num_trades: usize,
+    /// Win rate (%)
+    pub win_rate: f64,
+    /// Average trade PnL
+    pub avg_trade_pnl: f64,
+    /// Annualized return (%)
+    pub annualized_return: f64,
+    /// Sortino ratio
+    pub sortino_ratio: f64,
+    /// Calmar ratio
+    pub calmar_ratio: f64,
+    /// Profit factor
+    pub profit_factor: f64,
+}
+
+/// Result of the `compare` command (ML vs AS baseline comparison)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompareResult {
+    /// ML algorithm metrics
+    pub ml_metrics: CompareMetrics,
+    /// AS baseline metrics
+    pub as_metrics: CompareMetrics,
+    /// Relative performance (ML vs AS)
+    pub relative_performance: RelativePerformance,
+    /// Parameters used
+    pub params: CompareParams,
+    /// Number of events processed
+    pub events_processed: usize,
+    /// Time span in hours
+    pub time_span_hours: f64,
+}
+
+/// Relative performance comparison
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelativePerformance {
+    /// Sharpe ratio difference (ML - AS)
+    pub sharpe_diff: f64,
+    /// Sharpe ratio improvement (%)
+    pub sharpe_improvement_pct: f64,
+    /// Return difference (ML - AS, %)
+    pub return_diff: f64,
+    /// Return improvement (%)
+    pub return_improvement_pct: f64,
+    /// Drawdown difference (ML - AS, %)
+    pub drawdown_diff: f64,
+    /// Trade count difference (ML - AS)
+    pub trade_diff: i64,
+    /// Winner (which algorithm performed better)
+    pub winner: String,
+    /// Winner display name
+    pub winner_name: String,
 }
 
 #[cfg(test)]
@@ -9792,14 +10232,12 @@ mod tests {
         // Test that PaperResult can be serialized/deserialized
         // We'll use a minimal test that doesn't require creating SessionResult
         // since SessionResult contains private types
-        
-        // Just verify the struct definition is correct
-        let _result_type_check: PaperResult = unsafe {
-            std::mem::zeroed()
-        };
-        
+
         // This test mainly ensures the struct compiles and has the right fields
         // Full integration tests would be in integration test files
+        // Note: We can't easily create a PaperResult without SessionResult,
+        // so we just verify the type exists and compiles
+        fn _type_check(_: PaperResult) {}
         assert!(true);
     }
 

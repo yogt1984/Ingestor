@@ -175,6 +175,17 @@ impl SubMenu for ValidateMenu {
             SubMenuItem::new('I', "Simulate", "Simulate trading")
                 .with_enabled(has_algo),
 
+            // Data Management section
+            SubMenuItem::new('D', "Data Info", "Show data statistics"),
+            SubMenuItem::new('Q', "Data Quality", "Validate data quality"),
+
+            // Comparison section
+            SubMenuItem::new('C', "Compare ML vs AS", "ML algorithm vs baseline")
+                .with_enabled(has_algo && state.active_algorithm
+                    .as_ref()
+                    .map(|a| algorithm_validation::is_mm_algorithm(a))
+                    .unwrap_or(false)),
+
             // Results section
             SubMenuItem::new('H', "History", "Past validation runs")
                 .with_enabled(has_algo),
@@ -395,6 +406,34 @@ impl SubMenu for ValidateMenu {
                     // History - navigate to validate status config
                     if has_algo {
                         SubMenuAction::Navigate(NavigationTarget::ValidateStatusConfig)
+                    } else {
+                        SubMenuAction::ShowMessage(
+                            "No algorithm selected. Select one in Algorithms menu.".to_string()
+                        )
+                    }
+                }
+                'd' => {
+                    // Data Info - navigate to results directly (no config needed)
+                    SubMenuAction::Navigate(NavigationTarget::BacktestInfoResults)
+                }
+                'q' => {
+                    // Data Quality - navigate to results directly (no config needed)
+                    SubMenuAction::Navigate(NavigationTarget::BacktestValidateDataResults)
+                }
+                'c' => {
+                    // Compare ML vs AS (MM only) - navigate to results directly
+                    if !has_algo {
+                        SubMenuAction::ShowMessage(
+                            "No algorithm selected. Select one in Algorithms menu.".to_string()
+                        )
+                    } else if let Some(algo) = &state.active_algorithm {
+                        match algorithm_validation::validate_mm_algorithm_for_command(
+                            Some(algo),
+                            "compare"
+                        ) {
+                            Ok(_) => SubMenuAction::Navigate(NavigationTarget::BacktestCompareResults),
+                            Err(msg) => SubMenuAction::ShowMessage(msg),
+                        }
                     } else {
                         SubMenuAction::ShowMessage(
                             "No algorithm selected. Select one in Algorithms menu.".to_string()
@@ -653,14 +692,26 @@ mod tests {
         let state = create_test_state(None, ValidationStatus::default());
         let items = menu.items(&state);
 
-        assert_eq!(items.len(), 8);
+        assert_eq!(items.len(), 18);
 
-        // All items except presets should be disabled
+        // All items except data management and presets should be disabled
         assert_eq!(items[0].key, '1');
         assert!(!items[0].enabled); // Backtest disabled
 
-        assert_eq!(items[7].key, 'P');
-        assert!(items[7].enabled); // Presets always enabled
+        // Data Info (D) and Data Quality (Q) should be enabled even without algorithm
+        let data_items: Vec<_> = items.iter().filter(|i| i.key == 'D' || i.key == 'Q').collect();
+        assert_eq!(data_items.len(), 2);
+        for item in data_items {
+            assert!(item.enabled, "Data management item {} should always be enabled", item.key);
+        }
+
+        // Compare (C) should be disabled without algorithm
+        let compare_item = items.iter().find(|i| i.key == 'C');
+        assert!(compare_item.is_some());
+        assert!(!compare_item.unwrap().enabled, "Compare should be disabled without algorithm");
+
+        assert_eq!(items[17].key, 'P');
+        assert!(items[17].enabled); // Presets always enabled
     }
 
     #[test]
@@ -670,11 +721,22 @@ mod tests {
         let state = create_test_state(Some(algo), ValidationStatus::default());
         let items = menu.items(&state);
 
-        assert_eq!(items.len(), 8);
+        assert_eq!(items.len(), 18);
 
-        // All items should be enabled
+        // Non-MM items should be enabled: 1, 2, 3, A, W, I, H, D, Q, P
+        let non_mm_keys = ['1', '2', '3', 'A', 'W', 'I', 'H', 'D', 'Q', 'P'];
         for item in &items {
-            assert!(item.enabled, "Item {} should be enabled", item.key);
+            if non_mm_keys.contains(&item.key) {
+                assert!(item.enabled, "Item {} should be enabled for non-MM algo", item.key);
+            }
+        }
+
+        // MM-only items should be disabled for Momentum algorithm: T, G, M, R, O, N, F, C
+        let mm_only_keys = ['T', 'G', 'M', 'R', 'O', 'N', 'F', 'C'];
+        for item in &items {
+            if mm_only_keys.contains(&item.key) {
+                assert!(!item.enabled, "Item {} should be disabled for non-MM algo", item.key);
+            }
         }
     }
 
@@ -750,7 +812,7 @@ mod tests {
         let state = create_test_state(Some(algo), ValidationStatus::default());
 
         let action = menu.handle_key(KeyCode::Char('g'), &state);
-        assert_eq!(action, SubMenuAction::Navigate(NavigationTarget::GridSearch));
+        assert_eq!(action, SubMenuAction::Navigate(NavigationTarget::BacktestGridConfig));
     }
 
     #[test]
@@ -864,12 +926,7 @@ mod tests {
         let state = create_test_state(Some(algo), ValidationStatus::default());
 
         let action = menu.handle_key(KeyCode::Char('1'), &state);
-        if let SubMenuAction::ExecuteCommand(cmd) = action {
-            assert_eq!(cmd.binary, "validate");
-            assert!(cmd.args.contains(&"backtest".to_string()));
-        } else {
-            panic!("Expected ExecuteCommand action");
-        }
+        assert_eq!(action, SubMenuAction::Navigate(NavigationTarget::BacktestEvaluateConfig));
     }
 
     #[test]
@@ -879,11 +936,7 @@ mod tests {
         let state = create_test_state(Some(algo), ValidationStatus::default());
 
         let action = menu.handle_key(KeyCode::Char('2'), &state);
-        if let SubMenuAction::ExecuteCommand(cmd) = action {
-            assert!(cmd.args.contains(&"forward".to_string()));
-        } else {
-            panic!("Expected ExecuteCommand action");
-        }
+        assert_eq!(action, SubMenuAction::Navigate(NavigationTarget::BacktestWalkForwardConfig));
     }
 
     #[test]
@@ -893,11 +946,7 @@ mod tests {
         let state = create_test_state(Some(algo), ValidationStatus::default());
 
         let action = menu.handle_key(KeyCode::Char('3'), &state);
-        if let SubMenuAction::ExecuteCommand(cmd) = action {
-            assert!(cmd.args.contains(&"oos".to_string()));
-        } else {
-            panic!("Expected ExecuteCommand action");
-        }
+        assert_eq!(action, SubMenuAction::Navigate(NavigationTarget::BacktestOOSValidateConfig));
     }
 
     #[test]
@@ -907,24 +956,22 @@ mod tests {
         let state = create_test_state(Some(algo), ValidationStatus::default());
 
         let action = menu.handle_key(KeyCode::Char('a'), &state);
-        if let SubMenuAction::ExecuteCommand(cmd) = action {
-            assert_eq!(cmd.binary, "validate");
-            assert!(cmd.args.contains(&"run".to_string()));
-            // Should not have specific stage
-            assert!(!cmd.args.contains(&"--stages".to_string()));
-        } else {
-            panic!("Expected ExecuteCommand action");
-        }
+        assert_eq!(action, SubMenuAction::Navigate(NavigationTarget::ValidateRunConfig));
     }
 
     #[test]
     fn test_handle_key_g_grid_search() {
         let mut menu = ValidateMenu::new();
+        // For Momentum algo, 'g' should show message (MM only)
         let algo = create_algorithm_summary("test", StrategyType::Momentum);
         let state = create_test_state(Some(algo), ValidationStatus::default());
 
         let action = menu.handle_key(KeyCode::Char('g'), &state);
-        assert_eq!(action, SubMenuAction::Navigate(NavigationTarget::GridSearch));
+        if let SubMenuAction::ShowMessage(msg) = action {
+            assert!(msg.contains("only available for Market Making"));
+        } else {
+            panic!("Expected ShowMessage action for non-MM algorithm");
+        }
     }
 
     #[test]
@@ -934,7 +981,7 @@ mod tests {
         let state = create_test_state(Some(algo), ValidationStatus::default());
 
         let action = menu.handle_key(KeyCode::Char('w'), &state);
-        assert_eq!(action, SubMenuAction::Navigate(NavigationTarget::Sweep));
+        assert_eq!(action, SubMenuAction::Navigate(NavigationTarget::BacktestSweepConfig));
     }
 
     #[test]
@@ -944,12 +991,7 @@ mod tests {
         let state = create_test_state(Some(algo), ValidationStatus::default());
 
         let action = menu.handle_key(KeyCode::Char('h'), &state);
-        if let SubMenuAction::ExecuteCommand(cmd) = action {
-            assert_eq!(cmd.binary, "validate");
-            assert!(cmd.args.contains(&"status".to_string()));
-        } else {
-            panic!("Expected ExecuteCommand action");
-        }
+        assert_eq!(action, SubMenuAction::Navigate(NavigationTarget::ValidateStatusConfig));
     }
 
     #[test]
@@ -1110,8 +1152,8 @@ mod tests {
         let mut menu = ValidateMenu::new();
         let state = create_test_state(None, ValidationStatus::default());
 
-        // Try all validation actions
-        for key in ['1', '2', '3', 'a', 'g', 'w', 'h'] {
+        // Try all validation actions - all should show "no algorithm" message
+        for key in ['1', '2', '3', 'a', 'g', 'w', 'h', 't', 'm', 'r', 'o', 'n', 'f', 'i'] {
             let action = menu.handle_key(KeyCode::Char(key), &state);
             assert!(
                 matches!(action, SubMenuAction::ShowMessage(_)),
@@ -1130,21 +1172,25 @@ mod tests {
         let algo = create_algorithm_summary("test", StrategyType::Momentum);
         let state = create_test_state(Some(algo), ValidationStatus::default());
 
-        // Validation commands should execute
-        for key in ['1', '2', '3', 'a', 'h', 'p'] {
-            let action = menu.handle_key(KeyCode::Char(key), &state);
-            assert!(
-                matches!(action, SubMenuAction::ExecuteCommand(_)),
-                "Key '{}' should execute command when algorithm selected", key
-            );
-        }
-
-        // Navigation commands
-        for key in ['g', 'w'] {
+        // Navigation commands (most validation commands now navigate to config screens)
+        for key in ['1', '2', '3', 'a', 'w', 'h', 'i'] {
             let action = menu.handle_key(KeyCode::Char(key), &state);
             assert!(
                 matches!(action, SubMenuAction::Navigate(_)),
                 "Key '{}' should navigate when algorithm selected", key
+            );
+        }
+
+        // Only presets executes directly
+        let action = menu.handle_key(KeyCode::Char('p'), &state);
+        assert!(matches!(action, SubMenuAction::ExecuteCommand(_)));
+
+        // MM-only commands should show message for Momentum algorithm
+        for key in ['g', 't', 'm', 'r', 'o', 'n', 'f'] {
+            let action = menu.handle_key(KeyCode::Char(key), &state);
+            assert!(
+                matches!(action, SubMenuAction::ShowMessage(_)),
+                "Key '{}' should show MM-only message for Momentum algorithm", key
             );
         }
     }
