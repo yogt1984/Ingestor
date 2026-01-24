@@ -30,7 +30,7 @@ use num::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::common::{ProgressCallback, ProgressEvent, LogLevel};
-use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams, WalkForwardMLParams, SweepParams, WalkForwardParams, OOSValidateParams, SimulateParams, GridParams, CampaignParams, PaperParams, ListAlgorithmsParams, InfoParams, ValidateDataParams, CompareParams, HeadToHeadParams, HeadToHeadConfig};
+use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams, WalkForwardMLParams, SweepParams, WalkForwardParams, OOSValidateParams, SimulateParams, GridParams, CampaignParams, PaperParams, ListAlgorithmsParams, InfoParams, ValidateDataParams, CompareParams, HeadToHeadParams, HeadToHeadConfig, SimulateSessionParams};
 use crate::backtest::{
     BacktestEngine, BacktestConfig, BacktestResults,
     replay::{ParquetReplay, ReplayConfig},
@@ -4313,6 +4313,161 @@ impl BacktestCommands {
             profit_factor: results.metrics.profit_factor,
         })
     }
+
+    /// Simulate a single paper trading session with detailed output
+    ///
+    /// This command runs a single session simulation on historical data, providing
+    /// detailed tick-by-tick output, trade logs, and fill rate analysis. It's primarily
+    /// a debugging tool to understand algorithm behavior in detail.
+    ///
+    /// Returns `SimulateSessionResult` with detailed session information.
+    pub fn simulate_session(
+        params: SimulateSessionParams,
+        callback: Arc<dyn ProgressCallback>,
+    ) -> Result<SimulateSessionResult> {
+        use crate::backtest::session_runner::{SessionRunner, SessionRunnerConfig, SimulatedEvent};
+        use crate::execution::market_maker::MMConfig;
+
+        callback.on_event(ProgressEvent::Started {
+            total: None,
+            message: format!("Simulating {:.1}h session with {}", params.duration, params.algorithm),
+        });
+
+        // Parse algorithm type
+        let algo_type = AlgorithmType::from_str(&params.algorithm)
+            .map_err(|_| anyhow::anyhow!(
+                "Unknown algorithm '{}'. Valid options: {}",
+                params.algorithm,
+                AlgorithmRegistry::all_type_strings().join(", ")
+            ))?;
+
+        let algo_name = algo_type.display_name().to_string();
+
+        // Load ML weights if needed
+        let _ml_weights = Self::load_ml_weights_if_needed(
+            algo_type,
+            params.weights_file.as_deref(),
+            &callback,
+        )?;
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: "Loading historical data...".to_string(),
+        });
+
+        // Load historical data
+        let replay_config = ReplayConfig {
+            data_dir: params.data_path.clone(),
+            ..Default::default()
+        };
+
+        let mut replay = ParquetReplay::new(replay_config);
+        let _count = replay.load()
+            .context("Failed to load historical data")?;
+        let events = replay.into_events();
+
+        if events.is_empty() {
+            anyhow::bail!("No events loaded from data directory");
+        }
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: format!("Loaded {} events", events.len()),
+        });
+
+        // Build MM config with user parameters
+        let mut mm_config = MMConfig::default();
+        mm_config.regime_params.high_entropy.spread_bps = params.spread;
+        mm_config.regime_params.medium_entropy.spread_bps = params.spread;
+        mm_config.regime_params.low_entropy.spread_bps = params.spread;
+        mm_config.regime_params.high_entropy.skew_factor = params.skew;
+        mm_config.regime_params.medium_entropy.skew_factor = params.skew;
+        mm_config.regime_params.low_entropy.skew_factor = params.skew;
+
+        // Build session runner config
+        let runner_config = SessionRunnerConfig {
+            duration_hours: params.duration,
+            min_duration_hours: 0.1,
+            preset_name: None,
+            symbol: "BTCUSDT".to_string(),
+            output_dir: PathBuf::from("./data/sessions"),
+            log_quotes: true, // Enable detailed logging for debugging
+            fee_rate: Decimal::from_f64_retain(params.fee_rate).unwrap_or(dec!(0.0001)),
+            mm_config: Some(mm_config),
+            risk_config: None,
+            sim_config: None,
+            checkpoint_interval_secs: 300,
+            progress_interval: 1000,
+            min_trades: 5,
+        };
+
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: "Running session simulation...".to_string(),
+        });
+
+        // Create runner
+        let mut runner = SessionRunner::new(runner_config)?;
+        runner.initialize()?;
+
+        // Calculate target duration
+        let first_ts = events.first().map(|e| e.timestamp_ms).unwrap_or(0);
+        let target_end_ts = first_ts + (params.duration * 3600_000.0) as i64;
+
+        // Process events
+        let mut processed = 0;
+        let update_interval = events.len() / 20;
+
+        for event in &events {
+            // Stop if we've exceeded target duration
+            if event.timestamp_ms > target_end_ts {
+                break;
+            }
+
+            // Convert to simulated event
+            let sim_event = match SimulatedEvent::from_replay_event(event) {
+                Some(e) => e,
+                None => continue,
+            };
+
+            let _fills = runner.process_event(&sim_event)?;
+            processed += 1;
+
+            // Progress update
+            if update_interval > 0 && processed % update_interval == 0 {
+                let progress = runner.progress();
+                callback.on_event(ProgressEvent::Progress {
+                    current: processed,
+                    total: Some(events.len()),
+                    message: format!(
+                        "Events: {} | Trades: {} | Fill rate: {:.1}%",
+                        progress.events_processed,
+                        progress.metrics.total_trades,
+                        runner.current_fill_rate() * 100.0
+                    ),
+                });
+            }
+        }
+
+        // Finalize session
+        let session_result = runner.finalize()?;
+
+        callback.on_event(ProgressEvent::Completed {
+            message: format!(
+                "Session complete: {} trades in {:.1}h, Sharpe: {:.2}",
+                session_result.summary.metrics.total_trades,
+                session_result.summary.metrics.duration_secs / 3600.0,
+                session_result.summary.metrics.sharpe_ratio
+            ),
+        });
+
+        Ok(SimulateSessionResult {
+            algorithm: params.algorithm.clone(),
+            algorithm_name: algo_name,
+            session_result,
+            params,
+        })
+    }
 }
 
 /// Result of the `head-to-head` command (two configuration comparison)
@@ -4330,6 +4485,19 @@ pub struct HeadToHeadResult {
     pub events_processed: usize,
     /// Time span in hours
     pub time_span_hours: f64,
+}
+
+/// Result of the `simulate-session` command (single session simulation)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SimulateSessionResult {
+    /// Algorithm type used
+    pub algorithm: String,
+    /// Algorithm display name
+    pub algorithm_name: String,
+    /// Session result from runner
+    pub session_result: crate::backtest::session_runner::SessionResult,
+    /// Parameters used
+    pub params: SimulateSessionParams,
 }
 
 /// Result of a campaign simulation

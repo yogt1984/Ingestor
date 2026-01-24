@@ -188,6 +188,10 @@ impl SubMenu for ValidateMenu {
             SubMenuItem::new('V', "Head-to-Head", "Compare two configurations")
                 .with_enabled(has_algo),
 
+            // Debug section
+            SubMenuItem::new('S', "Simulate Session", "Single session debug")
+                .with_enabled(has_algo),
+
             // Results section
             SubMenuItem::new('H', "History", "Past validation runs")
                 .with_enabled(has_algo),
@@ -452,6 +456,16 @@ impl SubMenu for ValidateMenu {
                         )
                     }
                 }
+                's' => {
+                    // Simulate Session - navigate to results directly
+                    if has_algo {
+                        SubMenuAction::Navigate(NavigationTarget::BacktestSimulateSessionResults)
+                    } else {
+                        SubMenuAction::ShowMessage(
+                            "No algorithm selected. Select one in Algorithms menu.".to_string()
+                        )
+                    }
+                }
                 'p' => {
                     // Presets - execute directly (no config needed)
                     SubMenuAction::ExecuteCommand(
@@ -704,7 +718,7 @@ mod tests {
         let state = create_test_state(None, ValidationStatus::default());
         let items = menu.items(&state);
 
-        assert_eq!(items.len(), 19);
+        assert_eq!(items.len(), 20);
 
         // All items except data management and presets should be disabled
         assert_eq!(items[0].key, '1');
@@ -727,8 +741,13 @@ mod tests {
         assert!(h2h_item.is_some());
         assert!(!h2h_item.unwrap().enabled, "Head-to-Head should be disabled without algorithm");
 
-        assert_eq!(items[18].key, 'P');
-        assert!(items[18].enabled); // Presets always enabled
+        // Simulate Session (S) should be disabled without algorithm
+        let sim_item = items.iter().find(|i| i.key == 'S');
+        assert!(sim_item.is_some());
+        assert!(!sim_item.unwrap().enabled, "Simulate Session should be disabled without algorithm");
+
+        assert_eq!(items[19].key, 'P');
+        assert!(items[19].enabled); // Presets always enabled
     }
 
     #[test]
@@ -738,10 +757,10 @@ mod tests {
         let state = create_test_state(Some(algo), ValidationStatus::default());
         let items = menu.items(&state);
 
-        assert_eq!(items.len(), 19);
+        assert_eq!(items.len(), 20);
 
-        // Non-MM items should be enabled: 1, 2, 3, A, W, I, H, D, Q, V, P
-        let non_mm_keys = ['1', '2', '3', 'A', 'W', 'I', 'H', 'D', 'Q', 'V', 'P'];
+        // Non-MM items should be enabled: 1, 2, 3, A, W, I, H, D, Q, V, S, P
+        let non_mm_keys = ['1', '2', '3', 'A', 'W', 'I', 'H', 'D', 'Q', 'V', 'S', 'P'];
         for item in &items {
             if non_mm_keys.contains(&item.key) {
                 assert!(item.enabled, "Item {} should be enabled for non-MM algo", item.key);

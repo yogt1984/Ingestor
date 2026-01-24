@@ -12873,6 +12873,243 @@ impl Default for HeadToHeadParamsBuilder {
     }
 }
 
+/// Parameters for the `simulate-session` command (single session simulation)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SimulateSessionParams {
+    /// Path to data directory containing Parquet files
+    pub data_path: PathBuf,
+    /// Algorithm to use (e.g., "as", "ml", "fixed")
+    pub algorithm: String,
+    /// Path to ML weights file (optional, for ML algorithms)
+    pub weights_file: Option<PathBuf>,
+    /// Session duration in hours
+    pub duration: f64,
+    /// Base spread in basis points
+    pub spread: f64,
+    /// Inventory skew factor
+    pub skew: f64,
+    /// Maximum inventory
+    pub max_inventory: f64,
+    /// Quote size
+    pub quote_size: f64,
+    /// Fee rate (e.g., 0.0001 = 1 bps)
+    pub fee_rate: f64,
+    /// High entropy threshold
+    pub high_entropy: f64,
+    /// Low entropy threshold
+    pub low_entropy: f64,
+    /// Output file for session result (JSON, optional)
+    pub output: Option<PathBuf>,
+}
+
+impl Default for SimulateSessionParams {
+    fn default() -> Self {
+        Self {
+            data_path: PathBuf::from("./data/features"),
+            algorithm: "as".to_string(),
+            weights_file: None,
+            duration: 1.0,
+            spread: 2.0,
+            skew: 0.5,
+            max_inventory: 0.1,
+            quote_size: 0.001,
+            fee_rate: 0.0001,
+            high_entropy: 0.7,
+            low_entropy: 0.3,
+            output: None,
+        }
+    }
+}
+
+/// Builder for `SimulateSessionParams` with validation
+pub struct SimulateSessionParamsBuilder {
+    data_path: Option<PathBuf>,
+    algorithm: Option<String>,
+    weights_file: Option<PathBuf>,
+    duration: Option<f64>,
+    spread: Option<f64>,
+    skew: Option<f64>,
+    max_inventory: Option<f64>,
+    quote_size: Option<f64>,
+    fee_rate: Option<f64>,
+    high_entropy: Option<f64>,
+    low_entropy: Option<f64>,
+    output: Option<PathBuf>,
+}
+
+impl SimulateSessionParamsBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            data_path: None,
+            algorithm: None,
+            weights_file: None,
+            duration: None,
+            spread: None,
+            skew: None,
+            max_inventory: None,
+            quote_size: None,
+            fee_rate: None,
+            high_entropy: None,
+            low_entropy: None,
+            output: None,
+        }
+    }
+
+    /// Set data directory path
+    pub fn data_path(mut self, path: PathBuf) -> Self {
+        self.data_path = Some(path);
+        self
+    }
+
+    /// Set algorithm
+    pub fn algorithm(mut self, algorithm: String) -> Self {
+        self.algorithm = Some(algorithm);
+        self
+    }
+
+    /// Set ML weights file
+    pub fn weights_file(mut self, path: Option<PathBuf>) -> Self {
+        self.weights_file = path;
+        self
+    }
+
+    /// Set session duration in hours
+    pub fn duration(mut self, duration: f64) -> Self {
+        self.duration = Some(duration);
+        self
+    }
+
+    /// Set spread
+    pub fn spread(mut self, spread: f64) -> Self {
+        self.spread = Some(spread);
+        self
+    }
+
+    /// Set skew
+    pub fn skew(mut self, skew: f64) -> Self {
+        self.skew = Some(skew);
+        self
+    }
+
+    /// Set max inventory
+    pub fn max_inventory(mut self, max_inventory: f64) -> Self {
+        self.max_inventory = Some(max_inventory);
+        self
+    }
+
+    /// Set quote size
+    pub fn quote_size(mut self, quote_size: f64) -> Self {
+        self.quote_size = Some(quote_size);
+        self
+    }
+
+    /// Set fee rate
+    pub fn fee_rate(mut self, fee_rate: f64) -> Self {
+        self.fee_rate = Some(fee_rate);
+        self
+    }
+
+    /// Set high entropy threshold
+    pub fn high_entropy(mut self, high_entropy: f64) -> Self {
+        self.high_entropy = Some(high_entropy);
+        self
+    }
+
+    /// Set low entropy threshold
+    pub fn low_entropy(mut self, low_entropy: f64) -> Self {
+        self.low_entropy = Some(low_entropy);
+        self
+    }
+
+    /// Set output file path
+    pub fn output(mut self, path: Option<PathBuf>) -> Self {
+        self.output = path;
+        self
+    }
+
+    /// Build `SimulateSessionParams` with validation
+    pub fn build(self) -> Result<SimulateSessionParams> {
+        let data_path = self.data_path.unwrap_or_else(|| PathBuf::from("./data/features"));
+
+        // Validate data path
+        if !data_path.exists() {
+            anyhow::bail!("Data directory does not exist: {:?}", data_path);
+        }
+
+        if !data_path.is_dir() {
+            anyhow::bail!("Data path is not a directory: {:?}", data_path);
+        }
+
+        // Validate duration
+        let duration = self.duration.unwrap_or(1.0);
+        if duration <= 0.0 {
+            anyhow::bail!("Duration must be positive");
+        }
+
+        // Validate numeric parameters
+        let spread = self.spread.unwrap_or(2.0);
+        if spread <= 0.0 {
+            anyhow::bail!("Spread must be positive");
+        }
+
+        let skew = self.skew.unwrap_or(0.5);
+        if !(0.0..=1.0).contains(&skew) {
+            anyhow::bail!("Skew must be between 0.0 and 1.0");
+        }
+
+        let max_inventory = self.max_inventory.unwrap_or(0.1);
+        if max_inventory <= 0.0 {
+            anyhow::bail!("Max inventory must be positive");
+        }
+
+        let quote_size = self.quote_size.unwrap_or(0.001);
+        if quote_size <= 0.0 {
+            anyhow::bail!("Quote size must be positive");
+        }
+
+        let fee_rate = self.fee_rate.unwrap_or(0.0001);
+        if fee_rate < 0.0 {
+            anyhow::bail!("Fee rate cannot be negative");
+        }
+
+        let high_entropy = self.high_entropy.unwrap_or(0.7);
+        if !(0.0..=1.0).contains(&high_entropy) {
+            anyhow::bail!("High entropy threshold must be between 0.0 and 1.0");
+        }
+
+        let low_entropy = self.low_entropy.unwrap_or(0.3);
+        if !(0.0..=1.0).contains(&low_entropy) {
+            anyhow::bail!("Low entropy threshold must be between 0.0 and 1.0");
+        }
+
+        if low_entropy >= high_entropy {
+            anyhow::bail!("Low entropy threshold must be less than high entropy threshold");
+        }
+
+        Ok(SimulateSessionParams {
+            data_path,
+            algorithm: self.algorithm.unwrap_or_else(|| "as".to_string()),
+            weights_file: self.weights_file,
+            duration,
+            spread,
+            skew,
+            max_inventory,
+            quote_size,
+            fee_rate,
+            high_entropy,
+            low_entropy,
+            output: self.output,
+        })
+    }
+}
+
+impl Default for SimulateSessionParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 
 #[cfg(test)]
 mod paper_params_tests {
