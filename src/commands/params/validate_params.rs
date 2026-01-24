@@ -38,6 +38,26 @@ pub struct RunParams {
     pub no_persist: bool,
 }
 
+impl Default for RunParams {
+    fn default() -> Self {
+        Self {
+            config: None,
+            from_research: None,
+            stages: None,
+            from_stage: None,
+            data: PathBuf::from("./data/features"),
+            results: PathBuf::from("./results"),
+            preset: None,
+            quiet: false,
+            json: false,
+            output: None,
+            name: "validation".to_string(),
+            continue_on_failure: false,
+            no_persist: false,
+        }
+    }
+}
+
 /// Builder for `RunParams` with validation
 pub struct RunParamsBuilder {
     config: Option<PathBuf>,
@@ -199,7 +219,7 @@ impl Default for RunParamsBuilder {
 }
 
 /// Parameters for the `presets` command (info only - list available presets)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PresetsParams {
     // No parameters needed - this is just informational
 }
@@ -226,7 +246,7 @@ impl Default for PresetsParamsBuilder {
 }
 
 /// Parameters for the `stages` command (info only - list available stages)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StagesParams {
     // No parameters needed - this is just informational
 }
@@ -259,6 +279,15 @@ pub struct StatusParams {
     pub results: PathBuf,
     /// Show last N runs
     pub last: usize,
+}
+
+impl Default for StatusParams {
+    fn default() -> Self {
+        Self {
+            results: PathBuf::from("./results"),
+            last: 10,
+        }
+    }
 }
 
 /// Builder for `StatusParams` with validation
@@ -325,6 +354,17 @@ pub struct ShowParams {
     pub json: bool,
     /// Show verbose output
     pub verbose: bool,
+}
+
+impl Default for ShowParams {
+    fn default() -> Self {
+        Self {
+            results: PathBuf::from("./results"),
+            run_id: String::new(),
+            json: false,
+            verbose: false,
+        }
+    }
 }
 
 /// Builder for `ShowParams` with validation

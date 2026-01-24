@@ -285,8 +285,8 @@ mod tests {
             algorithm_name: "Test".to_string(),
             metrics: EvaluateMetrics::default(),
             params: EvaluateParams::default(),
-            num_events: 0,
-            time_span_hours: 0.0,
+            events_processed: 0,
+            fills_generated: 0,
         });
         
         manager.show_results(NavigationTarget::BacktestEvaluateResults, result);

@@ -31,6 +31,23 @@ pub struct RunParams {
     pub json: bool,
 }
 
+impl Default for RunParams {
+    fn default() -> Self {
+        Self {
+            data: PathBuf::from("./data/features"),
+            output: PathBuf::from("./research"),
+            symbol: "BTCUSDT".to_string(),
+            start: None,
+            end: None,
+            min_samples: 1000,
+            checkpoint_interval: 10000,
+            resume: true,
+            quiet: false,
+            json: false,
+        }
+    }
+}
+
 /// Builder for `RunParams` with validation
 pub struct RunParamsBuilder {
     data: Option<PathBuf>,
@@ -197,6 +214,18 @@ pub struct StatusParams {
     pub verbose: bool,
     /// Number of top signals to display
     pub top_signals: usize,
+}
+
+impl Default for StatusParams {
+    fn default() -> Self {
+        Self {
+            store: PathBuf::from("./research"),
+            symbol: "BTCUSDT".to_string(),
+            json: false,
+            verbose: false,
+            top_signals: 10,
+        }
+    }
 }
 
 /// Builder for `StatusParams` with validation

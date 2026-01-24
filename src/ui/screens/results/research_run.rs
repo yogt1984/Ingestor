@@ -23,7 +23,7 @@ use crate::ui::widgets::{
 // ============================================================================
 
 /// View mode for research run results display
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResearchRunViewMode {
     /// Summary view with key metrics
     Summary,

@@ -277,12 +277,7 @@ mod tests {
         let state = create_test_state(ResearchStatus::Idle);
 
         let action = menu.handle_key(KeyCode::Char('r'), &state);
-        if let SubMenuAction::ExecuteCommand(cmd) = action {
-            assert_eq!(cmd.binary, "research");
-            assert_eq!(cmd.args, vec!["run"]);
-        } else {
-            panic!("Expected ExecuteCommand action");
-        }
+        assert_eq!(action, SubMenuAction::Navigate(NavigationTarget::ResearchRunConfig));
     }
 
     #[test]
@@ -291,11 +286,7 @@ mod tests {
         let state = create_test_state(ResearchStatus::Idle);
 
         let action = menu.handle_key(KeyCode::Char('R'), &state);
-        if let SubMenuAction::ExecuteCommand(cmd) = action {
-            assert_eq!(cmd.binary, "research");
-        } else {
-            panic!("Expected ExecuteCommand action");
-        }
+        assert_eq!(action, SubMenuAction::Navigate(NavigationTarget::ResearchRunConfig));
     }
 
     #[test]
@@ -304,7 +295,7 @@ mod tests {
         let state = create_test_state(ResearchStatus::Idle);
 
         let action = menu.handle_key(KeyCode::Char('s'), &state);
-        assert_eq!(action, SubMenuAction::Navigate(NavigationTarget::Research));
+        assert_eq!(action, SubMenuAction::Navigate(NavigationTarget::ResearchStatusConfig));
     }
 
     #[test]
@@ -541,9 +532,9 @@ mod tests {
         let action_S = menu.handle_key(KeyCode::Char('S'), &state);
         let action_C = menu.handle_key(KeyCode::Char('C'), &state);
 
-        // Same actions for both cases
-        assert!(matches!(action_r, SubMenuAction::ExecuteCommand(_)));
-        assert!(matches!(action_R, SubMenuAction::ExecuteCommand(_)));
+        // Same actions for both cases - r and s are Navigate, c is ExecuteCommand
+        assert!(matches!(action_r, SubMenuAction::Navigate(_)));
+        assert!(matches!(action_R, SubMenuAction::Navigate(_)));
         assert!(matches!(action_s, SubMenuAction::Navigate(_)));
         assert!(matches!(action_S, SubMenuAction::Navigate(_)));
         assert!(matches!(action_c, SubMenuAction::ExecuteCommand(_)));

@@ -29,7 +29,7 @@ use crate::ui::widgets::{
 // ============================================================================
 
 /// View mode for results display
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ViewMode {
     /// Summary view with key metrics dashboard
     Summary,

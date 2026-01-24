@@ -23,7 +23,7 @@ use crate::ui::widgets::{
 // ============================================================================
 
 /// View mode for train results display
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TrainViewMode {
     /// Summary view with key metrics
     Summary,
@@ -486,8 +486,10 @@ mod tests {
     fn test_generalization_gap_calculation() {
         let result = create_test_train_result();
         let screen = BacktestTrainResultsScreen::new(result);
-        assert_eq!(screen.result().generalization_gap, 0.2);
-        assert_eq!(screen.result().train_sharpe - screen.result().test_sharpe, 0.2);
+        assert!((screen.result().generalization_gap - 0.2).abs() < 1e-10);
+        // Floating-point comparison for train_sharpe - test_sharpe
+        let computed_gap = screen.result().train_sharpe - screen.result().test_sharpe;
+        assert!((computed_gap - 0.2).abs() < 1e-10);
     }
 
     #[test]

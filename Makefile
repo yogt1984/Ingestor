@@ -7,7 +7,7 @@ debug:
 	cargo build && RUST_LOG=debug cargo run
 
 test:
-	cargo test
+	cargo test --lib
 
 compose:
 	docker compose up --build

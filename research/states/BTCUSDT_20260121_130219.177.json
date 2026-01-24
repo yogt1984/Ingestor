@@ -1,0 +1,154 @@
+{
+  "id": "11b9643b-8b0c-4845-9218-d4cd2e9446f8",
+  "symbol": "BTCUSDT",
+  "timestamp": "2026-01-21T13:02:19.177639696Z",
+  "midc": {
+    "kappa": 0.03400488618907245,
+    "tau_half_seconds": 20.38375240269705,
+    "rho_0": 0.008933244378735883,
+    "r_squared": 1.0,
+    "sample_size": 999,
+    "confidence": 0.8643937753458103,
+    "computed_at": "2026-01-21T13:02:19.177326686Z"
+  },
+  "persistence": {
+    "mean_duration_seconds": 628101.5736666666,
+    "median_duration_seconds": 848673.85,
+    "std_duration_seconds": 450549.7036538468,
+    "percentile_25": 848673.85,
+    "percentile_75": 1035505.938,
+    "sample_count": 3,
+    "updated_at": "2026-01-21T07:32:33.525483337Z"
+  },
+  "conditional_table": {
+    "Tiny_Fast_Up_Smooth": {
+      "p_continuation": 0.5239530456852792,
+      "p_reversal": 0.47604695431472077,
+      "expected_magnitude_bps": 12.328100018817812,
+      "std_magnitude_bps": 27.85688313916791,
+      "sample_count": 6304,
+      "confidence_interval": [
+        0.5116134538856305,
+        0.5362634617300059
+      ]
+    },
+    "Small_Fast_Down_Smooth": {
+      "p_continuation": 0.6897506925207756,
+      "p_reversal": 0.3102493074792244,
+      "expected_magnitude_bps": 23.142687477812654,
+      "std_magnitude_bps": 42.900555764063576,
+      "sample_count": 361,
+      "confidence_interval": [
+        0.6402421970443157,
+        0.7352632277756608
+      ]
+    },
+    "VeryLarge_Slow_Up_Smooth": {
+      "p_continuation": 0.0,
+      "p_reversal": 1.0,
+      "expected_magnitude_bps": 1037.5056119533617,
+      "std_magnitude_bps": 0.0,
+      "sample_count": 48,
+      "confidence_interval": [
+        0.0,
+        0.0741026511527422
+      ]
+    },
+    "Small_Fast_Down_Mixed": {
+      "p_continuation": 0.5,
+      "p_reversal": 0.5,
+      "expected_magnitude_bps": 0.0,
+      "std_magnitude_bps": 0.0,
+      "sample_count": 0,
+      "confidence_interval": [
+        0.0,
+        1.0
+      ]
+    },
+    "Tiny_Fast_Down_Mixed": {
+      "p_continuation": 0.7333333333333333,
+      "p_reversal": 0.2666666666666667,
+      "expected_magnitude_bps": 3.7397142225333955,
+      "std_magnitude_bps": 1.3091674443209633,
+      "sample_count": 15,
+      "confidence_interval": [
+        0.4804911034231324,
+        0.8910272389681718
+      ]
+    },
+    "VeryLarge_Slow_Down_Smooth": {
+      "p_continuation": 0.0,
+      "p_reversal": 1.0,
+      "expected_magnitude_bps": 3.811241245729582,
+      "std_magnitude_bps": 0.26664283089555096,
+      "sample_count": 49,
+      "confidence_interval": [
+        0.0,
+        0.07270029673590504
+      ]
+    },
+    "Tiny_Fast_Up_Mixed": {
+      "p_continuation": 1.0,
+      "p_reversal": 0.0,
+      "expected_magnitude_bps": 94.1213185360879,
+      "std_magnitude_bps": 80.45444976612193,
+      "sample_count": 5,
+      "confidence_interval": [
+        0.5655085052479191,
+        1.0
+      ]
+    },
+    "Medium_Fast_Down_Smooth": {
+      "p_continuation": 0.4473684210526316,
+      "p_reversal": 0.5526315789473684,
+      "expected_magnitude_bps": 8.549369950288703,
+      "std_magnitude_bps": 2.888962045453493,
+      "sample_count": 38,
+      "confidence_interval": [
+        0.3014616531155089,
+        0.6029397082091058
+      ]
+    },
+    "Small_Fast_Up_Smooth": {
+      "p_continuation": 0.4688995215311005,
+      "p_reversal": 0.5311004784688995,
+      "expected_magnitude_bps": 37.512164335891704,
+      "std_magnitude_bps": 59.1698472498339,
+      "sample_count": 209,
+      "confidence_interval": [
+        0.40241510362018634,
+        0.5365066109318563
+      ]
+    },
+    "Tiny_Fast_Down_Smooth": {
+      "p_continuation": 0.5574178559575175,
+      "p_reversal": 0.44258214404248253,
+      "expected_magnitude_bps": 9.965944142733585,
+      "std_magnitude_bps": 19.58829308268779,
+      "sample_count": 6026,
+      "confidence_interval": [
+        0.5448443119671438,
+        0.5699182383459525
+      ]
+    }
+  },
+  "entropy": 0.5,
+  "assessment": {
+    "midc_ok": true,
+    "entropy_ok": true,
+    "persistence_ok": false,
+    "signals_ok": true,
+    "is_tradeable": false,
+    "recommended_strategy": "None",
+    "position_scale": 0.0,
+    "reasoning": "Trends too short-lived",
+    "assessed_at": "2026-01-21T13:02:19.177528461Z"
+  },
+  "data_start": "2025-10-16T14:44:48.704019167Z",
+  "data_end": "2025-11-07T11:00:36.762785674Z",
+  "snapshots_processed": 30000,
+  "engine_version": "0.1.0",
+  "tsmom_config": null,
+  "tsmom_signal": null,
+  "tsmom_stats": null
+}

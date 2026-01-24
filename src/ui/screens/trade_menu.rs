@@ -674,12 +674,7 @@ mod tests {
         let state = create_test_state(Some(algo), ValidationStatus::default(), TradingMode::Idle);
 
         let action = menu.handle_key(KeyCode::Char('p'), &state);
-        if let SubMenuAction::ExecuteCommand(cmd) = action {
-            assert_eq!(cmd.binary, "validate");
-            assert!(cmd.args.contains(&"paper".to_string()));
-        } else {
-            panic!("Expected ExecuteCommand action");
-        }
+        assert_eq!(action, SubMenuAction::Navigate(NavigationTarget::BacktestPaperConfig));
     }
 
     #[test]
@@ -689,12 +684,7 @@ mod tests {
         let state = create_test_state(Some(algo), ValidationStatus::default(), TradingMode::Idle);
 
         let action = menu.handle_key(KeyCode::Char('c'), &state);
-        if let SubMenuAction::ExecuteCommand(cmd) = action {
-            assert_eq!(cmd.binary, "backtest");
-            assert!(cmd.args.contains(&"simulate-campaign".to_string()));
-        } else {
-            panic!("Expected ExecuteCommand action");
-        }
+        assert_eq!(action, SubMenuAction::Navigate(NavigationTarget::BacktestCampaignConfig));
     }
 
     #[test]
@@ -789,9 +779,9 @@ mod tests {
         // Uppercase
         let action_upper = menu.handle_key(KeyCode::Char('P'), &state);
 
-        // Both should result in ExecuteCommand
-        assert!(matches!(action_lower, SubMenuAction::ExecuteCommand(_)));
-        assert!(matches!(action_upper, SubMenuAction::ExecuteCommand(_)));
+        // Both should result in Navigate
+        assert!(matches!(action_lower, SubMenuAction::Navigate(_)));
+        assert!(matches!(action_upper, SubMenuAction::Navigate(_)));
     }
 
     // -------------------------------------------------------------------------
@@ -914,8 +904,17 @@ mod tests {
         let algo = create_algorithm_summary("test", StrategyType::Momentum);
         let state = create_test_state(Some(algo), create_validation_all_not_run(), TradingMode::Idle);
 
-        // Paper, Campaign, Sessions, Validate should execute
-        for key in ['p', 'c', 's', 'v'] {
+        // Paper and Campaign navigate to config screens
+        for key in ['p', 'c'] {
+            let action = menu.handle_key(KeyCode::Char(key), &state);
+            assert!(
+                matches!(action, SubMenuAction::Navigate(_)),
+                "Key '{}' should navigate to config when algorithm selected", key
+            );
+        }
+
+        // Sessions, Validate execute directly
+        for key in ['s', 'v'] {
             let action = menu.handle_key(KeyCode::Char(key), &state);
             assert!(
                 matches!(action, SubMenuAction::ExecuteCommand(_)),
@@ -934,8 +933,17 @@ mod tests {
         let algo = create_algorithm_summary("test", StrategyType::Momentum);
         let state = create_test_state(Some(algo), create_validation_all_passed(), TradingMode::Idle);
 
-        // All trade actions should execute
-        for key in ['p', 'c', 'l', 's', 'v'] {
+        // Paper and Campaign navigate to config screens
+        for key in ['p', 'c'] {
+            let action = menu.handle_key(KeyCode::Char(key), &state);
+            assert!(
+                matches!(action, SubMenuAction::Navigate(_)),
+                "Key '{}' should navigate to config when fully validated", key
+            );
+        }
+
+        // Live, Sessions, Validate execute directly
+        for key in ['l', 's', 'v'] {
             let action = menu.handle_key(KeyCode::Char(key), &state);
             assert!(
                 matches!(action, SubMenuAction::ExecuteCommand(_)),

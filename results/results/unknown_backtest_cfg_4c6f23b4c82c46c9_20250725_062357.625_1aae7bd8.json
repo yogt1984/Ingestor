@@ -1,0 +1,124 @@
+{
+  "id": "1aae7bd8-9d67-4e6a-be86-e26f9286acc2",
+  "stage_type": "Backtest",
+  "stage_name": "validation-backtest-20260121",
+  "config_id": "cfg_4c6f23b4c82c46c9",
+  "research_state_id": null,
+  "period_start": "2025-07-25T06:23:57.625495667Z",
+  "period_end": "2025-10-23T06:23:57.625495667Z",
+  "metrics": {
+    "trade_count": 0,
+    "winners": 0,
+    "losers": 0,
+    "win_rate": 0.0,
+    "total_pnl": 0.0,
+    "gross_profit": 0.0,
+    "gross_loss": 0.0,
+    "profit_factor": 0.0,
+    "avg_pnl": 0.0,
+    "avg_pnl_bps": 0.0,
+    "avg_winner": 0.0,
+    "avg_loser": 0.0,
+    "max_winner": 0.0,
+    "max_loser": 0.0,
+    "sharpe_ratio": 0.0,
+    "sortino_ratio": 0.0,
+    "calmar_ratio": 0.0,
+    "max_drawdown_pct": 0.0,
+    "max_drawdown_duration_seconds": 0,
+    "avg_trade_duration_seconds": 0.0,
+    "max_consecutive_wins": 0,
+    "max_consecutive_losses": 0,
+    "total_commission": 0.0,
+    "avg_slippage_bps": 0.0,
+    "expectancy": 0.0,
+    "annualized_return_pct": 0.0,
+    "annualized_volatility_pct": 0.0,
+    "long_trades": 0,
+    "short_trades": 0,
+    "long_win_rate": 0.0,
+    "short_win_rate": 0.0
+  },
+  "trades": [],
+  "passed": false,
+  "thresholds": {
+    "min_sharpe": 0.5,
+    "max_drawdown_pct": 20.0,
+    "min_win_rate": 0.4,
+    "min_trade_count": 30,
+    "min_profit_factor": 1.0,
+    "max_avg_slippage_bps": 5.0,
+    "min_avg_trade_bps": 0.0,
+    "max_consecutive_losses": 10
+  },
+  "threshold_results": {
+    "avg_slippage": {
+      "name": "Avg Slippage",
+      "passed": true,
+      "actual": 0.0,
+      "required": 5.0,
+      "comparison": "<="
+    },
+    "trade_count": {
+      "name": "Trade Count",
+      "passed": false,
+      "actual": 0.0,
+      "required": 30.0,
+      "comparison": ">="
+    },
+    "avg_trade_bps": {
+      "name": "Avg Trade P&L",
+      "passed": true,
+      "actual": 0.0,
+      "required": 0.0,
+      "comparison": ">="
+    },
+    "profit_factor": {
+      "name": "Profit Factor",
+      "passed": false,
+      "actual": 0.0,
+      "required": 1.0,
+      "comparison": ">="
+    },
+    "sharpe_ratio": {
+      "name": "Sharpe Ratio",
+      "passed": false,
+      "actual": 0.0,
+      "required": 0.5,
+      "comparison": ">="
+    },
+    "win_rate": {
+      "name": "Win Rate",
+      "passed": false,
+      "actual": 0.0,
+      "required": 0.4,
+      "comparison": ">="
+    },
+    "consecutive_losses": {
+      "name": "Max Consecutive Losses",
+      "passed": true,
+      "actual": 0.0,
+      "required": 10.0,
+      "comparison": "<="
+    },
+    "max_drawdown": {
+      "name": "Max Drawdown",
+      "passed": true,
+      "actual": 0.0,
+      "required": 20.0,
+      "comparison": "<="
+    }
+  },
+  "validated_at": "2026-01-21T07:25:34.514389959Z",
+  "validation_duration_seconds": 3696.881049573,
+  "warnings": [
+    "Low trade count: 0 (minimum for statistical significance: 30)"
+  ],
+  "metadata": {
+    "events_processed": "5000",
+    "fills_generated": "0",
+    "bid_fill_rate": "0.00%",
+    "ask_fill_rate": "0.00%",
+    "fill_simulation": "realistic"
+  }
+}

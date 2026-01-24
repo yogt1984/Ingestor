@@ -41,10 +41,16 @@ pub fn is_mm_algorithm_opt(algorithm: Option<&AlgorithmConfigSummary>) -> bool {
 }
 
 /// Validate that an algorithm is Market Making for MM-only commands
+/// Returns Ok(()) if the command is not MM-only, or if the algorithm is MM
 pub fn validate_mm_algorithm_for_command(
     algorithm: Option<&AlgorithmConfigSummary>,
     command_name: &str,
 ) -> Result<(), String> {
+    // If this is not an MM-only command, validation passes
+    if !MM_ONLY_COMMANDS.contains(&command_name) {
+        return Ok(());
+    }
+
     let algo = algorithm.ok_or_else(|| {
         format!(
             "No algorithm selected. '{}' requires a Market Making algorithm. \

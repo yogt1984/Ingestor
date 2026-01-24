@@ -441,12 +441,7 @@ mod tests {
         let state = create_test_state(None);
 
         let action = menu.handle_key(KeyCode::Char('l'), &state);
-        if let SubMenuAction::ExecuteCommand(cmd) = action {
-            assert_eq!(cmd.binary, "algorithm");
-            assert!(cmd.args.contains(&"list".to_string()));
-        } else {
-            panic!("Expected ExecuteCommand action");
-        }
+        assert_eq!(action, SubMenuAction::Navigate(NavigationTarget::AlgorithmListConfig));
     }
 
     #[test]
@@ -455,11 +450,7 @@ mod tests {
         let state = create_test_state(None);
 
         let action = menu.handle_key(KeyCode::Char('L'), &state);
-        if let SubMenuAction::ExecuteCommand(cmd) = action {
-            assert_eq!(cmd.binary, "algorithm");
-        } else {
-            panic!("Expected ExecuteCommand action");
-        }
+        assert_eq!(action, SubMenuAction::Navigate(NavigationTarget::AlgorithmListConfig));
     }
 
     #[test]
@@ -491,12 +482,7 @@ mod tests {
         let state = create_test_state(Some(algo));
 
         let action = menu.handle_key(KeyCode::Char('v'), &state);
-        if let SubMenuAction::ExecuteCommand(cmd) = action {
-            assert_eq!(cmd.binary, "algorithm");
-            assert!(cmd.args.contains(&"show".to_string()));
-        } else {
-            panic!("Expected ExecuteCommand action");
-        }
+        assert_eq!(action, SubMenuAction::Navigate(NavigationTarget::AlgorithmShowConfig));
     }
 
     #[test]
@@ -726,9 +712,9 @@ mod tests {
         let action_S = menu.handle_key(KeyCode::Char('S'), &state);
         let action_N = menu.handle_key(KeyCode::Char('N'), &state);
 
-        // Same action types for both cases
-        assert!(matches!(action_l, SubMenuAction::ExecuteCommand(_)));
-        assert!(matches!(action_L, SubMenuAction::ExecuteCommand(_)));
+        // Same action types for both cases - all Navigate now
+        assert!(matches!(action_l, SubMenuAction::Navigate(_)));
+        assert!(matches!(action_L, SubMenuAction::Navigate(_)));
         assert!(matches!(action_s, SubMenuAction::Navigate(_)));
         assert!(matches!(action_S, SubMenuAction::Navigate(_)));
         assert!(matches!(action_n, SubMenuAction::Navigate(_)));
@@ -748,6 +734,6 @@ mod tests {
         let algo = create_algorithm_summary("selected_algo", StrategyType::Momentum);
         let state_with_algo = create_test_state(Some(algo));
         let action = menu.handle_key(KeyCode::Char('v'), &state_with_algo);
-        assert!(matches!(action, SubMenuAction::ExecuteCommand(_)));
+        assert_eq!(action, SubMenuAction::Navigate(NavigationTarget::AlgorithmShowConfig));
     }
 }

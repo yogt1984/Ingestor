@@ -275,6 +275,26 @@ impl CommaListWidget {
         self.selected
     }
 
+    /// Set selected index (for testing)
+    pub fn set_selected(&mut self, index: Option<usize>) {
+        self.selected = index;
+        if let Some(idx) = index {
+            self.list_state.select(Some(idx));
+        } else {
+            self.list_state.select(None);
+        }
+    }
+
+    /// Check if widget is in editing mode
+    pub fn is_editing(&self) -> bool {
+        self.editing
+    }
+
+    /// Get the current text buffer content
+    pub fn text_buffer(&self) -> &str {
+        &self.text_buffer
+    }
+
     /// Parse comma-separated string to Vec<f64>
     pub fn parse_str(&self, s: &str) -> Result<Vec<f64>, String> {
         if s.trim().is_empty() {

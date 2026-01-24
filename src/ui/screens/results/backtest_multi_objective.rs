@@ -26,7 +26,7 @@ use serde_json;
 // ============================================================================
 
 /// View mode for multi-objective results display
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MultiObjectiveViewMode {
     /// Top 10 results table
     TopResults,
@@ -570,7 +570,7 @@ mod tests {
     #[test]
     fn test_create_results_table() {
         let result = create_test_multi_objective_result();
-        let screen = BacktestMultiObjectiveResultsScreen::new(result);
+        let screen = BacktestMultiObjectiveResultsScreen::new(result.clone());
         let all: Vec<&MultiObjectiveSolution> = result.all_solutions.iter().collect();
         let (headers, rows) = screen.create_results_table(&all);
         assert_eq!(headers.len(), 12);

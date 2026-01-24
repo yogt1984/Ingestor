@@ -25,7 +25,7 @@ use crate::ui::widgets::{
 // ============================================================================
 
 /// View mode for paper results display
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PaperViewMode {
     /// Summary view with key metrics
     Summary,
