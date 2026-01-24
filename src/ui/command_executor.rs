@@ -15,7 +15,7 @@ use crate::commands::backtest::{
     RegimeOptimizeResult, TrainResult, WalkForwardMLResult, SweepResult,
     WalkForwardResult, OOSValidateResult, SimulateResult, CampaignResult,
     PaperResult, GridResult, ListAlgorithmsResult, InfoResult, ValidateDataResult,
-    CompareResult, HeadToHeadResult,
+    CompareResult, HeadToHeadResult, SimulateSessionResult,
     RegimeOptimizeMetrics, OptimalRegimeParams, StrategyComparison,
     WalkForwardMLAggregate, WalkForwardAggregate, OOSValidateVerdictSummary,
 };
@@ -28,7 +28,7 @@ use crate::commands::params::backtest_params::{
     RegimeOptimizeParams, TrainParams, WalkForwardMLParams, SweepParams,
     WalkForwardParams, OOSValidateParams, SimulateParams, GridParams,
     CampaignParams, PaperParams, ListAlgorithmsParams, InfoParams, ValidateDataParams,
-    CompareParams, HeadToHeadParams,
+    CompareParams, HeadToHeadParams, SimulateSessionParams,
 };
 use crate::commands::params::research_params::{RunParams as ResearchRunParams, StatusParams as ResearchStatusParams};
 use crate::commands::params::validate_params::{
@@ -85,6 +85,8 @@ pub enum CommandResult {
     BacktestCompare(CompareResult),
     /// Backtest head-to-head result
     BacktestHeadToHead(HeadToHeadResult),
+    /// Backtest simulate session result
+    BacktestSimulateSession(SimulateSessionResult),
     /// Research run result
     ResearchRun(ResearchRunResult),
     /// Research status result
@@ -633,6 +635,33 @@ impl TUICommandExecutor {
         });
 
         Ok(CommandResult::BacktestHeadToHead(result))
+    }
+
+    /// Execute backtest simulate-session command (single session simulation)
+    pub fn execute_backtest_simulate_session(
+        &self,
+        params: SimulateSessionParams,
+    ) -> Result<CommandResult> {
+        if self.is_cancelled() {
+            return Err(anyhow::anyhow!("Execution cancelled"));
+        }
+
+        self.send_progress(ProgressEvent::Started {
+            total: None,
+            message: format!("Simulating {:.1}h session", params.duration),
+        });
+
+        let callback = self.create_callback();
+        let result = BacktestCommands::simulate_session(params, callback)?;
+
+        self.send_progress(ProgressEvent::Completed {
+            message: format!(
+                "Session simulation complete: {} trades",
+                result.session_result.summary.metrics.total_trades
+            ),
+        });
+
+        Ok(CommandResult::BacktestSimulateSession(result))
     }
 
     /// Execute research run command

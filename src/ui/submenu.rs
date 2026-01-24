@@ -129,6 +129,7 @@ pub enum NavigationTarget {
     BacktestValidateDataResults,
     BacktestCompareResults,
     BacktestHeadToHeadResults,
+    BacktestSimulateSessionResults,
 
     // Research results screens
     ResearchRunResults,
@@ -203,6 +204,7 @@ impl NavigationTarget {
             Self::BacktestValidateDataResults => "Data Quality Validation",
             Self::BacktestCompareResults => "ML vs AS Comparison",
             Self::BacktestHeadToHeadResults => "Head-to-Head Comparison",
+            Self::BacktestSimulateSessionResults => "Session Simulation",
             Self::ResearchRunResults => "Research Run Results",
             Self::ValidateRunResults => "Validate Run Results",
             Self::AlgorithmCreateResults => "Algorithm Create Results",
