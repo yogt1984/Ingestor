@@ -23,7 +23,7 @@ use crate::ui::widgets::{
 // ============================================================================
 
 /// View mode for algorithm create results display
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AlgorithmCreateViewMode {
     /// Summary view with key metrics
     Summary,

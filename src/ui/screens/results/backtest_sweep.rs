@@ -24,7 +24,7 @@ use crate::ui::widgets::{
 // ============================================================================
 
 /// View mode for sweep results display
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SweepViewMode {
     /// Top 10 results table
     TopResults,
@@ -455,7 +455,7 @@ mod tests {
     #[test]
     fn test_create_results_table() {
         let result = create_test_sweep_result();
-        let screen = BacktestSweepResultsScreen::new(result);
+        let screen = BacktestSweepResultsScreen::new(result.clone());
         let all: Vec<&SweepResultItem> = result.all_results.iter().collect();
         let (headers, rows) = screen.create_results_table(&all);
         assert_eq!(headers.len(), 8);

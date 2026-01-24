@@ -122,8 +122,8 @@ mod navigation_flow_tests {
             algorithm_name: "Test".to_string(),
             metrics: EvaluateMetrics::default(),
             params: EvaluateParams::default(),
-            num_events: 0,
-            time_span_hours: 0.0,
+            events_processed: 0,
+            fills_generated: 0,
         });
         manager.show_results(NavigationTarget::BacktestEvaluateResults, result);
         match manager.state() {
@@ -159,8 +159,8 @@ mod navigation_flow_tests {
             algorithm_name: "Test".to_string(),
             metrics: EvaluateMetrics::default(),
             params: EvaluateParams::default(),
-            num_events: 0,
-            time_span_hours: 0.0,
+            events_processed: 0,
+            fills_generated: 0,
         });
         manager.show_results(NavigationTarget::BacktestEvaluateResults, result);
         assert!(matches!(manager.state(), WorkflowState::ResultsScreen { .. }));
@@ -184,7 +184,6 @@ mod algorithm_validation_tests {
             id: "test-mm".to_string(),
             name: "Test MM".to_string(),
             strategy_type: StrategyType::MarketMaking,
-            algorithm_type: "as".to_string(),
             created_at: chrono::Utc::now(),
         }
     }
@@ -194,7 +193,6 @@ mod algorithm_validation_tests {
             id: "test-mom".to_string(),
             name: "Test MOM".to_string(),
             strategy_type: StrategyType::Momentum,
-            algorithm_type: "momentum".to_string(),
             created_at: chrono::Utc::now(),
         }
     }
@@ -214,40 +212,40 @@ mod algorithm_validation_tests {
     #[test]
     fn test_is_mm_algorithm_opt_some() {
         let algo = Some(create_mm_algorithm());
-        assert!(is_mm_algorithm_opt(&algo));
+        assert!(is_mm_algorithm_opt(algo.as_ref()));
     }
 
     #[test]
     fn test_is_mm_algorithm_opt_none() {
         let algo: Option<AlgorithmConfigSummary> = None;
-        assert!(!is_mm_algorithm_opt(&algo));
+        assert!(!is_mm_algorithm_opt(algo.as_ref()));
     }
 
     #[test]
     fn test_validate_mm_algorithm_for_command_with_mm() {
         let algo = Some(create_mm_algorithm());
-        let result = validate_mm_algorithm_for_command(&algo, "tune");
+        let result = validate_mm_algorithm_for_command(algo.as_ref(), "tune");
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_validate_mm_algorithm_for_command_with_mom() {
         let algo = Some(create_mom_algorithm());
-        let result = validate_mm_algorithm_for_command(&algo, "tune");
+        let result = validate_mm_algorithm_for_command(algo.as_ref(), "tune");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_validate_mm_algorithm_for_command_with_none() {
         let algo: Option<AlgorithmConfigSummary> = None;
-        let result = validate_mm_algorithm_for_command(&algo, "tune");
+        let result = validate_mm_algorithm_for_command(algo.as_ref(), "tune");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_validate_mm_algorithm_for_non_mm_command() {
         let algo = Some(create_mom_algorithm());
-        let result = validate_mm_algorithm_for_command(&algo, "evaluate");
+        let result = validate_mm_algorithm_for_command(algo.as_ref(), "evaluate");
         // Should pass for non-MM commands
         assert!(result.is_ok());
     }
@@ -457,7 +455,7 @@ mod config_to_results_mapping_tests {
             let results = config_to_results_target(&config);
             assert_eq!(
                 results,
-                Some(expected_results),
+                Some(expected_results.clone()),
                 "Config {:?} should map to {:?}",
                 config,
                 expected_results
@@ -642,8 +640,8 @@ mod workflow_state_tests {
             algorithm_name: "Test".to_string(),
             metrics: EvaluateMetrics::default(),
             params: EvaluateParams::default(),
-            num_events: 0,
-            time_span_hours: 0.0,
+            events_processed: 0,
+            fills_generated: 0,
         });
         manager.show_results(NavigationTarget::BacktestEvaluateResults, result);
         assert!(matches!(manager.state(), WorkflowState::ResultsScreen { .. }));
@@ -675,10 +673,9 @@ mod error_handling_tests {
             id: "test-mom".to_string(),
             name: "Test MOM".to_string(),
             strategy_type: StrategyType::Momentum,
-            algorithm_type: "momentum".to_string(),
             created_at: chrono::Utc::now(),
         });
-        let result = validate_mm_algorithm_for_command(&algo, "tune");
+        let result = validate_mm_algorithm_for_command(algo.as_ref(), "tune");
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg.contains("Market Making"));
@@ -738,8 +735,8 @@ mod integration_tests {
             algorithm_name: "Test".to_string(),
             metrics: EvaluateMetrics::default(),
             params: EvaluateParams::default(),
-            num_events: 0,
-            time_span_hours: 0.0,
+            events_processed: 0,
+            fills_generated: 0,
         });
         manager.show_results(results_target.unwrap(), result);
         assert!(matches!(manager.state(), WorkflowState::ResultsScreen { .. }));
@@ -756,7 +753,6 @@ mod integration_tests {
             id: "test-mm".to_string(),
             name: "Test MM".to_string(),
             strategy_type: StrategyType::MarketMaking,
-            algorithm_type: "as".to_string(),
             created_at: chrono::Utc::now(),
         });
 
@@ -764,23 +760,22 @@ mod integration_tests {
             id: "test-mom".to_string(),
             name: "Test MOM".to_string(),
             strategy_type: StrategyType::Momentum,
-            algorithm_type: "momentum".to_string(),
             created_at: chrono::Utc::now(),
         });
 
         // MM algorithm should pass validation for MM-only commands
-        assert!(validate_mm_algorithm_for_command(&mm_algo, "tune").is_ok());
-        assert!(validate_mm_algorithm_for_command(&mm_algo, "grid").is_ok());
-        assert!(validate_mm_algorithm_for_command(&mm_algo, "regime-search").is_ok());
+        assert!(validate_mm_algorithm_for_command(mm_algo.as_ref(), "tune").is_ok());
+        assert!(validate_mm_algorithm_for_command(mm_algo.as_ref(), "grid").is_ok());
+        assert!(validate_mm_algorithm_for_command(mm_algo.as_ref(), "regime-search").is_ok());
 
         // MOM algorithm should fail validation for MM-only commands
-        assert!(validate_mm_algorithm_for_command(&mom_algo, "tune").is_err());
-        assert!(validate_mm_algorithm_for_command(&mom_algo, "grid").is_err());
-        assert!(validate_mm_algorithm_for_command(&mom_algo, "regime-search").is_err());
+        assert!(validate_mm_algorithm_for_command(mom_algo.as_ref(), "tune").is_err());
+        assert!(validate_mm_algorithm_for_command(mom_algo.as_ref(), "grid").is_err());
+        assert!(validate_mm_algorithm_for_command(mom_algo.as_ref(), "regime-search").is_err());
 
         // Both should pass for non-MM commands
-        assert!(validate_mm_algorithm_for_command(&mm_algo, "evaluate").is_ok());
-        assert!(validate_mm_algorithm_for_command(&mom_algo, "evaluate").is_ok());
+        assert!(validate_mm_algorithm_for_command(mm_algo.as_ref(), "evaluate").is_ok());
+        assert!(validate_mm_algorithm_for_command(mom_algo.as_ref(), "evaluate").is_ok());
     }
 }
 
@@ -1034,13 +1029,12 @@ mod performance_tests {
             id: "test".to_string(),
             name: "Test".to_string(),
             strategy_type: StrategyType::MarketMaking,
-            algorithm_type: "as".to_string(),
             created_at: chrono::Utc::now(),
         });
 
         let start = Instant::now();
         for _ in 0..1000 {
-            let _ = validate_mm_algorithm_for_command(&algo, "tune");
+            let _ = validate_mm_algorithm_for_command(algo.as_ref(), "tune");
         }
         let duration = start.elapsed();
         let avg_time = duration.as_micros() / 1000;

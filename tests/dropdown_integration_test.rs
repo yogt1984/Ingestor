@@ -64,7 +64,7 @@ fn test_widget_renders_with_filter() {
         .with_options(vec!["Apple".to_string(), "Banana".to_string(), "Apricot".to_string()])
         .set_focused(true);
     widget.expand();
-    widget.filter = "Ap".to_string();
+    widget.set_filter("Ap");
 
     terminal.draw(|f| {
         widget.render(f, f.size());
@@ -123,17 +123,17 @@ fn test_handle_key_navigation() {
         .with_options(vec!["A".to_string(), "B".to_string(), "C".to_string()])
         .set_focused(true);
     widget.expand();
-    widget.list_state.select(Some(0));
+    widget.list_state_mut().select(Some(0));
 
     // Navigate down
     let key_down = KeyEvent::new(KeyCode::Down, KeyModifiers::empty());
     widget.handle_key(key_down);
-    assert_eq!(widget.list_state.selected(), Some(1));
+    assert_eq!(widget.list_state().selected(), Some(1));
 
     // Navigate up
     let key_up = KeyEvent::new(KeyCode::Up, KeyModifiers::empty());
     widget.handle_key(key_up);
-    assert_eq!(widget.list_state.selected(), Some(0));
+    assert_eq!(widget.list_state().selected(), Some(0));
 }
 
 #[test]
@@ -142,7 +142,7 @@ fn test_handle_key_select() {
         .with_options(vec!["A".to_string(), "B".to_string(), "C".to_string()])
         .set_focused(true);
     widget.expand();
-    widget.list_state.select(Some(1));
+    widget.list_state_mut().select(Some(1));
 
     let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::empty());
     widget.handle_key(key);
@@ -161,12 +161,12 @@ fn test_handle_key_filter() {
     // Type 'A'
     let key_a = KeyEvent::new(KeyCode::Char('A'), KeyModifiers::empty());
     widget.handle_key(key_a);
-    assert_eq!(widget.filter, "A");
+    assert_eq!(widget.filter(), "A");
 
     // Type 'p'
     let key_p = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::empty());
     widget.handle_key(key_p);
-    assert_eq!(widget.filter, "Ap");
+    assert_eq!(widget.filter(), "Ap");
 }
 
 #[test]
@@ -175,12 +175,12 @@ fn test_handle_key_backspace_filter() {
         .with_options(vec!["A".to_string(), "B".to_string()])
         .set_focused(true);
     widget.expand();
-    widget.filter = "test".to_string();
+    widget.set_filter("test");
 
     let key = KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty());
     widget.handle_key(key);
 
-    assert_eq!(widget.filter, "tes");
+    assert_eq!(widget.filter(), "tes");
 }
 
 // ============================================================================
@@ -201,7 +201,7 @@ fn test_validation_valid_selection() {
 fn test_validation_invalid_selection() {
     let mut widget = DropdownWidget::new()
         .with_options(vec!["A".to_string(), "B".to_string()]);
-    widget.selected = Some(10); // Invalid index
+    widget.set_selected(Some(10)); // Invalid index
     widget.validate();
 
     assert!(!widget.is_valid());
@@ -216,7 +216,7 @@ fn test_validation_invalid_selection() {
 fn test_filter_case_insensitive() {
     let mut widget = DropdownWidget::new()
         .with_options(vec!["Apple".to_string(), "banana".to_string(), "APRICOT".to_string()]);
-    widget.filter = "a".to_string();
+    widget.set_filter("a");
     let filtered = widget.filtered_options();
 
     assert_eq!(filtered.len(), 3); // All match (case insensitive)
@@ -226,7 +226,7 @@ fn test_filter_case_insensitive() {
 fn test_filter_no_matches() {
     let mut widget = DropdownWidget::new()
         .with_options(vec!["Apple".to_string(), "Banana".to_string()]);
-    widget.filter = "XYZ".to_string();
+    widget.set_filter("XYZ");
     let filtered = widget.filtered_options();
 
     assert!(filtered.is_empty());
@@ -247,7 +247,7 @@ fn test_full_selection_workflow() {
     assert!(widget.is_expanded());
 
     // Navigate
-    widget.list_state.select(Some(1));
+    widget.list_state_mut().select(Some(1));
 
     // Select
     let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::empty());
@@ -339,13 +339,13 @@ fn test_navigation_wraps() {
         .with_options(vec!["A".to_string(), "B".to_string()])
         .set_focused(true);
     widget.expand();
-    widget.list_state.select(Some(1));
+    widget.list_state_mut().select(Some(1));
 
     // Navigate down (should wrap to first)
     widget.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::empty()));
-    assert_eq!(widget.list_state.selected(), Some(0));
+    assert_eq!(widget.list_state().selected(), Some(0));
 
     // Navigate up (should wrap to last)
     widget.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::empty()));
-    assert_eq!(widget.list_state.selected(), Some(1));
+    assert_eq!(widget.list_state().selected(), Some(1));
 }

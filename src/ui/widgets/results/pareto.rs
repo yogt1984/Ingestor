@@ -248,6 +248,26 @@ impl ParetoFrontierWidget {
         self.y_axis_objective
     }
 
+    /// Get all solutions
+    pub fn solutions(&self) -> &[ParetoSolution] {
+        &self.solutions
+    }
+
+    /// Get objective names
+    pub fn objective_names(&self) -> &[String] {
+        &self.objective_names
+    }
+
+    /// Get whether to show frontier
+    pub fn show_frontier(&self) -> bool {
+        self.show_frontier
+    }
+
+    /// Get whether to show all solutions
+    pub fn show_all_solutions(&self) -> bool {
+        self.show_all_solutions
+    }
+
     /// Handle keyboard input
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         if !self.focused {
@@ -515,7 +535,7 @@ impl ParetoFrontierWidget {
     }
 
     /// Get frontier solutions sorted by X-axis
-    fn get_frontier_solutions_sorted(&self) -> Vec<usize> {
+    pub fn get_frontier_solutions_sorted(&self) -> Vec<usize> {
         let mut frontier_indices: Vec<usize> = self
             .solutions
             .iter()

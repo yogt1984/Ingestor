@@ -1,0 +1,319 @@
+{
+  "id": "11b9643b-8b0c-4845-9218-d4cd2e9446f8",
+  "symbol": "BTCUSDT",
+  "timestamp": "2026-01-21T13:32:19.911082303Z",
+  "midc": {
+    "kappa": 0.0,
+    "tau_half_seconds": null,
+    "rho_0": 0.0014077061340851322,
+    "r_squared": 1.0,
+    "sample_size": 999,
+    "confidence": 0.8643937753458103,
+    "computed_at": "2026-01-21T13:31:49.704025149Z"
+  },
+  "persistence": {
+    "mean_duration_seconds": 107425.28678378378,
+    "median_duration_seconds": 995.656,
+    "std_duration_seconds": 257763.5337315288,
+    "percentile_25": 84.801,
+    "percentile_75": 64312.364,
+    "sample_count": 37,
+    "updated_at": "2026-01-21T13:31:12.421834503Z"
+  },
+  "conditional_table": {
+    "Medium_Fast_Up_Mixed": {
+      "p_continuation": 1.0,
+      "p_reversal": 0.0,
+      "expected_magnitude_bps": 5.33169983715163,
+      "std_magnitude_bps": 0.33372723841799184,
+      "sample_count": 5,
+      "confidence_interval": [
+        0.5655085052479191,
+        1.0
+      ]
+    },
+    "Small_Slow_Up_Smooth": {
+      "p_continuation": 0.0,
+      "p_reversal": 1.0,
+      "expected_magnitude_bps": 36.775673533652885,
+      "std_magnitude_bps": 0.0002686929970918901,
+      "sample_count": 24,
+      "confidence_interval": [
+        0.0,
+        0.13798057582897535
+      ]
+    },
+    "Small_Fast_Down_Mixed": {
+      "p_continuation": 0.36363636363636365,
+      "p_reversal": 0.6363636363636364,
+      "expected_magnitude_bps": 198.57870285241083,
+      "std_magnitude_bps": 233.73326764213286,
+      "sample_count": 55,
+      "confidence_interval": [
+        0.24930349342940838,
+        0.49577481851316285
+      ]
+    },
+    "Tiny_Slow_Up_Smooth": {
+      "p_continuation": 0.0,
+      "p_reversal": 1.0,
+      "expected_magnitude_bps": 9998.546880144897,
+      "std_magnitude_bps": 0.0,
+      "sample_count": 37,
+      "confidence_interval": [
+        0.0,
+        0.09406095745514377
+      ]
+    },
+    "Small_Normal_Down_Smooth": {
+      "p_continuation": 0.0,
+      "p_reversal": 1.0,
+      "expected_magnitude_bps": 23.17841464942761,
+      "std_magnitude_bps": 0.400034157891115,
+      "sample_count": 49,
+      "confidence_interval": [
+        0.0,
+        0.07270029673590504
+      ]
+    },
+    "Medium_Fast_Up_Smooth": {
+      "p_continuation": 0.7368421052631579,
+      "p_reversal": 0.26315789473684215,
+      "expected_magnitude_bps": 12016738.920676017,
+      "std_magnitude_bps": 25705751.49068033,
+      "sample_count": 133,
+      "confidence_interval": [
+        0.6561135291479759,
+        0.8042727861245728
+      ]
+    },
+    "Medium_Normal_Up_Smooth": {
+      "p_continuation": 0.0,
+      "p_reversal": 1.0,
+      "expected_magnitude_bps": 56.45937273972573,
+      "std_magnitude_bps": 57.155285750782326,
+      "sample_count": 83,
+      "confidence_interval": [
+        3.469446951953614e-18,
+        0.04423686343872062
+      ]
+    },
+    "Tiny_Fast_Up_Mixed": {
+      "p_continuation": 0.7132352941176471,
+      "p_reversal": 0.2867647058823529,
+      "expected_magnitude_bps": 62.81346072007062,
+      "std_magnitude_bps": 128.26249636548104,
+      "sample_count": 136,
+      "confidence_interval": [
+        0.6321910971169027,
+        0.7825638828032355
+      ]
+    },
+    "Medium_Slow_Down_Smooth": {
+      "p_continuation": 1.0,
+      "p_reversal": 0.0,
+      "expected_magnitude_bps": 34.674141126462175,
+      "std_magnitude_bps": 1.6150955678281684,
+      "sample_count": 74,
+      "confidence_interval": [
+        0.9506484964337834,
+        0.9999999999999998
+      ]
+    },
+    "Small_Normal_Up_Smooth": {
+      "p_continuation": 0.0,
+      "p_reversal": 1.0,
+      "expected_magnitude_bps": 124.65913517724977,
+      "std_magnitude_bps": 4.188108757275008e-6,
+      "sample_count": 15,
+      "confidence_interval": [
+        0.0,
+        0.20388926630434784
+      ]
+    },
+    "Large_Slow_Up_Smooth": {
+      "p_continuation": 1.0,
+      "p_reversal": 0.0,
+      "expected_magnitude_bps": 7.519602878010864,
+      "std_magnitude_bps": 0.14596292395717209,
+      "sample_count": 47,
+      "confidence_interval": [
+        0.9244398288016114,
+        1.0
+      ]
+    },
+    "Tiny_Fast_Up_Smooth": {
+      "p_continuation": 0.5128958537381652,
+      "p_reversal": 0.48710414626183485,
+      "expected_magnitude_bps": 123.57404819966244,
+      "std_magnitude_bps": 944.3095219042043,
+      "sample_count": 12252,
+      "confidence_interval": [
+        0.504042488380007,
+        0.5217411346720402
+      ]
+    },
+    "Medium_Slow_Up_Smooth": {
+      "p_continuation": 1.0,
+      "p_reversal": 0.0,
+      "expected_magnitude_bps": 7.119105142687454,
+      "std_magnitude_bps": 1.145002890007848,
+      "sample_count": 49,
+      "confidence_interval": [
+        0.9272997032640949,
+        0.9999999999999999
+      ]
+    },
+    "Small_Fast_Down_Smooth": {
+      "p_continuation": 0.46199701937406856,
+      "p_reversal": 0.5380029806259314,
+      "expected_magnitude_bps": 7091525.929543791,
+      "std_magnitude_bps": 20566179.164048716,
+      "sample_count": 2013,
+      "confidence_interval": [
+        0.4403106276551294,
+        0.4838281842376835
+      ]
+    },
+    "Small_Fast_Up_Mixed": {
+      "p_continuation": 1.0,
+      "p_reversal": 0.0,
+      "expected_magnitude_bps": 15.586941459477263,
+      "std_magnitude_bps": 9.490745015363133,
+      "sample_count": 38,
+      "confidence_interval": [
+        0.90818706741616,
+        0.9999999999999999
+      ]
+    },
+    "VeryLarge_Slow_Up_Smooth": {
+      "p_continuation": 0.7804878048780488,
+      "p_reversal": 0.2195121951219512,
+      "expected_magnitude_bps": 365.3674862754352,
+      "std_magnitude_bps": 415.4069156837997,
+      "sample_count": 328,
+      "confidence_interval": [
+        0.7325873273883375,
+        0.8218940878410973
+      ]
+    },
+    "Medium_Fast_Down_Mixed": {
+      "p_continuation": 0.0,
+      "p_reversal": 1.0,
+      "expected_magnitude_bps": 27.67642306470492,
+      "std_magnitude_bps": 4.550774815873675,
+      "sample_count": 5,
+      "confidence_interval": [
+        0.0,
+        0.43449149475208104
+      ]
+    },
+    "VeryLarge_Fast_Up_Smooth": {
+      "p_continuation": 0.0,
+      "p_reversal": 1.0,
+      "expected_magnitude_bps": 9.202430030848292,
+      "std_magnitude_bps": 1.2343490317056929,
+      "sample_count": 49,
+      "confidence_interval": [
+        0.0,
+        0.07270029673590504
+      ]
+    },
+    "Tiny_Fast_Down_Mixed": {
+      "p_continuation": 0.5252525252525253,
+      "p_reversal": 0.4747474747474747,
+      "expected_magnitude_bps": 116.66002644428613,
+      "std_magnitude_bps": 198.11889218612976,
+      "sample_count": 99,
+      "confidence_interval": [
+        0.42779134155248744,
+        0.6208271163478176
+      ]
+    },
+    "Medium_Normal_Down_Smooth": {
+      "p_continuation": 0.0,
+      "p_reversal": 1.0,
+      "expected_magnitude_bps": 11.075027856355561,
+      "std_magnitude_bps": 0.6295851684267799,
+      "sample_count": 49,
+      "confidence_interval": [
+        0.0,
+        0.07270029673590504
+      ]
+    },
+    "VeryLarge_Slow_Down_Smooth": {
+      "p_continuation": 0.7620481927710844,
+      "p_reversal": 0.23795180722891562,
+      "expected_magnitude_bps": 391.9798130479154,
+      "std_magnitude_bps": 1863.63831196905,
+      "sample_count": 332,
+      "confidence_interval": [
+        0.7134088540858387,
+        0.8046925365697563
+      ]
+    },
+    "Large_Slow_Down_Smooth": {
+      "p_continuation": 0.4016393442622951,
+      "p_reversal": 0.5983606557377049,
+      "expected_magnitude_bps": 14.816423837659464,
+      "std_magnitude_bps": 4.234254902908792,
+      "sample_count": 122,
+      "confidence_interval": [
+        0.3189362104743908,
+        0.49034784185806524
+      ]
+    },
+    "Medium_Fast_Down_Smooth": {
+      "p_continuation": 0.24180327868852458,
+      "p_reversal": 0.7581967213114754,
+      "expected_magnitude_bps": 15038231.993362695,
+      "std_magnitude_bps": 27934277.541141946,
+      "sample_count": 244,
+      "confidence_interval": [
+        0.1923475354948765,
+        0.29926323525547377
+      ]
+    },
+    "Small_Fast_Up_Smooth": {
+      "p_continuation": 0.4448727833461835,
+      "p_reversal": 0.5551272166538165,
+      "expected_magnitude_bps": 3134852.523592908,
+      "std_magnitude_bps": 14115068.606193265,
+      "sample_count": 1297,
+      "confidence_interval": [
+        0.4180292305719019,
+        0.4720419356638643
+      ]
+    },
+    "Tiny_Fast_Down_Smooth": {
+      "p_continuation": 0.5986460348162476,
+      "p_reversal": 0.40135396518375244,
+      "expected_magnitude_bps": 28.987388302974754,
+      "std_magnitude_bps": 81.34158459910462,
+      "sample_count": 12408,
+      "confidence_interval": [
+        0.5899918846983309,
+        0.6072391208923301
+      ]
+    }
+  },
+  "entropy": 0.3375154127424666,
+  "assessment": {
+    "midc_ok": false,
+    "entropy_ok": true,
+    "persistence_ok": true,
+    "signals_ok": true,
+    "is_tradeable": false,
+    "recommended_strategy": "MarketMaking",
+    "position_scale": 0.5,
+    "reasoning": "MIDC too high (fast information diffusion)",
+    "assessed_at": "2026-01-21T13:32:19.910580478Z"
+  },
+  "data_start": "2025-10-16T14:44:48.704019167Z",
+  "data_end": "2025-12-02T15:50:31.095921233Z",
+  "snapshots_processed": 60000,
+  "engine_version": "0.1.0",
+  "tsmom_config": null,
+  "tsmom_signal": null,
+  "tsmom_stats": null
+}

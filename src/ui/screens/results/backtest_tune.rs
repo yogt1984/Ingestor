@@ -26,7 +26,7 @@ use serde_json;
 // ============================================================================
 
 /// View mode for tune results display
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TuneViewMode {
     /// Top 10 results table
     TopResults,
@@ -121,6 +121,9 @@ impl BacktestTuneResultsScreen {
         if let Some(idx) = index {
             if idx < self.tune_result.all_results.len() {
                 self.selected_index = Some(idx);
+            } else {
+                // Out of bounds - reset to None
+                self.selected_index = None;
             }
         } else {
             self.selected_index = None;
@@ -754,7 +757,7 @@ mod tests {
         let widget = screen.create_pareto_widget();
 
         assert_eq!(widget.solution_count(), 20);
-        assert!(widget.objective_names.len() >= 3);
+        assert!(widget.objective_names().len() >= 3);
     }
 
     #[test]
@@ -1005,12 +1008,12 @@ mod tests {
         let series = screen.create_heatmap_series();
         assert_eq!(series.points.len(), 20);
         // Verify first point
-        assert_eq!(series.points[0].x, 1.0);
-        assert_eq!(series.points[0].y, 0.5);
+        assert!((series.points[0].x - 1.0).abs() < 1e-10);
+        assert!((series.points[0].y - 0.5).abs() < 1e-10);
         assert!(series.points[0].label.is_some());
-        // Verify last point
-        assert_eq!(series.points[19].x, 2.9);
-        assert_eq!(series.points[19].y, 1.45);
+        // Verify last point (floating point comparison)
+        assert!((series.points[19].x - 2.9).abs() < 1e-10);
+        assert!((series.points[19].y - 1.45).abs() < 1e-10);
     }
 
     #[test]
@@ -1018,10 +1021,10 @@ mod tests {
         let tune_result = create_test_tune_result();
         let screen = BacktestTuneResultsScreen::new(tune_result);
         let widget = screen.create_pareto_widget();
-        assert_eq!(widget.objective_names.len(), 3);
-        assert_eq!(widget.objective_names[0], "Sharpe Ratio");
-        assert_eq!(widget.objective_names[1], "Total Return");
-        assert_eq!(widget.objective_names[2], "Max Drawdown");
+        assert_eq!(widget.objective_names().len(), 3);
+        assert_eq!(widget.objective_names()[0], "Sharpe Ratio");
+        assert_eq!(widget.objective_names()[1], "Total Return");
+        assert_eq!(widget.objective_names()[2], "Max Drawdown");
     }
 
     #[test]
@@ -1032,7 +1035,7 @@ mod tests {
         assert_eq!(widget.solution_count(), 20);
         // Verify solutions have correct objective count
         for i in 0..widget.solution_count() {
-            let solution = widget.solutions.get(i).unwrap();
+            let solution = widget.solutions().get(i).unwrap();
             assert_eq!(solution.objective_count(), 3);
         }
     }
@@ -1042,12 +1045,13 @@ mod tests {
         let tune_result = create_test_tune_result();
         let screen = BacktestTuneResultsScreen::new(tune_result);
         let widget = screen.create_pareto_widget();
-        let first_solution = widget.solutions.get(0).unwrap();
+        let first_solution = widget.solutions().get(0).unwrap();
         assert!(first_solution.metadata.is_some());
-        let metadata = first_solution.metadata.as_ref().unwrap();
-        assert!(metadata.contains("Spread="));
-        assert!(metadata.contains("Skew="));
-        assert!(metadata.contains("Sharpe="));
+        let metadata = first_solution.metadata.as_ref().unwrap().to_string();
+        // Metadata is JSON format with lowercase keys
+        assert!(metadata.contains("spread"));
+        assert!(metadata.contains("skew"));
+        assert!(metadata.contains("sharpe"));
     }
 
     #[test]
@@ -1259,7 +1263,7 @@ mod tests {
         
         // Verify solution IDs
         for i in 0..widget.solution_count() {
-            let solution = widget.solutions.get(i).unwrap();
+            let solution = widget.solutions().get(i).unwrap();
             assert_eq!(solution.id, format!("R{}", i + 1));
         }
     }
@@ -1271,7 +1275,7 @@ mod tests {
         let widget = screen.create_pareto_widget();
         
         // Verify first solution objectives
-        let first_solution = widget.solutions.get(0).unwrap();
+        let first_solution = widget.solutions().get(0).unwrap();
         assert_eq!(first_solution.get_objective(0), Some(2.0)); // Sharpe
         assert_eq!(first_solution.get_objective(1), Some(0.15)); // Return
         assert_eq!(first_solution.get_objective(2), Some(0.05)); // Negated drawdown
@@ -1373,12 +1377,18 @@ mod tests {
         let tune_result = create_test_tune_result();
         let screen = BacktestTuneResultsScreen::new(tune_result);
         let series = screen.create_heatmap_series();
-        
+
         // All points should be unique (different spread/skew combinations)
-        let mut points_set = std::collections::HashSet::new();
+        // Use a Vec to check for duplicates since f64 doesn't implement Hash/Eq
+        let mut seen_points: Vec<(f64, f64)> = Vec::new();
         for point in &series.points {
             let key = (point.x, point.y);
-            assert!(points_set.insert(key), "Duplicate point found: {:?}", key);
+            assert!(
+                !seen_points.iter().any(|p| (p.0 - key.0).abs() < 1e-10 && (p.1 - key.1).abs() < 1e-10),
+                "Duplicate point found: {:?}",
+                key
+            );
+            seen_points.push(key);
         }
     }
 
@@ -1630,8 +1640,6 @@ mod tests {
             screen.handle_key(key);
         }
         
-        // Should cycle through all modes
-        let modes_visited = std::collections::HashSet::new();
         // After 10 presses (2.5 cycles), should be at a valid mode
         assert!(TuneViewMode::all().contains(&screen.view_mode()));
     }
@@ -1668,9 +1676,9 @@ mod tests {
     #[test]
     fn test_export_json_round_trip() {
         let tune_result = create_test_tune_result();
-        let screen = BacktestTuneResultsScreen::new(tune_result);
+        let screen = BacktestTuneResultsScreen::new(tune_result.clone());
         let json = screen.export_to_json().unwrap();
-        
+
         // Should be able to deserialize back
         let deserialized: TuneResult = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.algorithm, tune_result.algorithm);
@@ -1735,8 +1743,8 @@ mod tests {
         let widget = screen.create_pareto_widget();
         
         // Widget should have show settings configured
-        assert!(widget.show_frontier);
-        assert!(widget.show_all_solutions);
+        assert!(widget.show_frontier());
+        assert!(widget.show_all_solutions());
     }
 
     #[test]
@@ -1854,7 +1862,7 @@ mod tests {
         let widget = screen.create_pareto_widget();
         
         // Verify solution objectives match original data
-        for (i, solution) in widget.solutions.iter().enumerate() {
+        for (i, solution) in widget.solutions().iter().enumerate() {
             let original = &screen.tune_result().all_results[i];
             assert_eq!(solution.get_objective(0), Some(original.sharpe));
             assert_eq!(solution.get_objective(1), Some(original.total_return));
@@ -1968,8 +1976,8 @@ mod tests {
         let widget = screen.create_pareto_widget();
         
         // Default axis selection should be valid
-        assert!(widget.x_axis_objective() < widget.objective_names.len());
-        assert!(widget.y_axis_objective() < widget.objective_names.len());
+        assert!(widget.x_axis_objective() < widget.objective_names().len());
+        assert!(widget.y_axis_objective() < widget.objective_names().len());
         assert_ne!(widget.x_axis_objective(), widget.y_axis_objective());
     }
 
@@ -2047,13 +2055,14 @@ mod tests {
         let tune_result = create_test_tune_result();
         let screen = BacktestTuneResultsScreen::new(tune_result);
         let widget = screen.create_pareto_widget();
-        
-        // Check metadata formatting
-        let first_solution = widget.solutions.get(0).unwrap();
+
+        // Check metadata formatting (JSON format)
+        let first_solution = widget.solutions().get(0).unwrap();
         let metadata = first_solution.metadata.as_ref().unwrap();
-        assert!(metadata.contains("Spread=1.00"));
-        assert!(metadata.contains("Skew=0.50"));
-        assert!(metadata.contains("Sharpe=2.0000"));
+        // First result: spread=1.0, skew=0.5, sharpe=2.0
+        assert_eq!(metadata["spread"], 1.0);
+        assert_eq!(metadata["skew"], 0.5);
+        assert_eq!(metadata["sharpe"], 2.0);
     }
 
     #[test]
@@ -2099,7 +2108,7 @@ mod tests {
         
         // All frontier solutions should be marked as frontier
         for &idx in &frontier {
-            let solution = widget.solutions.get(idx).unwrap();
+            let solution = widget.solutions().get(idx).unwrap();
             assert!(solution.is_frontier);
         }
     }
@@ -2214,7 +2223,7 @@ mod tests {
         
         assert_eq!(widget.solution_count(), 1);
         // Single solution should be on frontier
-        assert!(widget.solutions[0].is_frontier);
+        assert!(widget.solutions()[0].is_frontier);
     }
 
     #[test]

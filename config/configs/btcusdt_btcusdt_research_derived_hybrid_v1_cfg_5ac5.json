@@ -1,0 +1,58 @@
+{
+  "id": "cfg_5ac50dabf9336900",
+  "name": "BTCUSDT_research_derived",
+  "strategy_type": "Hybrid",
+  "symbol": "BTCUSDT",
+  "entry": {
+    "min_momentum_signal": 0.5,
+    "min_monotonicity": 0.55,
+    "min_hurst": 0.5,
+    "max_entry_entropy": 0.6,
+    "min_conditional_prob": 0.7,
+    "min_confidence": 0.5
+  },
+  "exit": {
+    "take_profit_bps": 12.364390119218491,
+    "stop_loss_bps": 6.182195059609246,
+    "max_hold_seconds": 628101,
+    "trailing_stop_activation_bps": 0.0,
+    "trailing_stop_distance_bps": 0.0,
+    "use_time_exit": false
+  },
+  "position": {
+    "method": "VolatilityTarget",
+    "base_size_fraction": 0.01,
+    "max_size_fraction": 0.2,
+    "target_volatility": 0.1,
+    "kelly_fraction": 0.25,
+    "ewma_lambda": 0.94,
+    "min_size_fraction": 0.01,
+    "scale_with_signal": true
+  },
+  "regime_filters": {
+    "min_tau_half": 10.191876201348524,
+    "max_entropy": 0.65,
+    "min_r_squared": 0.8,
+    "required_regime": "ModerateDiffusion",
+    "trade_uncertain": false,
+    "min_kappa": 0.0,
+    "max_kappa": 1.0
+  },
+  "market_making": {
+    "base_spread_bps": 2.0,
+    "max_spread_bps": 8.0,
+    "inventory_skew": 0.5,
+    "gamma": 0.2214919426773092,
+    "kappa": 0.1,
+    "refresh_interval_ms": 100,
+    "widen_in_high_entropy": true,
+    "entropy_widen_threshold": 0.5,
+    "spread_widen_multiplier": 1.5
+  },
+  "tsmom": null,
+  "source_research_id": "11b9643b-8b0c-4845-9218-d4cd2e9446f8",
+  "created_at": "2026-01-21T13:03:11.529906530Z",
+  "version": 1,
+  "active": true,
+  "description": null
+}

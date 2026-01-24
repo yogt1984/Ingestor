@@ -24,7 +24,7 @@ use crate::ui::widgets::{
 // ============================================================================
 
 /// View mode for regime search results display
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RegimeSearchViewMode {
     /// Top 10 results table
     TopResults,
@@ -421,6 +421,7 @@ mod tests {
                 max_drawdown: -0.05 - i as f64 * 0.005,
                 num_trades: 100 - i * 5,
                 win_rate: 0.55 - i as f64 * 0.01,
+                avg_trade_pnl: 0.001 - i as f64 * 0.0001,
             });
         }
 
@@ -528,7 +529,7 @@ mod tests {
     #[test]
     fn test_create_results_table() {
         let result = create_test_regime_search_result();
-        let screen = BacktestRegimeSearchResultsScreen::new(result);
+        let screen = BacktestRegimeSearchResultsScreen::new(result.clone());
         let all: Vec<&RegimeSearchResultItem> = result.all_results.iter().collect();
         let (headers, rows) = screen.create_results_table(&all);
         assert_eq!(headers.len(), 12);

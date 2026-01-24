@@ -89,7 +89,7 @@ fn test_widget_add_value() {
     let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty());
     widget.handle_key(key);
 
-    assert!(widget.editing);
+    assert!(widget.is_editing());
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn test_widget_delete_value() {
         .with_values(vec![1.0, 2.0, 3.0])
         .set_focused(true);
 
-    widget.selected = Some(1);
+    widget.set_selected(Some(1));
     let key = KeyEvent::new(KeyCode::Delete, KeyModifiers::empty());
     widget.handle_key(key);
 
@@ -111,12 +111,12 @@ fn test_widget_edit_value() {
         .with_values(vec![1.0, 2.0, 3.0])
         .set_focused(true);
 
-    widget.selected = Some(1);
+    widget.set_selected(Some(1));
     let key_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::empty());
     widget.handle_key(key_enter);
 
-    assert!(widget.editing);
-    assert_eq!(widget.text_buffer, "2.00");
+    assert!(widget.is_editing());
+    assert_eq!(widget.text_buffer(), "2.00");
 }
 
 #[test]
@@ -224,7 +224,7 @@ fn test_widget_full_workflow() {
     assert_eq!(widget.values(), &[10.0, 20.0, 30.0]);
 
     // Edit value
-    widget.selected = Some(1);
+    widget.set_selected(Some(1));
     widget.update_at(1, 25.0);
     assert_eq!(widget.values(), &[10.0, 25.0, 30.0]);
 

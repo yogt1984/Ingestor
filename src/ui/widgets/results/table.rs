@@ -120,6 +120,16 @@ impl TableHeader {
         self.sortable = sortable;
         self
     }
+
+    /// Get whether column is sortable (getter for tests)
+    pub fn sortable(&self) -> bool {
+        self.sortable
+    }
+
+    /// Get column width (getter for tests)
+    pub fn width(&self) -> Option<u16> {
+        self.width
+    }
 }
 
 /// Table row (vector of cell strings)
@@ -159,6 +169,11 @@ impl TableRow {
     /// Check if row is empty
     pub fn is_empty(&self) -> bool {
         self.cells.is_empty()
+    }
+
+    /// Get all cells (for backwards compatibility with tests)
+    pub fn cells(&self) -> &[String] {
+        &self.cells
     }
 }
 

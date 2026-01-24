@@ -214,6 +214,36 @@ where
         self.selected
     }
 
+    /// Set selected index (for testing)
+    pub fn set_selected(&mut self, index: Option<usize>) {
+        self.selected = index;
+        if let Some(idx) = index {
+            self.list_state.select(Some(idx));
+        } else {
+            self.list_state.select(None);
+        }
+    }
+
+    /// Get filter string
+    pub fn filter(&self) -> &str {
+        &self.filter
+    }
+
+    /// Set filter string (for testing)
+    pub fn set_filter(&mut self, filter: impl Into<String>) {
+        self.filter = filter.into();
+    }
+
+    /// Get list state reference
+    pub fn list_state(&self) -> &ListState {
+        &self.list_state
+    }
+
+    /// Get mutable list state reference
+    pub fn list_state_mut(&mut self) -> &mut ListState {
+        &mut self.list_state
+    }
+
     /// Check if dropdown is expanded
     pub fn is_expanded(&self) -> bool {
         self.expanded

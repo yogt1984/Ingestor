@@ -25,7 +25,7 @@ use crate::ui::widgets::{
 // ============================================================================
 
 /// View mode for simulate results display
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SimulateViewMode {
     /// Summary view with key metrics
     Summary,
@@ -474,8 +474,8 @@ mod tests {
                 start_date: NaiveDate::from_ymd_opt(2024, 1, 1 + i * 7).unwrap(),
                 end_date: NaiveDate::from_ymd_opt(2024, 1, 7 + i * 7).unwrap(),
                 days: vec![],
-                session_count: 5 + i,
-                total_trades: 100 + i * 20,
+                session_count: 5 + i as usize,
+                total_trades: 100 + i as usize * 20,
                 cumulative_pnl: 100.0 + i as f64 * 50.0,
                 avg_fill_rate: 0.08 + i as f64 * 0.01,
                 weekly_sharpe: 1.5 - i as f64 * 0.1,
@@ -522,6 +522,8 @@ mod tests {
                     psr: 0.95,
                     sharpe_ci_lower: 1.0,
                     sharpe_ci_upper: 1.4,
+                    pnl_vs_expected: 1.0,
+                    sharpe_vs_expected: 0.95,
                 },
                 verdict: ValidationVerdict::GoLive,
                 verdict_reasons: vec![

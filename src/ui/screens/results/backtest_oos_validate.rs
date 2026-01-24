@@ -27,7 +27,7 @@ use crate::ui::widgets::{
 // ============================================================================
 
 /// View mode for OOS validate results display
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OOSValidateViewMode {
     /// Summary view with key metrics
     Summary,

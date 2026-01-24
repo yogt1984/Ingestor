@@ -25,7 +25,7 @@ use crate::ui::widgets::{
 // ============================================================================
 
 /// View mode for regime optimize results display
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RegimeOptimizeViewMode {
     /// Summary view with key metrics
     Summary,
@@ -586,7 +586,7 @@ mod tests {
     #[test]
     fn test_create_regime_row() {
         let result = create_test_regime_optimize_result();
-        let screen = BacktestRegimeOptimizeResultsScreen::new(result);
+        let screen = BacktestRegimeOptimizeResultsScreen::new(result.clone());
         let row = screen.create_regime_row(&result.high_entropy);
         assert_eq!(row.cells().len(), 12);
         assert_eq!(row.cells()[0], "High");
@@ -634,7 +634,7 @@ mod tests {
     #[test]
     fn test_should_quote_display() {
         let result = create_test_regime_optimize_result();
-        let screen = BacktestRegimeOptimizeResultsScreen::new(result);
+        let screen = BacktestRegimeOptimizeResultsScreen::new(result.clone());
         let row = screen.create_regime_row(&result.high_entropy);
         assert_eq!(row.cells()[6], "Yes");
         let row = screen.create_regime_row(&result.low_entropy);

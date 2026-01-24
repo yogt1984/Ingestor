@@ -31,6 +31,22 @@ pub struct CreateParams {
     pub dry_run: bool,
 }
 
+impl Default for CreateParams {
+    fn default() -> Self {
+        Self {
+            research: PathBuf::from("./research"),
+            output: PathBuf::from("./config"),
+            symbol: "BTCUSDT".to_string(),
+            name: None,
+            strategy: None,
+            validate: false,
+            data: PathBuf::from("./data/features"),
+            stages: "all".to_string(),
+            dry_run: false,
+        }
+    }
+}
+
 /// Parameters for the `list` command
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListParams {
@@ -48,6 +64,19 @@ pub struct ListParams {
     pub limit: usize,
 }
 
+impl Default for ListParams {
+    fn default() -> Self {
+        Self {
+            store: PathBuf::from("./config"),
+            symbol: None,
+            strategy: None,
+            name: None,
+            active_only: false,
+            limit: 10,
+        }
+    }
+}
+
 /// Parameters for the `show` command
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShowParams {
@@ -57,6 +86,16 @@ pub struct ShowParams {
     pub id: String,
     /// Show verbose details
     pub verbose: bool,
+}
+
+impl Default for ShowParams {
+    fn default() -> Self {
+        Self {
+            store: PathBuf::from("./config"),
+            id: String::new(),
+            verbose: false,
+        }
+    }
 }
 
 /// Builder for CreateParams

@@ -24,7 +24,7 @@ use crate::ui::widgets::{
 // ============================================================================
 
 /// View mode for grid results display
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GridViewMode {
     /// Top 10 results table
     TopResults,
@@ -455,7 +455,7 @@ mod tests {
     #[test]
     fn test_create_results_table() {
         let result = create_test_grid_result();
-        let screen = BacktestGridResultsScreen::new(result);
+        let screen = BacktestGridResultsScreen::new(result.clone());
         let all: Vec<&GridResultItem> = result.all_results.iter().collect();
         let (headers, rows) = screen.create_results_table(&all);
         assert_eq!(headers.len(), 8);

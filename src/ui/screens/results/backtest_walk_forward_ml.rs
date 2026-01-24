@@ -26,7 +26,7 @@ use crate::ui::widgets::{
 // ============================================================================
 
 /// View mode for walk-forward ML results display
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WalkForwardMLViewMode {
     /// Summary view with key metrics
     Summary,
@@ -491,10 +491,10 @@ mod tests {
         for i in 0..5 {
             fold_results.push(WalkForwardMLFoldResult {
                 fold_num: i + 1,
-                train_start_ms: 1000 + i * 1000,
-                train_end_ms: 2000 + i * 1000,
-                test_start_ms: 2000 + i * 1000,
-                test_end_ms: 3000 + i * 1000,
+                train_start_ms: 1000 + i as i64 * 1000,
+                train_end_ms: 2000 + i as i64 * 1000,
+                test_start_ms: 2000 + i as i64 * 1000,
+                test_end_ms: 3000 + i as i64 * 1000,
                 train_events: 5000 + i * 1000,
                 test_events: 2000 + i * 500,
                 best_weights: MLModelWeights {

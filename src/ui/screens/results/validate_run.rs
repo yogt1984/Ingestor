@@ -25,7 +25,7 @@ use crate::ui::widgets::{
 // ============================================================================
 
 /// View mode for validate run results display
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ValidateRunViewMode {
     /// Summary view with key metrics
     Summary,
@@ -553,7 +553,7 @@ mod tests {
 
     #[test]
     fn test_format_status() {
-        assert_eq!(ValidateRunResultsScreen::format_status(&PipelineStatus::Completed), "Completed");
+        assert_eq!(ValidateRunResultsScreen::format_status(&PipelineStatus::Passed), "Passed");
         assert_eq!(ValidateRunResultsScreen::format_status(&PipelineStatus::Failed), "Failed");
     }
 
