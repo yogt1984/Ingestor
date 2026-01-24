@@ -15,7 +15,7 @@ use crate::commands::backtest::{
     RegimeOptimizeResult, TrainResult, WalkForwardMLResult, SweepResult,
     WalkForwardResult, OOSValidateResult, SimulateResult, CampaignResult,
     PaperResult, GridResult, ListAlgorithmsResult, InfoResult, ValidateDataResult,
-    CompareResult,
+    CompareResult, HeadToHeadResult,
     RegimeOptimizeMetrics, OptimalRegimeParams, StrategyComparison,
     WalkForwardMLAggregate, WalkForwardAggregate, OOSValidateVerdictSummary,
 };
@@ -28,7 +28,7 @@ use crate::commands::params::backtest_params::{
     RegimeOptimizeParams, TrainParams, WalkForwardMLParams, SweepParams,
     WalkForwardParams, OOSValidateParams, SimulateParams, GridParams,
     CampaignParams, PaperParams, ListAlgorithmsParams, InfoParams, ValidateDataParams,
-    CompareParams,
+    CompareParams, HeadToHeadParams,
 };
 use crate::commands::params::research_params::{RunParams as ResearchRunParams, StatusParams as ResearchStatusParams};
 use crate::commands::params::validate_params::{
@@ -83,6 +83,8 @@ pub enum CommandResult {
     BacktestValidateData(ValidateDataResult),
     /// Backtest compare result
     BacktestCompare(CompareResult),
+    /// Backtest head-to-head result
+    BacktestHeadToHead(HeadToHeadResult),
     /// Research run result
     ResearchRun(ResearchRunResult),
     /// Research status result
@@ -600,6 +602,37 @@ impl TUICommandExecutor {
         });
 
         Ok(CommandResult::BacktestCompare(result))
+    }
+
+    /// Execute backtest head-to-head command (two configuration comparison)
+    pub fn execute_backtest_head_to_head(
+        &self,
+        params: HeadToHeadParams,
+    ) -> Result<CommandResult> {
+        if self.is_cancelled() {
+            return Err(anyhow::anyhow!("Execution cancelled"));
+        }
+
+        self.send_progress(ProgressEvent::Started {
+            total: Some(2),
+            message: format!(
+                "Starting head-to-head: {} vs {}",
+                params.config_a.config_name,
+                params.config_b.config_name
+            ),
+        });
+
+        let callback = self.create_callback();
+        let result = BacktestCommands::head_to_head(params, callback)?;
+
+        self.send_progress(ProgressEvent::Completed {
+            message: format!(
+                "Head-to-head complete: Winner is {}",
+                result.relative_performance.winner_name
+            ),
+        });
+
+        Ok(CommandResult::BacktestHeadToHead(result))
     }
 
     /// Execute research run command
