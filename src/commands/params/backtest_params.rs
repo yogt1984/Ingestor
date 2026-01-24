@@ -12596,6 +12596,283 @@ impl Default for CompareParamsBuilder {
     }
 }
 
+/// Configuration for a single algorithm in head-to-head comparison
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeadToHeadConfig {
+    /// Algorithm identifier (e.g., "as", "ml", "fixed")
+    pub algorithm: String,
+    /// Display name for this configuration
+    pub config_name: String,
+    /// Path to ML weights file (optional, for ML algorithms)
+    pub weights_file: Option<PathBuf>,
+    /// Base spread in basis points
+    pub spread: f64,
+    /// Inventory skew factor
+    pub skew: f64,
+}
+
+impl Default for HeadToHeadConfig {
+    fn default() -> Self {
+        Self {
+            algorithm: "as".to_string(),
+            config_name: "Default".to_string(),
+            weights_file: None,
+            spread: 2.0,
+            skew: 0.5,
+        }
+    }
+}
+
+/// Parameters for the `head-to-head` command (two configuration comparison)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeadToHeadParams {
+    /// Path to data directory containing Parquet files
+    pub data_path: PathBuf,
+    /// First configuration
+    pub config_a: HeadToHeadConfig,
+    /// Second configuration
+    pub config_b: HeadToHeadConfig,
+    /// Maximum inventory
+    pub max_inventory: f64,
+    /// Quote size
+    pub quote_size: f64,
+    /// Fee rate (e.g., 0.0001 = 1 bps)
+    pub fee_rate: f64,
+    /// Fill probability (0.0-1.0) for realistic simulation
+    pub fill_prob: f64,
+    /// Queue position (0.0=front, 1.0=back)
+    pub queue_pos: f64,
+    /// High entropy threshold
+    pub high_entropy: f64,
+    /// Low entropy threshold
+    pub low_entropy: f64,
+    /// Output file for JSON results (optional)
+    pub output: Option<PathBuf>,
+}
+
+impl Default for HeadToHeadParams {
+    fn default() -> Self {
+        Self {
+            data_path: PathBuf::from("./data/features"),
+            config_a: HeadToHeadConfig {
+                algorithm: "as".to_string(),
+                config_name: "Config A".to_string(),
+                weights_file: None,
+                spread: 2.0,
+                skew: 0.5,
+            },
+            config_b: HeadToHeadConfig {
+                algorithm: "as".to_string(),
+                config_name: "Config B".to_string(),
+                weights_file: None,
+                spread: 3.0,
+                skew: 0.7,
+            },
+            max_inventory: 0.1,
+            quote_size: 0.001,
+            fee_rate: 0.0001,
+            fill_prob: 0.1,
+            queue_pos: 0.5,
+            high_entropy: 0.7,
+            low_entropy: 0.3,
+            output: None,
+        }
+    }
+}
+
+/// Builder for `HeadToHeadParams` with validation
+pub struct HeadToHeadParamsBuilder {
+    data_path: Option<PathBuf>,
+    config_a: Option<HeadToHeadConfig>,
+    config_b: Option<HeadToHeadConfig>,
+    max_inventory: Option<f64>,
+    quote_size: Option<f64>,
+    fee_rate: Option<f64>,
+    fill_prob: Option<f64>,
+    queue_pos: Option<f64>,
+    high_entropy: Option<f64>,
+    low_entropy: Option<f64>,
+    output: Option<PathBuf>,
+}
+
+impl HeadToHeadParamsBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            data_path: None,
+            config_a: None,
+            config_b: None,
+            max_inventory: None,
+            quote_size: None,
+            fee_rate: None,
+            fill_prob: None,
+            queue_pos: None,
+            high_entropy: None,
+            low_entropy: None,
+            output: None,
+        }
+    }
+
+    /// Set data directory path
+    pub fn data_path(mut self, path: PathBuf) -> Self {
+        self.data_path = Some(path);
+        self
+    }
+
+    /// Set first configuration
+    pub fn config_a(mut self, config: HeadToHeadConfig) -> Self {
+        self.config_a = Some(config);
+        self
+    }
+
+    /// Set second configuration
+    pub fn config_b(mut self, config: HeadToHeadConfig) -> Self {
+        self.config_b = Some(config);
+        self
+    }
+
+    /// Set max inventory
+    pub fn max_inventory(mut self, max_inventory: f64) -> Self {
+        self.max_inventory = Some(max_inventory);
+        self
+    }
+
+    /// Set quote size
+    pub fn quote_size(mut self, quote_size: f64) -> Self {
+        self.quote_size = Some(quote_size);
+        self
+    }
+
+    /// Set fee rate
+    pub fn fee_rate(mut self, fee_rate: f64) -> Self {
+        self.fee_rate = Some(fee_rate);
+        self
+    }
+
+    /// Set fill probability
+    pub fn fill_prob(mut self, fill_prob: f64) -> Self {
+        self.fill_prob = Some(fill_prob);
+        self
+    }
+
+    /// Set queue position
+    pub fn queue_pos(mut self, queue_pos: f64) -> Self {
+        self.queue_pos = Some(queue_pos);
+        self
+    }
+
+    /// Set high entropy threshold
+    pub fn high_entropy(mut self, high_entropy: f64) -> Self {
+        self.high_entropy = Some(high_entropy);
+        self
+    }
+
+    /// Set low entropy threshold
+    pub fn low_entropy(mut self, low_entropy: f64) -> Self {
+        self.low_entropy = Some(low_entropy);
+        self
+    }
+
+    /// Set output file path
+    pub fn output(mut self, path: Option<PathBuf>) -> Self {
+        self.output = path;
+        self
+    }
+
+    /// Build `HeadToHeadParams` with validation
+    pub fn build(self) -> Result<HeadToHeadParams> {
+        let data_path = self.data_path.unwrap_or_else(|| PathBuf::from("./data/features"));
+
+        // Validate data path
+        if !data_path.exists() {
+            anyhow::bail!("Data directory does not exist: {:?}", data_path);
+        }
+
+        if !data_path.is_dir() {
+            anyhow::bail!("Data path is not a directory: {:?}", data_path);
+        }
+
+        // Validate numeric parameters
+        let max_inventory = self.max_inventory.unwrap_or(0.1);
+        if max_inventory <= 0.0 {
+            anyhow::bail!("Max inventory must be positive");
+        }
+
+        let quote_size = self.quote_size.unwrap_or(0.001);
+        if quote_size <= 0.0 {
+            anyhow::bail!("Quote size must be positive");
+        }
+
+        let fee_rate = self.fee_rate.unwrap_or(0.0001);
+        if fee_rate < 0.0 {
+            anyhow::bail!("Fee rate cannot be negative");
+        }
+
+        let fill_prob = self.fill_prob.unwrap_or(0.1);
+        if !(0.0..=1.0).contains(&fill_prob) {
+            anyhow::bail!("Fill probability must be between 0.0 and 1.0");
+        }
+
+        let queue_pos = self.queue_pos.unwrap_or(0.5);
+        if !(0.0..=1.0).contains(&queue_pos) {
+            anyhow::bail!("Queue position must be between 0.0 and 1.0");
+        }
+
+        let high_entropy = self.high_entropy.unwrap_or(0.7);
+        if !(0.0..=1.0).contains(&high_entropy) {
+            anyhow::bail!("High entropy threshold must be between 0.0 and 1.0");
+        }
+
+        let low_entropy = self.low_entropy.unwrap_or(0.3);
+        if !(0.0..=1.0).contains(&low_entropy) {
+            anyhow::bail!("Low entropy threshold must be between 0.0 and 1.0");
+        }
+
+        if low_entropy >= high_entropy {
+            anyhow::bail!("Low entropy threshold must be less than high entropy threshold");
+        }
+
+        let config_a = self.config_a.unwrap_or_default();
+        let config_b = self.config_b.unwrap_or_default();
+
+        // Validate spreads
+        if config_a.spread <= 0.0 {
+            anyhow::bail!("Config A spread must be positive");
+        }
+        if config_b.spread <= 0.0 {
+            anyhow::bail!("Config B spread must be positive");
+        }
+
+        // Validate skews
+        if !(0.0..=1.0).contains(&config_a.skew) {
+            anyhow::bail!("Config A skew must be between 0.0 and 1.0");
+        }
+        if !(0.0..=1.0).contains(&config_b.skew) {
+            anyhow::bail!("Config B skew must be between 0.0 and 1.0");
+        }
+
+        Ok(HeadToHeadParams {
+            data_path,
+            config_a,
+            config_b,
+            max_inventory,
+            quote_size,
+            fee_rate,
+            fill_prob,
+            queue_pos,
+            high_entropy,
+            low_entropy,
+            output: self.output,
+        })
+    }
+}
+
+impl Default for HeadToHeadParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 
 #[cfg(test)]
 mod paper_params_tests {

@@ -30,7 +30,7 @@ use num::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::common::{ProgressCallback, ProgressEvent, LogLevel};
-use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams, WalkForwardMLParams, SweepParams, WalkForwardParams, OOSValidateParams, SimulateParams, GridParams, CampaignParams, PaperParams, ListAlgorithmsParams, InfoParams, ValidateDataParams, CompareParams};
+use crate::commands::params::backtest_params::{EvaluateParams, TuneParams, RegimeSearchParams, MultiObjectiveParams, RegimeOptimizeParams, TrainParams, WalkForwardMLParams, SweepParams, WalkForwardParams, OOSValidateParams, SimulateParams, GridParams, CampaignParams, PaperParams, ListAlgorithmsParams, InfoParams, ValidateDataParams, CompareParams, HeadToHeadParams, HeadToHeadConfig};
 use crate::backtest::{
     BacktestEngine, BacktestConfig, BacktestResults,
     replay::{ParquetReplay, ReplayConfig},
@@ -4103,6 +4103,233 @@ impl BacktestCommands {
             time_span_hours,
         })
     }
+
+    /// Head-to-head comparison of two algorithm configurations
+    ///
+    /// This command runs two backtests with different configurations side-by-side.
+    /// Unlike `compare` which specifically compares ML vs AS, this allows comparing
+    /// any two configurations (different algorithms, parameters, etc.).
+    ///
+    /// Returns `HeadToHeadResult` with side-by-side metrics and relative performance.
+    pub fn head_to_head(
+        params: HeadToHeadParams,
+        callback: Arc<dyn ProgressCallback>,
+    ) -> Result<HeadToHeadResult> {
+        callback.on_event(ProgressEvent::Started {
+            total: Some(2),
+            message: format!(
+                "Starting head-to-head: {} vs {}",
+                params.config_a.config_name,
+                params.config_b.config_name
+            ),
+        });
+
+        // Load data once (shared for both runs)
+        callback.on_event(ProgressEvent::Log {
+            level: LogLevel::Info,
+            message: "Loading market data...".to_string(),
+        });
+
+        let replay_config = ReplayConfig {
+            data_dir: params.data_path.clone(),
+            ..Default::default()
+        };
+
+        let mut replay = ParquetReplay::new(replay_config.clone());
+        let num_events = replay.load()
+            .context("Failed to load market data")?;
+        let events = replay.into_events();
+
+        let time_span_hours = if let Some((start, end)) = events.first().zip(events.last()) {
+            (end.timestamp_ms - start.timestamp_ms) as f64 / (1000.0 * 60.0 * 60.0)
+        } else {
+            0.0
+        };
+
+        // Run Configuration A
+        callback.on_event(ProgressEvent::Progress {
+            current: 1,
+            total: Some(2),
+            message: format!("Running {}", params.config_a.config_name),
+        });
+
+        let result_a = Self::run_single_config(
+            &params.config_a,
+            &params,
+            events.clone(),
+            replay_config.clone(),
+            &callback,
+        )?;
+
+        // Run Configuration B
+        callback.on_event(ProgressEvent::Progress {
+            current: 2,
+            total: Some(2),
+            message: format!("Running {}", params.config_b.config_name),
+        });
+
+        let result_b = Self::run_single_config(
+            &params.config_b,
+            &params,
+            events,
+            replay_config,
+            &callback,
+        )?;
+
+        // Calculate relative performance
+        let sharpe_diff = result_a.sharpe_ratio - result_b.sharpe_ratio;
+        let sharpe_improvement_pct = if result_b.sharpe_ratio != 0.0 {
+            (sharpe_diff / result_b.sharpe_ratio.abs()) * 100.0
+        } else {
+            0.0
+        };
+
+        let return_diff = result_a.total_return - result_b.total_return;
+        let return_improvement_pct = if result_b.total_return != 0.0 {
+            (return_diff / result_b.total_return.abs()) * 100.0
+        } else {
+            0.0
+        };
+
+        let drawdown_diff = result_a.max_drawdown - result_b.max_drawdown;
+        let trade_diff = result_a.num_trades as i64 - result_b.num_trades as i64;
+
+        // Determine winner (primarily by Sharpe ratio)
+        let (winner, winner_name) = if result_a.sharpe_ratio > result_b.sharpe_ratio {
+            (params.config_a.algorithm.clone(), params.config_a.config_name.clone())
+        } else {
+            (params.config_b.algorithm.clone(), params.config_b.config_name.clone())
+        };
+
+        let relative_performance = RelativePerformance {
+            sharpe_diff,
+            sharpe_improvement_pct,
+            return_diff,
+            return_improvement_pct,
+            drawdown_diff,
+            trade_diff,
+            winner,
+            winner_name,
+        };
+
+        callback.on_event(ProgressEvent::Completed {
+            message: format!(
+                "Head-to-head complete: {} vs {} (Winner: {})",
+                params.config_a.config_name,
+                params.config_b.config_name,
+                relative_performance.winner_name
+            ),
+        });
+
+        Ok(HeadToHeadResult {
+            config_a_metrics: result_a,
+            config_b_metrics: result_b,
+            relative_performance,
+            params,
+            events_processed: num_events,
+            time_span_hours,
+        })
+    }
+
+    /// Helper: Run a single configuration for head-to-head comparison
+    fn run_single_config(
+        config: &HeadToHeadConfig,
+        params: &HeadToHeadParams,
+        events: Vec<crate::backtest::replay::ReplayEvent>,
+        replay_config: ReplayConfig,
+        callback: &Arc<dyn ProgressCallback>,
+    ) -> Result<CompareMetrics> {
+        // Parse algorithm type
+        let algo_type = AlgorithmType::from_str(&config.algorithm)
+            .map_err(|_| anyhow::anyhow!(
+                "Unknown algorithm '{}' for {}. Valid options: {}",
+                config.algorithm,
+                config.config_name,
+                AlgorithmRegistry::all_type_strings().join(", ")
+            ))?;
+
+        let algo_name = algo_type.display_name().to_string();
+
+        // Load ML weights if needed
+        let ml_weights = Self::load_ml_weights_if_needed(
+            algo_type,
+            config.weights_file.as_deref(),
+            callback,
+        )?;
+
+        // Create algorithm parameters
+        let algo_params = BacktestAlgorithmParams::new(
+            Decimal::from_f64_retain(params.max_inventory).unwrap_or(dec!(0.1)),
+            Decimal::from_f64_retain(params.quote_size).unwrap_or(dec!(0.001)),
+            config.spread,
+            config.skew,
+        ).with_ml_weights(ml_weights.unwrap_or_default());
+
+        // Create algorithm
+        let algorithm = AlgorithmRegistry::create_for_backtest(algo_type, &algo_params)
+            .map_err(|e| anyhow::anyhow!("Failed to create algorithm '{}': {}", algo_name, e))?;
+
+        // Build backtest config
+        let backtest_config = BacktestConfig {
+            replay: replay_config,
+            mm: MMConfig::default(),
+            simulator: SimulatorConfig {
+                fee_rate: Decimal::from_f64_retain(params.fee_rate).unwrap_or(dec!(0.0001)),
+                ..Default::default()
+            },
+            fill_sim: FillSimulatorConfig {
+                base_fill_probability: params.fill_prob,
+                queue_position: params.queue_pos,
+                fee_rate: Decimal::from_f64_retain(params.fee_rate).unwrap_or(dec!(0.0001)),
+                ..Default::default()
+            },
+            verbose: false,
+            use_realistic_fills: true,
+            ..Default::default()
+        };
+
+        // Run backtest
+        let mut engine = BacktestEngine::from_events_with_algorithm(
+            backtest_config,
+            events,
+            algorithm,
+        );
+        let results = engine.run()
+            .context(format!("Failed to run backtest for {}", config.config_name))?;
+
+        // Extract metrics
+        Ok(CompareMetrics {
+            algorithm: config.algorithm.clone(),
+            algorithm_name: format!("{} ({})", algo_name, config.config_name),
+            sharpe_ratio: results.metrics.sharpe_ratio,
+            total_return: results.metrics.total_return,
+            max_drawdown: results.metrics.max_drawdown,
+            num_trades: results.metrics.num_trades,
+            win_rate: results.metrics.win_rate,
+            avg_trade_pnl: results.metrics.avg_trade_pnl.to_f64().unwrap_or(0.0),
+            annualized_return: results.metrics.annualized_return,
+            sortino_ratio: results.metrics.sortino_ratio,
+            calmar_ratio: results.metrics.calmar_ratio,
+            profit_factor: results.metrics.profit_factor,
+        })
+    }
+}
+
+/// Result of the `head-to-head` command (two configuration comparison)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeadToHeadResult {
+    /// Configuration A metrics
+    pub config_a_metrics: CompareMetrics,
+    /// Configuration B metrics
+    pub config_b_metrics: CompareMetrics,
+    /// Relative performance (A vs B)
+    pub relative_performance: RelativePerformance,
+    /// Parameters used
+    pub params: HeadToHeadParams,
+    /// Number of events processed
+    pub events_processed: usize,
+    /// Time span in hours
+    pub time_span_hours: f64,
 }
 
 /// Result of a campaign simulation

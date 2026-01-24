@@ -185,6 +185,8 @@ impl SubMenu for ValidateMenu {
                     .as_ref()
                     .map(|a| algorithm_validation::is_mm_algorithm(a))
                     .unwrap_or(false)),
+            SubMenuItem::new('V', "Head-to-Head", "Compare two configurations")
+                .with_enabled(has_algo),
 
             // Results section
             SubMenuItem::new('H', "History", "Past validation runs")
@@ -434,6 +436,16 @@ impl SubMenu for ValidateMenu {
                             Ok(_) => SubMenuAction::Navigate(NavigationTarget::BacktestCompareResults),
                             Err(msg) => SubMenuAction::ShowMessage(msg),
                         }
+                    } else {
+                        SubMenuAction::ShowMessage(
+                            "No algorithm selected. Select one in Algorithms menu.".to_string()
+                        )
+                    }
+                }
+                'v' => {
+                    // Head-to-Head - navigate to results directly
+                    if has_algo {
+                        SubMenuAction::Navigate(NavigationTarget::BacktestHeadToHeadResults)
                     } else {
                         SubMenuAction::ShowMessage(
                             "No algorithm selected. Select one in Algorithms menu.".to_string()
@@ -692,7 +704,7 @@ mod tests {
         let state = create_test_state(None, ValidationStatus::default());
         let items = menu.items(&state);
 
-        assert_eq!(items.len(), 18);
+        assert_eq!(items.len(), 19);
 
         // All items except data management and presets should be disabled
         assert_eq!(items[0].key, '1');
@@ -710,8 +722,13 @@ mod tests {
         assert!(compare_item.is_some());
         assert!(!compare_item.unwrap().enabled, "Compare should be disabled without algorithm");
 
-        assert_eq!(items[17].key, 'P');
-        assert!(items[17].enabled); // Presets always enabled
+        // Head-to-Head (V) should be disabled without algorithm
+        let h2h_item = items.iter().find(|i| i.key == 'V');
+        assert!(h2h_item.is_some());
+        assert!(!h2h_item.unwrap().enabled, "Head-to-Head should be disabled without algorithm");
+
+        assert_eq!(items[18].key, 'P');
+        assert!(items[18].enabled); // Presets always enabled
     }
 
     #[test]
@@ -721,10 +738,10 @@ mod tests {
         let state = create_test_state(Some(algo), ValidationStatus::default());
         let items = menu.items(&state);
 
-        assert_eq!(items.len(), 18);
+        assert_eq!(items.len(), 19);
 
-        // Non-MM items should be enabled: 1, 2, 3, A, W, I, H, D, Q, P
-        let non_mm_keys = ['1', '2', '3', 'A', 'W', 'I', 'H', 'D', 'Q', 'P'];
+        // Non-MM items should be enabled: 1, 2, 3, A, W, I, H, D, Q, V, P
+        let non_mm_keys = ['1', '2', '3', 'A', 'W', 'I', 'H', 'D', 'Q', 'V', 'P'];
         for item in &items {
             if non_mm_keys.contains(&item.key) {
                 assert!(item.enabled, "Item {} should be enabled for non-MM algo", item.key);
