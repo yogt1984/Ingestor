@@ -8,7 +8,7 @@
 //! - Message dialog handling
 
 use crate::ui::state::GlobalState;
-use crate::ui::submenu::{NavigationTarget, SubMenuAction, SubMenu};
+use crate::ui::submenu::{NavigationTarget, SubMenuAction, SettingUpdate};
 use crate::ui::screens::{
     ResearchMenu, AlgorithmsMenu, ValidateMenu, TradeMenu, DataMenu,
     draw_research_menu, draw_algorithms_menu, draw_validate_menu,
@@ -160,6 +160,8 @@ pub enum ActionResult {
     ShowMessage(String),
     /// Execute a CLI command (the tui.rs will handle execution)
     ExecuteCommand(crate::ui::submenu::CliCommand),
+    /// Update a setting (persist, max storage, etc.)
+    UpdateSetting(SettingUpdate),
     /// Quit the application
     Quit,
 }
@@ -188,6 +190,7 @@ pub fn process_action(action: SubMenuAction) -> ActionResult {
         SubMenuAction::ExecuteCommand(cmd) => ActionResult::ExecuteCommand(cmd),
         SubMenuAction::ShowMessage(msg) => ActionResult::ShowMessage(msg),
         SubMenuAction::Refresh => ActionResult::Stay,
+        SubMenuAction::UpdateSetting(update) => ActionResult::UpdateSetting(update),
     }
 }
 
@@ -892,5 +895,54 @@ mod tests {
         let submenu = CurrentSubMenu::Research;
         let debug_str = format!("{:?}", submenu);
         assert!(!debug_str.is_empty());
+    }
+
+    // -------------------------------------------------------------------------
+    // UpdateSetting Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_action_result_update_setting_toggle_persist() {
+        let result = ActionResult::UpdateSetting(SettingUpdate::TogglePersist);
+        assert_eq!(result, ActionResult::UpdateSetting(SettingUpdate::TogglePersist));
+    }
+
+    #[test]
+    fn test_action_result_update_setting_cycle_storage() {
+        let result = ActionResult::UpdateSetting(SettingUpdate::CycleMaxStorage);
+        assert_eq!(result, ActionResult::UpdateSetting(SettingUpdate::CycleMaxStorage));
+    }
+
+    #[test]
+    fn test_process_action_update_setting_toggle_persist() {
+        let action = SubMenuAction::UpdateSetting(SettingUpdate::TogglePersist);
+        let result = process_action(action);
+        assert_eq!(result, ActionResult::UpdateSetting(SettingUpdate::TogglePersist));
+    }
+
+    #[test]
+    fn test_process_action_update_setting_cycle_storage() {
+        let action = SubMenuAction::UpdateSetting(SettingUpdate::CycleMaxStorage);
+        let result = process_action(action);
+        assert_eq!(result, ActionResult::UpdateSetting(SettingUpdate::CycleMaxStorage));
+    }
+
+    #[test]
+    fn test_update_setting_roundtrip() {
+        // Test that UpdateSetting actions are properly passed through process_action
+        let updates = vec![
+            SettingUpdate::TogglePersist,
+            SettingUpdate::CycleMaxStorage,
+        ];
+
+        for update in updates {
+            let action = SubMenuAction::UpdateSetting(update.clone());
+            let result = process_action(action);
+            assert_eq!(
+                result,
+                ActionResult::UpdateSetting(update),
+                "UpdateSetting should pass through unchanged"
+            );
+        }
     }
 }

@@ -34,6 +34,17 @@ pub enum SubMenuAction {
     ShowMessage(String),
     /// Refresh/update the current submenu state
     Refresh,
+    /// Update a setting (persist, max storage, etc.)
+    UpdateSetting(SettingUpdate),
+}
+
+/// Types of setting updates
+#[derive(Debug, Clone, PartialEq)]
+pub enum SettingUpdate {
+    /// Toggle persist to disk on/off
+    TogglePersist,
+    /// Cycle through max storage options (1, 5, 10, 50, 100, unlimited)
+    CycleMaxStorage,
 }
 
 impl Default for SubMenuAction {
@@ -938,5 +949,55 @@ mod tests {
         if let SubMenuAction::ShowMessage(msg) = action {
             assert!(msg.contains("✗"));
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // SettingUpdate tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_setting_update_toggle_persist() {
+        let update = SettingUpdate::TogglePersist;
+        assert_eq!(update, SettingUpdate::TogglePersist);
+    }
+
+    #[test]
+    fn test_setting_update_cycle_max_storage() {
+        let update = SettingUpdate::CycleMaxStorage;
+        assert_eq!(update, SettingUpdate::CycleMaxStorage);
+    }
+
+    #[test]
+    fn test_setting_update_clone() {
+        let update = SettingUpdate::TogglePersist;
+        let cloned = update.clone();
+        assert_eq!(update, cloned);
+    }
+
+    #[test]
+    fn test_submenu_action_update_setting() {
+        let action = SubMenuAction::UpdateSetting(SettingUpdate::TogglePersist);
+        if let SubMenuAction::UpdateSetting(update) = action {
+            assert_eq!(update, SettingUpdate::TogglePersist);
+        } else {
+            panic!("Expected UpdateSetting action");
+        }
+    }
+
+    #[test]
+    fn test_submenu_action_update_setting_cycle_storage() {
+        let action = SubMenuAction::UpdateSetting(SettingUpdate::CycleMaxStorage);
+        if let SubMenuAction::UpdateSetting(update) = action {
+            assert_eq!(update, SettingUpdate::CycleMaxStorage);
+        } else {
+            panic!("Expected UpdateSetting action");
+        }
+    }
+
+    #[test]
+    fn test_setting_update_debug() {
+        let update = SettingUpdate::TogglePersist;
+        let debug_str = format!("{:?}", update);
+        assert!(debug_str.contains("TogglePersist"));
     }
 }
