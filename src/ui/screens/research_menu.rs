@@ -160,11 +160,8 @@ mod tests {
     fn create_test_state(research_status: ResearchStatus) -> GlobalState {
         GlobalState {
             symbol: "BTCUSDT".to_string(),
-            active_algorithm: None,
-            validation_status: crate::ui::state::ValidationStatus::default(),
-            trading_mode: crate::ui::state::TradingMode::Idle,
             research_status,
-            data_stats: crate::ui::state::DataStats::default(),
+            ..Default::default()
         }
     }
 

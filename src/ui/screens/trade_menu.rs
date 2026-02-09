@@ -285,8 +285,7 @@ mod tests {
             active_algorithm,
             validation_status,
             trading_mode,
-            research_status: ResearchStatus::Idle,
-            data_stats: DataStats::default(),
+            ..Default::default()
         }
     }
 

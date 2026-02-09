@@ -537,9 +537,7 @@ mod tests {
             symbol: "BTCUSDT".to_string(),
             active_algorithm,
             validation_status,
-            trading_mode: TradingMode::Idle,
-            research_status: ResearchStatus::Idle,
-            data_stats: DataStats::default(),
+            ..Default::default()
         }
     }
 

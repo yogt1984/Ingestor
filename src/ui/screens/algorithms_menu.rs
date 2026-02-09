@@ -256,10 +256,7 @@ mod tests {
         GlobalState {
             symbol: "BTCUSDT".to_string(),
             active_algorithm,
-            validation_status: ValidationStatus::default(),
-            trading_mode: TradingMode::Idle,
-            research_status: ResearchStatus::Idle,
-            data_stats: DataStats::default(),
+            ..Default::default()
         }
     }
 

@@ -1,10 +1,12 @@
 //! Data Menu implementation (TUI-5.0)
 //!
 //! Provides a submenu for data management and monitoring:
-//! - [L] Live Stream: Real-time feature visualization
+//! - [L] Live Stream: Real-time feature visualization + recording
 //! - [F] Features: Detailed feature inspection
 //! - [I] Info: Dataset statistics
 //! - [Q] Quality: Data validation checks
+//! - [P] Persist: Toggle data persistence to disk
+//! - [S] Storage: Cycle max storage (1/5/10/50/100/∞ GB)
 //!
 //! Footer shows data statistics: file count, days, date range, event count
 
@@ -13,7 +15,7 @@ use crossterm::event::KeyCode;
 use crate::ui::state::{GlobalState, DataStats};
 use crate::ui::submenu::{
     SubMenu, SubMenuAction, SubMenuItem, NavigationTarget, CliCommand,
-    key_to_char, is_back_key,
+    SettingUpdate, key_to_char, is_back_key,
 };
 
 // ============================================================================
@@ -93,8 +95,22 @@ impl SubMenu for DataMenu {
     fn items(&self, state: &GlobalState) -> Vec<SubMenuItem> {
         let has_data = Self::has_data(state);
 
+        // Format persist status
+        let persist_label = if state.persist_features {
+            "Persist: ON"
+        } else {
+            "Persist: OFF"
+        };
+
+        // Format storage status
+        let storage_label = if state.max_storage_gb <= 0.0 {
+            "Storage: Unlimited".to_string()
+        } else {
+            format!("Storage: {} GB", state.max_storage_gb as i32)
+        };
+
         vec![
-            SubMenuItem::new('L', "Live Stream", "Real-time feature visualization")
+            SubMenuItem::new('L', "Live Stream", "Real-time feature visualization + recording")
                 .with_enabled(true), // Live stream always available (connects to exchange)
             SubMenuItem::new('F', "Features", "Detailed feature inspection")
                 .with_enabled(true), // Features mode always available
@@ -102,6 +118,10 @@ impl SubMenu for DataMenu {
                 .with_enabled(has_data),
             SubMenuItem::new('Q', "Quality", "Data validation checks")
                 .with_enabled(has_data),
+            SubMenuItem::new('P', persist_label, "Toggle data persistence to disk")
+                .with_enabled(true),
+            SubMenuItem::new('S', &storage_label, "Cycle max storage (1/5/10/50/100/∞ GB)")
+                .with_enabled(true),
         ]
     }
 
@@ -146,6 +166,14 @@ impl SubMenu for DataMenu {
                         )
                     }
                 }
+                'p' => {
+                    // Toggle persist to disk
+                    SubMenuAction::UpdateSetting(SettingUpdate::TogglePersist)
+                }
+                's' => {
+                    // Cycle max storage
+                    SubMenuAction::UpdateSetting(SettingUpdate::CycleMaxStorage)
+                }
                 _ => SubMenuAction::None,
             }
         } else {
@@ -189,7 +217,6 @@ pub fn draw_data_menu(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::state::{ResearchStatus, ValidationStatus, TradingMode};
     use chrono::NaiveDate;
 
     // -------------------------------------------------------------------------
@@ -199,11 +226,8 @@ mod tests {
     fn create_test_state(data_stats: DataStats) -> GlobalState {
         GlobalState {
             symbol: "BTCUSDT".to_string(),
-            active_algorithm: None,
-            validation_status: ValidationStatus::default(),
-            trading_mode: TradingMode::Idle,
-            research_status: ResearchStatus::Idle,
             data_stats,
+            ..Default::default()
         }
     }
 
@@ -380,7 +404,7 @@ mod tests {
         let menu = DataMenu::new();
         let state = create_test_state(create_data_stats_empty());
         let items = menu.items(&state);
-        assert_eq!(items.len(), 4);
+        assert_eq!(items.len(), 6); // L, F, I, Q, P, S
     }
 
     #[test]
@@ -390,7 +414,7 @@ mod tests {
         let items = menu.items(&state);
 
         let keys: Vec<char> = items.iter().map(|i| i.key).collect();
-        assert_eq!(keys, vec!['L', 'F', 'I', 'Q']);
+        assert_eq!(keys, vec!['L', 'F', 'I', 'Q', 'P', 'S']);
     }
 
     #[test]
@@ -403,6 +427,7 @@ mod tests {
         assert_eq!(items[1].label, "Features");
         assert_eq!(items[2].label, "Info");
         assert_eq!(items[3].label, "Quality");
+        // P and S labels are dynamic based on state
     }
 
     #[test]
@@ -737,5 +762,84 @@ mod tests {
         };
         let result = DataMenu::format_size(&stats_large);
         assert!(result.contains("MB"));
+    }
+
+    // -------------------------------------------------------------------------
+    // Settings tests (P and S keys)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_handle_key_p_toggle_persist() {
+        let mut menu = DataMenu::new();
+        let state = create_test_state(create_data_stats_empty());
+
+        let action = menu.handle_key(KeyCode::Char('p'), &state);
+        assert_eq!(action, SubMenuAction::UpdateSetting(SettingUpdate::TogglePersist));
+    }
+
+    #[test]
+    fn test_handle_key_s_cycle_storage() {
+        let mut menu = DataMenu::new();
+        let state = create_test_state(create_data_stats_empty());
+
+        let action = menu.handle_key(KeyCode::Char('s'), &state);
+        assert_eq!(action, SubMenuAction::UpdateSetting(SettingUpdate::CycleMaxStorage));
+    }
+
+    #[test]
+    fn test_persist_label_on() {
+        let menu = DataMenu::new();
+        let mut state = create_test_state(create_data_stats_empty());
+        state.persist_features = true;
+
+        let items = menu.items(&state);
+        let persist_item = items.iter().find(|i| i.key == 'P').unwrap();
+        assert_eq!(persist_item.label, "Persist: ON");
+    }
+
+    #[test]
+    fn test_persist_label_off() {
+        let menu = DataMenu::new();
+        let mut state = create_test_state(create_data_stats_empty());
+        state.persist_features = false;
+
+        let items = menu.items(&state);
+        let persist_item = items.iter().find(|i| i.key == 'P').unwrap();
+        assert_eq!(persist_item.label, "Persist: OFF");
+    }
+
+    #[test]
+    fn test_storage_label_limited() {
+        let menu = DataMenu::new();
+        let mut state = create_test_state(create_data_stats_empty());
+        state.max_storage_gb = 10.0;
+
+        let items = menu.items(&state);
+        let storage_item = items.iter().find(|i| i.key == 'S').unwrap();
+        assert_eq!(storage_item.label, "Storage: 10 GB");
+    }
+
+    #[test]
+    fn test_storage_label_unlimited() {
+        let menu = DataMenu::new();
+        let mut state = create_test_state(create_data_stats_empty());
+        state.max_storage_gb = 0.0;
+
+        let items = menu.items(&state);
+        let storage_item = items.iter().find(|i| i.key == 'S').unwrap();
+        assert_eq!(storage_item.label, "Storage: Unlimited");
+    }
+
+    #[test]
+    fn test_settings_items_always_enabled() {
+        let menu = DataMenu::new();
+        let state = create_test_state(create_data_stats_empty());
+
+        let items = menu.items(&state);
+        let persist_item = items.iter().find(|i| i.key == 'P').unwrap();
+        let storage_item = items.iter().find(|i| i.key == 'S').unwrap();
+
+        assert!(persist_item.enabled);
+        assert!(storage_item.enabled);
     }
 }

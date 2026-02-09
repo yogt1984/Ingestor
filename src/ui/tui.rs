@@ -15,24 +15,23 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     Terminal,
-    layout::{Constraint, Direction, Layout, Rect},
-    widgets::{Block, Borders, Paragraph, Sparkline, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    layout::{Constraint, Direction, Layout},
+    widgets::{Block, Borders, Paragraph, Sparkline},
     style::{Style, Color, Modifier},
     text::{Span, Line},
 };
 
 use crate::features::feature_fusion::FeaturesSnapshot;
 use crate::execution::market_maker::{MarketMakerEngine, MMConfig, MarketRegime};
-use crate::execution::mm_simulator::{PaperTradingEngine, PaperTradingState, GenericPaperTradingEngine, RiskManagedPaperTradingEngine, RiskManagedState, SimulatorConfig};
-use crate::execution::risk_manager::{RiskAction, RiskConfig};
+use crate::execution::mm_simulator::{PaperTradingEngine, PaperTradingState, RiskManagedPaperTradingEngine, RiskManagedState, SimulatorConfig};
+use crate::execution::risk_manager::RiskAction;
 use crate::forward_testing::{ForwardTestSession, ForwardTestConfig};
 use crate::execution::presets::{PresetStore, ParameterPreset};
 use crate::strategies::AlgorithmType;
 use crate::ui::screens::{ResearchScreen, draw_research_screen, MainMenuState, draw_main_menu, MainMenuItem};
 use crate::ui::tui_integration::{MenuIntegration, CurrentSubMenu, process_action, ActionResult, draw_menu_with_status};
 use crate::ui::state::GlobalState;
-use crate::ui::submenu::SubMenu;
-use crate::ui::widgets::draw_status_bar;
+use crate::ui::submenu::{SubMenu, SettingUpdate};
 
 type Term = Terminal<CrosstermBackend<io::Stdout>>;
 
@@ -42,7 +41,7 @@ const UPDATE_INTERVAL_MS: u64 = 1000; // 1Hz update rate
 /// Application mode
 #[derive(Clone, PartialEq)]
 enum AppMode {
-    Menu,
+    NewMenu,         // Main menu (TUI v0.1)
     Live,
     LiveMM,          // Live with Market Maker
     PresetSelect,    // Preset selection for paper trading
@@ -57,7 +56,6 @@ enum AppMode {
     Sweep,           // Parameter sensitivity sweep (CLI parity)
     OOSValidation,   // Out-of-sample validation (CLI parity)
     Research,        // Research Dashboard (Task 4.1)
-    NewMenu,         // New TUI v0.1 menu (under development)
     // T-4.5: Config and results screens
     ConfigScreen(crate::ui::submenu::NavigationTarget),
     ResultsScreen(crate::ui::submenu::NavigationTarget),
@@ -547,7 +545,7 @@ fn main_loop(
     symbol: String,
     mut settings: TuiSettings,
 ) -> anyhow::Result<TuiSettings> {
-    let mut mode = AppMode::Menu;
+    let mut mode = AppMode::NewMenu;
     let mut scroll_offset: u16 = 0;
     let mut last_update = Instant::now();
     let mut accumulator = FeatureAccumulator::default();
@@ -590,6 +588,8 @@ fn main_loop(
     // TUI-7.0: Menu integration with submenus
     let mut global_state = GlobalState {
         symbol: symbol.clone(),
+        persist_features: settings.persist_features,
+        max_storage_gb: settings.max_storage_gb,
         ..Default::default()
     };
     let mut menu_integration = MenuIntegration::new();
@@ -599,75 +599,8 @@ fn main_loop(
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
                 match mode {
-                    AppMode::Menu => match key.code {
-                        KeyCode::Char('0') => mode = AppMode::Live,
-                        KeyCode::Char('1') => {
-                            mode = AppMode::LiveMM;
-                            // Start forward testing session
-                            forward_session = ForwardTestSession::new(ForwardTestConfig::default());
-                            forward_session.start();
-                        }
-                        KeyCode::Char('2') => {
-                            mode = AppMode::Features;
-                            scroll_offset = 0;
-                        }
-                        KeyCode::Char('3') => mode = AppMode::Backtest,
-                        KeyCode::Char('4') => mode = AppMode::WalkForward,
-                        KeyCode::Char('5') => mode = AppMode::DataQuality,
-                        KeyCode::Char('6') => {
-                            // Paper trade with preset - go to preset selection
-                            preset_store = PresetStore::load();
-                            selected_preset_idx = 0;
-                            mode = AppMode::PresetSelect;
-                            scroll_offset = 0;
-                        }
-                        KeyCode::Char('7') => {
-                            mode = AppMode::CampaignSimulation;
-                            scroll_offset = 0;
-                        }
-                        KeyCode::Char('8') => {
-                            mode = AppMode::DataInfo;
-                        }
-                        KeyCode::Char('9') => {
-                            mode = AppMode::GridSearch;
-                            scroll_offset = 0;
-                        }
-                        KeyCode::Char('w') => {
-                            mode = AppMode::Sweep;
-                            scroll_offset = 0;
-                        }
-                        KeyCode::Char('o') => {
-                            mode = AppMode::OOSValidation;
-                            scroll_offset = 0;
-                        }
-                        KeyCode::Char('r') => {
-                            mode = AppMode::Research;
-                            let _ = research_screen.refresh();
-                        }
-                        KeyCode::Char('n') => {
-                            // New TUI v0.1 menu (under development)
-                            mode = AppMode::NewMenu;
-                            main_menu_state = MainMenuState::new(&symbol);
-                        }
-                        KeyCode::Char('p') => {
-                            settings.persist_features = !settings.persist_features;
-                        }
-                        KeyCode::Char('s') => {
-                            // Cycle through storage options: 1, 5, 10, 50, 100, unlimited
-                            settings.max_storage_gb = match settings.max_storage_gb as i32 {
-                                0 => 1.0,
-                                1 => 5.0,
-                                5 => 10.0,
-                                10 => 50.0,
-                                50 => 100.0,
-                                _ => 0.0, // unlimited
-                            };
-                        }
-                        KeyCode::Char('q') | KeyCode::Esc => return Ok(settings),
-                        _ => {}
-                    },
                     AppMode::Live => match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => mode = AppMode::Menu,
+                        KeyCode::Char('q') | KeyCode::Esc => mode = AppMode::NewMenu,
                         _ => {}
                     },
                     AppMode::LiveMM => match key.code {
@@ -680,7 +613,7 @@ fn main_loop(
                                         summary.session_id, summary.trade_count);
                                 }
                             }
-                            mode = AppMode::Menu;
+                            mode = AppMode::NewMenu;
                         }
                         KeyCode::Char('r') => {
                             // Reset MM state and start new session
@@ -691,7 +624,7 @@ fn main_loop(
                         _ => {}
                     },
                     AppMode::PresetSelect => match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => mode = AppMode::Menu,
+                        KeyCode::Char('q') | KeyCode::Esc => mode = AppMode::NewMenu,
                         KeyCode::Up | KeyCode::Char('k') => {
                             if selected_preset_idx > 0 {
                                 selected_preset_idx -= 1;
@@ -740,7 +673,7 @@ fn main_loop(
                             }
                             active_preset = None;
                             risk_managed_paper_trading = None;
-                            mode = AppMode::Menu;
+                            mode = AppMode::NewMenu;
                         }
                         KeyCode::Char('r') => {
                             // Reset but keep preset (including risk manager)
@@ -768,7 +701,7 @@ fn main_loop(
                         _ => {}
                     },
                     AppMode::Features => match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => mode = AppMode::Menu,
+                        KeyCode::Char('q') | KeyCode::Esc => mode = AppMode::NewMenu,
                         KeyCode::Up | KeyCode::Char('k') => {
                             scroll_offset = scroll_offset.saturating_sub(1);
                         }
@@ -784,7 +717,7 @@ fn main_loop(
                         _ => {}
                     },
                     AppMode::Backtest | AppMode::WalkForward | AppMode::DataQuality | AppMode::CampaignSimulation | AppMode::DataInfo | AppMode::GridSearch | AppMode::Sweep | AppMode::OOSValidation => match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => mode = AppMode::Menu,
+                        KeyCode::Char('q') | KeyCode::Esc => mode = AppMode::NewMenu,
                         KeyCode::Up | KeyCode::Char('k') => {
                             scroll_offset = scroll_offset.saturating_sub(1);
                         }
@@ -796,7 +729,7 @@ fn main_loop(
                     AppMode::Research => {
                         // Pass key events to research screen and check if it wants to exit
                         if research_screen.handle_key(key.code) {
-                            mode = AppMode::Menu;
+                            mode = AppMode::NewMenu;
                         }
                     },
                     // T-4.5: Handle config screen input
@@ -842,8 +775,8 @@ fn main_loop(
                             // We're at the main menu level
                             match key.code {
                                 KeyCode::Esc => {
-                                    // Go back to old menu (bridge)
-                                    mode = AppMode::Menu;
+                                    // Quit the application (NewMenu is the main menu now)
+                                    return Ok(settings);
                                 }
                                 KeyCode::Char(c) => {
                                     // Handle menu selection via MainMenuItem
@@ -942,6 +875,34 @@ fn main_loop(
                                     // CLI command execution would go here
                                     // For now, just show a message
                                     menu_integration.set_message("CLI commands not yet implemented".to_string());
+                                }
+                                ActionResult::UpdateSetting(update) => {
+                                    // Handle settings updates
+                                    match update {
+                                        SettingUpdate::TogglePersist => {
+                                            settings.persist_features = !settings.persist_features;
+                                            global_state.persist_features = settings.persist_features;
+                                            let status = if settings.persist_features { "ON" } else { "OFF" };
+                                            menu_integration.set_message(format!("Persist to disk: {}", status));
+                                        }
+                                        SettingUpdate::CycleMaxStorage => {
+                                            settings.max_storage_gb = match settings.max_storage_gb as i32 {
+                                                0 => 1.0,
+                                                1 => 5.0,
+                                                5 => 10.0,
+                                                10 => 50.0,
+                                                50 => 100.0,
+                                                _ => 0.0, // unlimited
+                                            };
+                                            global_state.max_storage_gb = settings.max_storage_gb;
+                                            let label = if settings.max_storage_gb <= 0.0 {
+                                                "Unlimited".to_string()
+                                            } else {
+                                                format!("{} GB", settings.max_storage_gb as i32)
+                                            };
+                                            menu_integration.set_message(format!("Max storage: {}", label));
+                                        }
+                                    }
                                 }
                                 ActionResult::Quit => {
                                     return Ok(settings);
@@ -1076,9 +1037,6 @@ fn main_loop(
 
         // Draw based on mode
         match mode {
-            AppMode::Menu => {
-                terminal.draw(|f| draw_menu(f, &symbol, &settings, &preset_store))?;
-            }
             AppMode::Live => {
                 terminal.draw(|f| {
                     if !has_data {
@@ -1255,193 +1213,6 @@ fn main_loop(
             }
         }
     }
-}
-
-fn draw_menu(f: &mut ratatui::Frame, symbol: &str, settings: &TuiSettings, preset_store: &PresetStore) {
-    let size = f.size();
-
-    let persist_status = if settings.persist_features { "ON " } else { "OFF" };
-    let persist_color = if settings.persist_features { Color::Green } else { Color::Red };
-
-    let storage_str = if settings.max_storage_gb <= 0.0 {
-        "UNLIMITED".to_string()
-    } else {
-        format!("{:.0} GB", settings.max_storage_gb)
-    };
-
-    // Calculate current data stats
-    let data_dir = std::path::Path::new("./data/features");
-    let (file_count, total_size_mb) = if data_dir.exists() {
-        let files: Vec<_> = std::fs::read_dir(data_dir)
-            .map(|rd| rd.filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().map(|x| x == "parquet").unwrap_or(false))
-                .collect())
-            .unwrap_or_default();
-        let size: u64 = files.iter()
-            .filter_map(|f| f.metadata().ok())
-            .map(|m| m.len())
-            .sum();
-        (files.len(), size as f64 / 1_000_000.0)
-    } else {
-        (0, 0.0)
-    };
-
-    let lines = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "  INGESTOR - Real-Time Market Microstructure Features",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            "  Binance WebSocket -> 60+ Features -> Parquet -> Backtest",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(""),
-        Line::from(vec![
-            Span::raw("  Symbol: "),
-            Span::styled(symbol.to_uppercase(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::raw(format!("    Data: {} files ({:.1} MB)", file_count, total_size_mb)),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("  DATA COLLECTION", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-        Line::from(vec![
-            Span::styled("  [0] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::raw("Live Dashboard"),
-            Span::styled(" - stream features, save to ./data/features/*.parquet", Style::default().fg(Color::DarkGray)),
-        ]),
-        Line::from(vec![
-            Span::styled("  [1] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::raw("Live + Market Maker"),
-            Span::styled(" - paper trade with default params", Style::default().fg(Color::DarkGray)),
-        ]),
-        Line::from(vec![
-            Span::styled("  [6] ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-            Span::raw("Paper Trade w/ Preset"),
-            Span::styled(
-                if let Some(latest) = preset_store.latest() {
-                    format!(" - {} presets available, latest: {}", preset_store.presets.len(), latest.created_at_local())
-                } else {
-                    " - no presets available".to_string()
-                },
-                Style::default().fg(Color::DarkGray)
-            ),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("  BACKTESTING", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-        Line::from(vec![
-            Span::styled("  [3] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::raw("Run Backtest"),
-            Span::styled(" - test MM strategy on collected data", Style::default().fg(Color::DarkGray)),
-        ]),
-        Line::from(vec![
-            Span::styled("  [4] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::raw("Walk-Forward Validation"),
-            Span::styled(" - cross-validate to detect overfitting", Style::default().fg(Color::DarkGray)),
-        ]),
-        Line::from(vec![
-            Span::styled("  [5] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::raw("Data Quality Check"),
-            Span::styled(" - validate data before backtesting", Style::default().fg(Color::DarkGray)),
-        ]),
-        Line::from(vec![
-            Span::styled("  [7] ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-            Span::raw("Campaign Simulation"),
-            Span::styled(" - simulate 4-week validation campaign on historical data", Style::default().fg(Color::DarkGray)),
-        ]),
-        Line::from(vec![
-            Span::styled("  [9] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::raw("Grid Search"),
-            Span::styled(" - hyperparameter optimization (spreads, skews, entropy)", Style::default().fg(Color::DarkGray)),
-        ]),
-        Line::from(vec![
-            Span::styled("  [w] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::raw("Sweep"),
-            Span::styled(" - parameter sensitivity analysis (spread x skew)", Style::default().fg(Color::DarkGray)),
-        ]),
-        Line::from(vec![
-            Span::styled("  [o] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::raw("OOS Validation"),
-            Span::styled(" - out-of-sample overfitting detection (20% holdout)", Style::default().fg(Color::DarkGray)),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("  RESEARCH", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-        Line::from(vec![
-            Span::styled("  [r] ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-            Span::raw("Research Dashboard"),
-            Span::styled(" - MIDC, persistence stats, conditional signals", Style::default().fg(Color::DarkGray)),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("  INFO", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-        Line::from(vec![
-            Span::styled("  [2] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::raw("Feature Descriptions"),
-            Span::styled(" - 60+ microstructure features explained", Style::default().fg(Color::DarkGray)),
-        ]),
-        Line::from(vec![
-            Span::styled("  [8] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::raw("Data Info/Statistics"),
-            Span::styled(" - file count, time range, event rate", Style::default().fg(Color::DarkGray)),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("  SETTINGS", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-        Line::from(vec![
-            Span::styled("  [p] ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
-            Span::raw("Persist to disk: "),
-            Span::styled(persist_status, Style::default().fg(persist_color).add_modifier(Modifier::BOLD)),
-            Span::styled("   (saves 60+ features per tick to Parquet)", Style::default().fg(Color::DarkGray)),
-        ]),
-        Line::from(vec![
-            Span::styled("  [s] ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
-            Span::raw("Max storage: "),
-            Span::styled(&storage_str, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("   (~{} files)", settings.max_files()), Style::default().fg(Color::DarkGray)),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("  NEW TUI (UNDER DEVELOPMENT)", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-        Line::from(vec![
-            Span::styled("  [n] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::raw("New Menu"),
-            Span::styled(" - workflow-driven TUI v0.1 (Research/Algorithms/Validate/Trade/Data)", Style::default().fg(Color::DarkGray)),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  [q] ", Style::default().fg(Color::Red)),
-            Span::raw("Quit"),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("  OVERNIGHT DATA COLLECTION", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))),
-        Line::from(Span::styled(
-            "  To record data overnight/continuously:",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(Span::styled(
-            "    1. Start Live Dashboard [0] and leave running",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(Span::styled(
-            "    2. Use tmux/screen to keep session alive: tmux new -s ingestor",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(Span::styled(
-            "    3. Or run headless: cargo run --release > /dev/null 2>&1 &",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(""),
-        Line::from(Span::styled("  AFTER DATA COLLECTION (run from terminal):", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))),
-        Line::from(Span::styled(
-            "    cargo run --release --bin backtest -- grid-search --test-gate",
-            Style::default().fg(Color::Green),
-        )),
-        Line::from(""),
-    ];
-
-    let para = Paragraph::new(lines).block(
-        Block::default()
-            .title(" MAIN MENU ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan)),
-    );
-    f.render_widget(para, size);
 }
 
 fn draw_waiting(f: &mut ratatui::Frame) {

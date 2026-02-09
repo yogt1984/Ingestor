@@ -42,6 +42,12 @@ pub struct GlobalState {
 
     /// Data statistics
     pub data_stats: DataStats,
+
+    /// Whether to persist features to disk
+    pub persist_features: bool,
+
+    /// Maximum storage size in GB (0 = unlimited)
+    pub max_storage_gb: f64,
 }
 
 /// Summary of active algorithm (lightweight for display)
@@ -159,6 +165,8 @@ impl Default for GlobalState {
             trading_mode: TradingMode::Idle,
             research_status: ResearchStatus::Idle,
             data_stats: DataStats::default(),
+            persist_features: true,
+            max_storage_gb: 10.0,
         }
     }
 }
@@ -496,6 +504,35 @@ mod tests {
         assert_eq!(state.trading_mode, TradingMode::Idle);
         assert_eq!(state.research_status, ResearchStatus::Idle);
         assert_eq!(state.data_stats.file_count, 0);
+        // New settings fields
+        assert!(state.persist_features);
+        assert_eq!(state.max_storage_gb, 10.0);
+    }
+
+    #[test]
+    fn test_global_state_persist_features_default() {
+        let state = GlobalState::default();
+        assert!(state.persist_features, "persist_features should default to true");
+    }
+
+    #[test]
+    fn test_global_state_max_storage_default() {
+        let state = GlobalState::default();
+        assert_eq!(state.max_storage_gb, 10.0, "max_storage_gb should default to 10.0");
+    }
+
+    #[test]
+    fn test_global_state_settings_can_be_modified() {
+        let mut state = GlobalState::default();
+
+        state.persist_features = false;
+        assert!(!state.persist_features);
+
+        state.max_storage_gb = 50.0;
+        assert_eq!(state.max_storage_gb, 50.0);
+
+        state.max_storage_gb = 0.0; // unlimited
+        assert_eq!(state.max_storage_gb, 0.0);
     }
 
     #[test]
