@@ -277,6 +277,19 @@ pub struct AvellanedaStoikovConfig {
     pub regime_thresholds: RegimeThresholds,
     /// Per-regime parameters (spread, skew, size per regime)
     pub regime_params: RegimeParams,
+    /// Minimum entropy required to quote (overrides regime should_quote if set)
+    /// When Some, directly gates quoting based on entropy threshold
+    /// When None, uses per-regime should_quote settings
+    #[serde(default)]
+    pub min_entropy_for_quoting: Option<f64>,
+    /// Weight for flow-following skew (default: 0.3)
+    /// Applied as: total_skew = inv_skew + flow_weight * flow_imbalance
+    #[serde(default = "default_flow_skew_weight")]
+    pub flow_skew_weight: f64,
+}
+
+fn default_flow_skew_weight() -> f64 {
+    0.3
 }
 
 impl Default for AvellanedaStoikovConfig {
@@ -287,6 +300,8 @@ impl Default for AvellanedaStoikovConfig {
             risk_aversion: 0.1,
             regime_thresholds: RegimeThresholds::default(),
             regime_params: RegimeParams::default(),
+            min_entropy_for_quoting: None, // Use regime should_quote by default
+            flow_skew_weight: 0.3,
         }
     }
 }
@@ -425,7 +440,13 @@ impl AvellanedaStoikovMM {
         let regime_config = self.config.regime_params.for_regime(regime);
 
         // 3. Check if we should quote at all
-        if !regime_config.should_quote {
+        // If min_entropy_for_quoting is set, use it as override; otherwise use regime should_quote
+        let should_quote = match self.config.min_entropy_for_quoting {
+            Some(min_entropy) => entropy_score >= min_entropy,
+            None => regime_config.should_quote,
+        };
+
+        if !should_quote {
             self.current_bid = None;
             self.current_ask = None;
             return MMQuotes {
@@ -457,20 +478,20 @@ impl AvellanedaStoikovMM {
         };
         let inv_skew = inventory_ratio * Decimal::from_f64(regime_config.skew_factor).unwrap_or(dec!(0.5));
 
-        // 8. Add flow-based skew in low entropy (lean with the flow)
-        let flow_skew = if regime == MarketRegime::LowEntropy {
-            Decimal::from_f64(flow_imbalance * 0.5).unwrap_or(dec!(0))
-        } else {
-            dec!(0)
-        };
+        // 8. Add flow-based skew (lean with the flow) using configurable weight
+        let flow_skew = Decimal::from_f64(flow_imbalance * self.config.flow_skew_weight)
+            .unwrap_or(dec!(0));
 
-        let total_skew = inv_skew + flow_skew;
+        // 9. Combine and clamp total skew to [-1, 1]
+        let total_skew = (inv_skew + flow_skew)
+            .max(dec!(-1))
+            .min(dec!(1));
 
-        // 9. Compute final quote prices
+        // 10. Compute final quote prices
         let bid_price = fair_value - half_spread - (total_skew * half_spread);
         let ask_price = fair_value + half_spread - (total_skew * half_spread);
 
-        // 10. Determine quote sizes using regime-specific size multiplier
+        // 11. Determine quote sizes using regime-specific size multiplier
         let size_mult = Decimal::from_f64(regime_config.size_mult).unwrap_or(dec!(1));
 
         let bid_size = if self.inventory > dec!(0) {
@@ -485,7 +506,7 @@ impl AvellanedaStoikovMM {
             self.config.quote_size * size_mult
         };
 
-        // 11. Check inventory limits
+        // 12. Check inventory limits
         let at_max_inventory = self.inventory.abs() >= self.config.max_inventory;
 
         let bid = if at_max_inventory && self.inventory > dec!(0) {
@@ -801,5 +822,190 @@ mod tests {
 
         assert_eq!(mm.inventory, dec!(0));
         assert_eq!(mm.pnl.num_trades, 0);
+    }
+
+    // ========================================================================
+    // Phase 3: Entropy-Gated Quoting Tests
+    // ========================================================================
+
+    #[test]
+    fn test_entropy_gate_stops_quoting() {
+        let config = AvellanedaStoikovConfig {
+            min_entropy_for_quoting: Some(0.5),
+            ..Default::default()
+        };
+        let mut mm = AvellanedaStoikovMM::new(config);
+
+        // Low entropy (0.3) should not quote
+        let quotes = mm.compute_quotes(
+            dec!(50000), dec!(50000), 0.001, 0.3, 0.0, 1000,
+        );
+
+        assert!(quotes.bid.is_none(), "Should not quote when entropy < threshold");
+        assert!(quotes.ask.is_none(), "Should not quote when entropy < threshold");
+    }
+
+    #[test]
+    fn test_entropy_gate_allows_quoting() {
+        let config = AvellanedaStoikovConfig {
+            min_entropy_for_quoting: Some(0.5),
+            regime_params: RegimeParams::fully_uniform(2.0, 0.5),
+            ..Default::default()
+        };
+        let mut mm = AvellanedaStoikovMM::new(config);
+
+        // High entropy (0.8) should quote
+        let quotes = mm.compute_quotes(
+            dec!(50000), dec!(50000), 0.001, 0.8, 0.0, 1000,
+        );
+
+        assert!(quotes.bid.is_some(), "Should quote when entropy >= threshold");
+        assert!(quotes.ask.is_some(), "Should quote when entropy >= threshold");
+    }
+
+    #[test]
+    fn test_entropy_gate_at_threshold() {
+        let config = AvellanedaStoikovConfig {
+            min_entropy_for_quoting: Some(0.5),
+            regime_params: RegimeParams::fully_uniform(2.0, 0.5),
+            ..Default::default()
+        };
+        let mut mm = AvellanedaStoikovMM::new(config);
+
+        // Exactly at threshold should quote
+        let quotes = mm.compute_quotes(
+            dec!(50000), dec!(50000), 0.001, 0.5, 0.0, 1000,
+        );
+
+        assert!(quotes.bid.is_some(), "Should quote when entropy == threshold");
+        assert!(quotes.ask.is_some(), "Should quote when entropy == threshold");
+    }
+
+    #[test]
+    fn test_entropy_gate_configurable() {
+        // Test with different threshold
+        let config = AvellanedaStoikovConfig {
+            min_entropy_for_quoting: Some(0.3),
+            regime_params: RegimeParams::fully_uniform(2.0, 0.5),
+            ..Default::default()
+        };
+        let mut mm = AvellanedaStoikovMM::new(config);
+
+        // 0.35 should quote with 0.3 threshold
+        let quotes = mm.compute_quotes(
+            dec!(50000), dec!(50000), 0.001, 0.35, 0.0, 1000,
+        );
+
+        assert!(quotes.bid.is_some(), "Should quote when entropy > lower threshold");
+    }
+
+    // ========================================================================
+    // Phase 3: Flow-Following Skew Tests
+    // ========================================================================
+
+    #[test]
+    fn test_flow_skew_positive_flow() {
+        let config = AvellanedaStoikovConfig {
+            flow_skew_weight: 0.5,
+            regime_params: RegimeParams::fully_uniform(2.0, 0.0), // No inventory skew
+            ..Default::default()
+        };
+        let mut mm = AvellanedaStoikovMM::new(config);
+
+        // Positive flow imbalance (+1) should create positive skew
+        let quotes = mm.compute_quotes(
+            dec!(50000), dec!(50000), 0.001, 0.8, 1.0, 1000,
+        );
+
+        // Positive skew means bid is lowered and ask is lowered (leaning towards asks)
+        assert!(quotes.skew > dec!(0), "Positive flow should create positive skew");
+    }
+
+    #[test]
+    fn test_flow_skew_negative_flow() {
+        let config = AvellanedaStoikovConfig {
+            flow_skew_weight: 0.5,
+            regime_params: RegimeParams::fully_uniform(2.0, 0.0), // No inventory skew
+            ..Default::default()
+        };
+        let mut mm = AvellanedaStoikovMM::new(config);
+
+        // Negative flow imbalance (-1) should create negative skew
+        let quotes = mm.compute_quotes(
+            dec!(50000), dec!(50000), 0.001, 0.8, -1.0, 1000,
+        );
+
+        assert!(quotes.skew < dec!(0), "Negative flow should create negative skew");
+    }
+
+    #[test]
+    fn test_flow_skew_zero_flow() {
+        let config = AvellanedaStoikovConfig {
+            flow_skew_weight: 0.5,
+            regime_params: RegimeParams::fully_uniform(2.0, 0.0), // No inventory skew
+            ..Default::default()
+        };
+        let mut mm = AvellanedaStoikovMM::new(config);
+
+        // Zero flow should result in zero skew (with no inventory)
+        let quotes = mm.compute_quotes(
+            dec!(50000), dec!(50000), 0.001, 0.8, 0.0, 1000,
+        );
+
+        assert_eq!(quotes.skew, dec!(0), "Zero flow with zero inventory should have zero skew");
+    }
+
+    #[test]
+    fn test_flow_skew_clamped() {
+        let config = AvellanedaStoikovConfig {
+            flow_skew_weight: 2.0, // High weight to force clamping
+            max_inventory: dec!(0.1),
+            regime_params: RegimeParams::fully_uniform(2.0, 2.0), // High skew factor
+            ..Default::default()
+        };
+        let mut mm = AvellanedaStoikovMM::new(config);
+
+        // Set inventory to max to add more skew
+        mm.inventory = dec!(0.1);
+
+        // Extreme positive flow + full inventory should clamp to 1
+        let quotes = mm.compute_quotes(
+            dec!(50000), dec!(50000), 0.001, 0.8, 1.0, 1000,
+        );
+
+        assert_eq!(quotes.skew, dec!(1), "Skew should be clamped to 1");
+
+        // Reset and test negative clamping
+        mm.reset();
+        mm.inventory = dec!(-0.1);
+
+        let quotes2 = mm.compute_quotes(
+            dec!(50000), dec!(50000), 0.001, 0.8, -1.0, 1000,
+        );
+
+        assert_eq!(quotes2.skew, dec!(-1), "Skew should be clamped to -1");
+    }
+
+    #[test]
+    fn test_flow_skew_weight_configurable() {
+        // Compare different weights
+        let config1 = AvellanedaStoikovConfig {
+            flow_skew_weight: 0.1,
+            regime_params: RegimeParams::fully_uniform(2.0, 0.0),
+            ..Default::default()
+        };
+        let config2 = AvellanedaStoikovConfig {
+            flow_skew_weight: 0.5,
+            regime_params: RegimeParams::fully_uniform(2.0, 0.0),
+            ..Default::default()
+        };
+
+        let mut mm1 = AvellanedaStoikovMM::new(config1);
+        let mut mm2 = AvellanedaStoikovMM::new(config2);
+
+        let quotes1 = mm1.compute_quotes(dec!(50000), dec!(50000), 0.001, 0.8, 1.0, 1000);
+        let quotes2 = mm2.compute_quotes(dec!(50000), dec!(50000), 0.001, 0.8, 1.0, 1000);
+
+        assert!(quotes2.skew > quotes1.skew, "Higher flow weight should produce larger skew");
     }
 }
