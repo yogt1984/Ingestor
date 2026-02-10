@@ -302,6 +302,9 @@ pub mod param_names {
     pub const LOW_ENTROPY_THRESHOLD: &str = "low_entropy_threshold";
     pub const SPREAD_BPS: &str = "spread_bps";
     pub const SKEW_FACTOR: &str = "skew_factor";
+    // Phase 3: Entropy gating and flow skew
+    pub const MIN_ENTROPY_FOR_QUOTING: &str = "min_entropy_for_quoting";
+    pub const FLOW_SKEW_WEIGHT: &str = "flow_skew_weight";
 }
 
 impl Configurable for AvellanedaStoikovAlgorithm {
@@ -355,6 +358,17 @@ impl Configurable for AvellanedaStoikovAlgorithm {
                 .default(0.3) // Matches RegimeParams::default().high_entropy.skew_factor
                 .range(0.0, 2.0)
                 .tunable(true),
+            // Phase 3: Entropy gating and flow skew
+            ParameterDefinition::continuous(param_names::MIN_ENTROPY_FOR_QUOTING)
+                .description("Minimum entropy to quote (0 = disabled, uses regime should_quote)")
+                .default(0.0) // 0 means disabled (use regime should_quote)
+                .range(0.0, 1.0)
+                .tunable(true),
+            ParameterDefinition::continuous(param_names::FLOW_SKEW_WEIGHT)
+                .description("Weight for flow-following skew adjustment")
+                .default(0.3)
+                .range(0.0, 1.0)
+                .tunable(true),
         ]
     }
 
@@ -381,6 +395,9 @@ impl Configurable for AvellanedaStoikovAlgorithm {
         let low_entropy_threshold = get_param(param_names::LOW_ENTROPY_THRESHOLD);
         let spread_bps = get_param(param_names::SPREAD_BPS);
         let skew_factor = get_param(param_names::SKEW_FACTOR);
+        // Phase 3 parameters
+        let min_entropy = get_param(param_names::MIN_ENTROPY_FOR_QUOTING);
+        let flow_skew_weight = get_param(param_names::FLOW_SKEW_WEIGHT);
 
         // Validate parameters against definitions
         for param_def in Self::parameters() {
@@ -410,6 +427,9 @@ impl Configurable for AvellanedaStoikovAlgorithm {
                 low_entropy_threshold,
             },
             regime_params: RegimeParams::fully_uniform(spread_bps, skew_factor),
+            // Phase 3: entropy gating (0.0 means disabled)
+            min_entropy_for_quoting: if min_entropy > 0.0 { Some(min_entropy) } else { None },
+            flow_skew_weight,
         };
 
         Ok(Self::new(config))
@@ -448,6 +468,15 @@ impl Configurable for AvellanedaStoikovAlgorithm {
         params.insert(
             param_names::SKEW_FACTOR.to_string(),
             config.regime_params.high_entropy.skew_factor,
+        );
+        // Phase 3 parameters
+        params.insert(
+            param_names::MIN_ENTROPY_FOR_QUOTING.to_string(),
+            config.min_entropy_for_quoting.unwrap_or(0.0),
+        );
+        params.insert(
+            param_names::FLOW_SKEW_WEIGHT.to_string(),
+            config.flow_skew_weight,
         );
 
         params
@@ -722,7 +751,7 @@ mod tests {
     #[test]
     fn test_configurable_parameters_count() {
         let params = AvellanedaStoikovAlgorithm::parameters();
-        assert_eq!(params.len(), 7, "A-S should have exactly 7 parameters");
+        assert_eq!(params.len(), 9, "A-S should have exactly 9 parameters");
     }
 
     #[test]
@@ -737,6 +766,9 @@ mod tests {
         assert!(names.contains(&param_names::LOW_ENTROPY_THRESHOLD));
         assert!(names.contains(&param_names::SPREAD_BPS));
         assert!(names.contains(&param_names::SKEW_FACTOR));
+        // Phase 3 parameters
+        assert!(names.contains(&param_names::MIN_ENTROPY_FOR_QUOTING));
+        assert!(names.contains(&param_names::FLOW_SKEW_WEIGHT));
     }
 
     #[test]
@@ -1076,6 +1108,9 @@ mod tests {
         assert_eq!(param_names::LOW_ENTROPY_THRESHOLD, "low_entropy_threshold");
         assert_eq!(param_names::SPREAD_BPS, "spread_bps");
         assert_eq!(param_names::SKEW_FACTOR, "skew_factor");
+        // Phase 3 parameters
+        assert_eq!(param_names::MIN_ENTROPY_FOR_QUOTING, "min_entropy_for_quoting");
+        assert_eq!(param_names::FLOW_SKEW_WEIGHT, "flow_skew_weight");
     }
 
     #[test]
