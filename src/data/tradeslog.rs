@@ -192,6 +192,9 @@ impl TradesLog {
     }
 
     pub fn trade_rate(&self, window_ms: u64) -> Result<f64, TradesLogError> {
+        if window_ms == 0 {
+            return Err(TradesLogError::InvalidWindowSize);
+        }
         if self.trades.len() < 2 {
             return Err(TradesLogError::InsufficientTrades);
         }
@@ -603,21 +606,106 @@ mod tests {
         assert_eq!(log.signed_count_momentum(), 1); // Evicted buy (-1), added buy (+1)
     }
 
-    #[test] 
+    #[test]
     fn test_aggressor_ratio_edge_cases() {
         let mut log = TradesLog::new(10);
-        
+
         // Single trade
         log.insert_trade(create_test_trade(dec!(100), dec!(1), false));
         assert_eq!(log.aggressor_volume_ratio(1).unwrap(), dec!(1.0));
-        
+
         // All buys
         log.insert_trade(create_test_trade(dec!(101), dec!(2), false));
         assert_eq!(log.aggressor_volume_ratio(2).unwrap(), dec!(1.0));
-        
+
         // All sells
         let mut sell_log = TradesLog::new(10);
         sell_log.insert_trade(create_test_trade(dec!(100), dec!(1), true));
         assert_eq!(sell_log.aggressor_volume_ratio(1).unwrap(), dec!(0.0));
+    }
+
+    #[test]
+    fn test_trade_rate_zero_window_error() {
+        let mut log = TradesLog::new(10);
+
+        // Add enough trades
+        log.insert_trade(Trade {
+            id: 0,
+            price: dec!(100),
+            quantity: dec!(1),
+            timestamp: 1000,
+            is_buyer_maker: false,
+        });
+        log.insert_trade(Trade {
+            id: 0,
+            price: dec!(101),
+            quantity: dec!(1),
+            timestamp: 2000,
+            is_buyer_maker: false,
+        });
+
+        // Zero window should return error
+        assert!(matches!(
+            log.trade_rate(0),
+            Err(TradesLogError::InvalidWindowSize)
+        ));
+    }
+
+    #[test]
+    fn test_trade_rate_small_window_valid() {
+        let mut log = TradesLog::new(10);
+
+        // Add trades with timestamps
+        log.insert_trade(Trade {
+            id: 0,
+            price: dec!(100),
+            quantity: dec!(1),
+            timestamp: 999,
+            is_buyer_maker: false,
+        });
+        log.insert_trade(Trade {
+            id: 0,
+            price: dec!(101),
+            quantity: dec!(1),
+            timestamp: 1000,
+            is_buyer_maker: false,
+        });
+
+        // 1ms window should work
+        let rate = log.trade_rate(1).unwrap();
+        assert!(rate >= 0.0, "Trade rate should be non-negative");
+    }
+
+    #[test]
+    fn test_trade_rate_normal_unchanged() {
+        let mut log = TradesLog::new(10);
+
+        let now = 10_000;
+        log.insert_trade(Trade {
+            id: 0,
+            price: dec!(100),
+            quantity: dec!(1),
+            timestamp: now - 2000,
+            is_buyer_maker: false,
+        });
+        log.insert_trade(Trade {
+            id: 0,
+            price: dec!(101),
+            quantity: dec!(1),
+            timestamp: now - 1000,
+            is_buyer_maker: false,
+        });
+        log.insert_trade(Trade {
+            id: 0,
+            price: dec!(102),
+            quantity: dec!(1),
+            timestamp: now,
+            is_buyer_maker: false,
+        });
+
+        // Normal window should compute correctly
+        let rate = log.trade_rate(2000).unwrap();
+        // 3 trades in 2000ms window = 1.5 trades/second
+        assert!((rate - 1.5).abs() < 0.01, "Expected ~1.5 trades/sec, got {}", rate);
     }
 }
