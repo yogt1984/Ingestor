@@ -281,6 +281,11 @@ async fn test_persistence_engine_with_entropy() {
             trend_momentum: Some(0.1),
             trend_monotonicity: Some(0.6),
             trend_hurst: Some(0.45),
+            // Phase 2: Trade analytics features
+            effective_spread: Some(dec!(0.5)),
+            realized_spread: Some(dec!(0.25)),
+            inter_trade_duration_mean_ms: Some(150.0),
+            inter_trade_duration_std_ms: Some(25.0),
         };
         
         tx.send(snapshot).unwrap();
@@ -411,6 +416,11 @@ async fn test_feature_fusion_includes_all_entropy() {
         aggr_ratio_50: Some(dec!(0.5)),
         aggr_ratio_100: Some(dec!(0.5)),
         aggr_ratio_1000: Some(dec!(0.5)),
+        // Phase 2 features
+        effective_spread: Some(dec!(0.5)),
+        realized_spread: Some(dec!(0.25)),
+        inter_trade_duration_mean_ms: Some(150.0),
+        inter_trade_duration_std_ms: Some(25.0),
     };
     let _ = tl_tx.send(tl_features).await;
 
@@ -442,5 +452,300 @@ async fn test_feature_fusion_includes_all_entropy() {
 
     shutdown_tx.send(true).unwrap();
     handle.await.unwrap();
+}
+
+// ============================================================================
+// Phase 4: Additional Integration Tests
+// ============================================================================
+
+/// Helper to create a complete test FeaturesSnapshot with all Phase 2 fields
+fn create_test_snapshot(id: i32) -> FeaturesSnapshot {
+    FeaturesSnapshot {
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        best_bid: Some(dec!(100.0)),
+        best_ask: Some(dec!(101.0)),
+        mid_price: Some(dec!(100.5)),
+        microprice: Some(dec!(100.6)),
+        spread: Some(dec!(1.0)),
+        imbalance: Some(dec!(0.5)),
+        top_bids: vec![],
+        top_asks: vec![],
+        pwi_1: Some(dec!(100.1)),
+        pwi_5: Some(dec!(100.2)),
+        pwi_25: Some(dec!(100.3)),
+        pwi_50: Some(dec!(100.4)),
+        bid_slope: Some(dec!(-0.1)),
+        ask_slope: Some(dec!(0.1)),
+        volume_imbalance_top5: Some(dec!(0.5)),
+        bid_depth_ratio: Some(dec!(0.6)),
+        ask_depth_ratio: Some(dec!(0.4)),
+        bid_volume_001: Some(dec!(10.0)),
+        ask_volume_001: Some(dec!(5.0)),
+        bid_avg_distance: Some(dec!(0.1)),
+        ask_avg_distance: Some(dec!(0.1)),
+        last_trade_price: Some(dec!(100.5)),
+        trade_imbalance: Some(dec!(0.5)),
+        vwap_total: Some(dec!(100.5)),
+        price_change: Some(dec!(0.1)),
+        avg_trade_size: Some(dec!(1.0)),
+        signed_count_momentum: id as i64,
+        trade_rate_10s: Some(2.0),
+        order_flow_imbalance: Some(dec!(0.3)),
+        order_flow_pressure: dec!(5.0),
+        order_flow_significance: true,
+        vwap_10: Some(dec!(100.4)),
+        vwap_50: Some(dec!(100.5)),
+        vwap_100: Some(dec!(100.5)),
+        vwap_1000: Some(dec!(100.5)),
+        aggr_ratio_10: Some(dec!(0.5)),
+        aggr_ratio_50: Some(dec!(0.5)),
+        aggr_ratio_100: Some(dec!(0.5)),
+        aggr_ratio_1000: Some(dec!(0.5)),
+        roll_spread: Some(dec!(0.0001)),
+        amihuds_lambda: Some(dec!(0.00005)),
+        kyles_lambda: Some(dec!(0.5)),
+        hasbroucks_lambda: Some(dec!(0.3)),
+        vpin: Some(dec!(0.25)),
+        // Entropy fields
+        tick_entropy_1s: Some(dec!(1.0)),
+        tick_entropy_5s: Some(dec!(1.5)),
+        tick_entropy_10s: Some(dec!(1.8)),
+        tick_entropy_15s: Some(dec!(2.0)),
+        tick_entropy_30s: Some(dec!(2.2)),
+        tick_entropy_1m: Some(dec!(2.5)),
+        tick_entropy_15m: Some(dec!(3.0)),
+        volume_tick_entropy_1s: Some(dec!(0.9)),
+        volume_tick_entropy_5s: Some(dec!(1.4)),
+        volume_tick_entropy_10s: Some(dec!(1.7)),
+        volume_tick_entropy_15s: Some(dec!(1.9)),
+        volume_tick_entropy_30s: Some(dec!(2.1)),
+        volume_tick_entropy_1m: Some(dec!(2.4)),
+        volume_tick_entropy_15m: Some(dec!(2.9)),
+        volume_vector: vec![],
+        pwi_vector: vec![],
+        // Volatility metrics
+        realized_volatility_100: Some(0.001),
+        realized_volatility_1000: Some(0.0008),
+        bipower_variation_100: Some(0.0009),
+        jump_indicator: Some(1.5),
+        vol_of_vol: Some(0.0002),
+        // Toxicity metrics
+        toxic_flow_ratio_micro: Some(dec!(0.25)),
+        toxic_flow_ratio_mid: Some(dec!(0.22)),
+        adverse_selection_micro: Some(dec!(0.001)),
+        adverse_selection_mid: Some(dec!(0.0008)),
+        arrival_asymmetry: Some(dec!(0.15)),
+        size_toxicity_ratio: Some(dec!(1.2)),
+        toxicity_index: Some(dec!(0.28)),
+        // Regime detection fields
+        regime: Some("MeanReverting".to_string()),
+        regime_confidence: Some(0.85),
+        trend_strength: Some(0.2),
+        regime_persistence: Some(0.45),
+        trend_momentum: Some(0.1),
+        trend_monotonicity: Some(0.6),
+        trend_hurst: Some(0.45),
+        // Phase 2: Trade analytics features
+        effective_spread: Some(dec!(0.5)),
+        realized_spread: Some(dec!(0.25)),
+        inter_trade_duration_mean_ms: Some(150.0),
+        inter_trade_duration_std_ms: Some(25.0),
+    }
+}
+
+#[tokio::test]
+async fn test_feature_determinism() {
+    // Test that the same input produces the same features
+    let ob1 = Arc::new(ConcurrentOrderBook::new());
+    let ob2 = Arc::new(ConcurrentOrderBook::new());
+
+    // Apply identical deltas
+    let bids = vec![(dec!(100.0), dec!(10.0)), (dec!(99.5), dec!(5.0))];
+    let asks = vec![(dec!(101.0), dec!(8.0)), (dec!(101.5), dec!(4.0))];
+
+    ob1.apply_snapshot(bids.clone(), asks.clone()).await;
+    ob2.apply_snapshot(bids.clone(), asks.clone()).await;
+
+    // Get snapshots
+    let snap1 = ob1.get_snapshot().await;
+    let snap2 = ob2.get_snapshot().await;
+
+    // Verify determinism
+    assert_eq!(snap1.best_bid, snap2.best_bid, "Best bid should be deterministic");
+    assert_eq!(snap1.best_ask, snap2.best_ask, "Best ask should be deterministic");
+    assert_eq!(snap1.mid_price, snap2.mid_price, "Mid price should be deterministic");
+    assert_eq!(snap1.spread, snap2.spread, "Spread should be deterministic");
+    assert_eq!(snap1.imbalance, snap2.imbalance, "Imbalance should be deterministic");
+    assert_eq!(snap1.microprice, snap2.microprice, "Microprice should be deterministic");
+}
+
+#[tokio::test]
+async fn test_algorithm_quotes_valid() {
+    use ingestor::execution::market_maker::{AvellanedaStoikovMM, AvellanedaStoikovConfig, RegimeParams};
+
+    // Create algorithm with known config
+    let config = AvellanedaStoikovConfig {
+        regime_params: RegimeParams::fully_uniform(2.0, 0.5),
+        min_entropy_for_quoting: None,
+        flow_skew_weight: 0.3,
+        ..Default::default()
+    };
+    let mut mm = AvellanedaStoikovMM::new(config);
+
+    // Compute quotes with valid inputs
+    let quotes = mm.compute_quotes(
+        dec!(50000),  // microprice
+        dec!(50000),  // mid_price
+        0.001,        // volatility
+        0.8,          // high entropy
+        0.0,          // neutral flow
+        1000,         // timestamp
+    );
+
+    // Verify quotes are valid
+    assert!(quotes.bid.is_some(), "Should produce bid quote");
+    assert!(quotes.ask.is_some(), "Should produce ask quote");
+
+    let bid = quotes.bid.unwrap();
+    let ask = quotes.ask.unwrap();
+
+    // Key invariants
+    assert!(bid.price < dec!(50000), "Bid should be below fair value");
+    assert!(ask.price > dec!(50000), "Ask should be above fair value");
+    assert!(ask.price > bid.price, "Ask should be greater than bid");
+    assert!(bid.size > dec!(0), "Bid size should be positive");
+    assert!(ask.size > dec!(0), "Ask size should be positive");
+
+    // Spread should be reasonable (not too wide or narrow)
+    let spread = ask.price - bid.price;
+    assert!(spread > dec!(0), "Spread should be positive");
+    assert!(spread < dec!(100), "Spread should be reasonable (<100 for 50000 mid)");
+}
+
+#[test]
+fn test_parquet_roundtrip_with_phase2_features() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("roundtrip_test.parquet");
+
+    // Create snapshots with Phase 2 features
+    let snapshots: Vec<FeaturesSnapshot> = (0..10)
+        .map(|i| create_test_snapshot(i))
+        .collect();
+
+    // Save to parquet
+    save_feature_as_parquet_path(&snapshots, &path).unwrap();
+
+    // Read back
+    let df = ParquetReader::new(std::fs::File::open(&path).unwrap())
+        .finish()
+        .unwrap();
+
+    // Verify row count
+    assert_eq!(df.height(), 10, "Should have 10 rows");
+
+    // Verify Phase 2 columns exist
+    let phase2_cols = vec![
+        "effective_spread",
+        "realized_spread",
+        "inter_trade_duration_mean_ms",
+        "inter_trade_duration_std_ms",
+    ];
+
+    for col in &phase2_cols {
+        assert!(df.column(col).is_ok(), "Missing Phase 2 column: {}", col);
+    }
+
+    // Verify Phase 2 values are correct
+    let effective = df.column("effective_spread").unwrap().f64().unwrap();
+    assert!((effective.get(0).unwrap() - 0.5).abs() < 0.001, "Effective spread mismatch");
+
+    let realized = df.column("realized_spread").unwrap().f64().unwrap();
+    assert!((realized.get(0).unwrap() - 0.25).abs() < 0.001, "Realized spread mismatch");
+
+    let duration_mean = df.column("inter_trade_duration_mean_ms").unwrap().f64().unwrap();
+    assert!((duration_mean.get(0).unwrap() - 150.0).abs() < 0.001, "Duration mean mismatch");
+
+    let duration_std = df.column("inter_trade_duration_std_ms").unwrap().f64().unwrap();
+    assert!((duration_std.get(0).unwrap() - 25.0).abs() < 0.001, "Duration std mismatch");
+}
+
+#[tokio::test]
+async fn test_tradeslog_phase2_features_integration() {
+    use ingestor::data::tradeslog::TradesLog;
+
+    let mut log = TradesLog::new(100);
+
+    // Insert trades with known timestamps
+    for i in 0..10 {
+        log.insert_trade(Trade {
+            id: i,
+            price: rust_decimal::Decimal::from_f64(100.0 + i as f64 * 0.1).unwrap(),
+            quantity: dec!(1.0),
+            timestamp: 1000 + i * 100, // 100ms apart
+            is_buyer_maker: i % 2 == 0,
+        });
+
+        // Record effective spread with known mid price
+        log.record_effective_spread(dec!(100.0));
+    }
+
+    // Get snapshot and verify Phase 2 features
+    let snapshot = log.get_snapshot();
+
+    // Effective spread should be present (we recorded 10 spreads)
+    assert!(snapshot.effective_spread.is_some(), "Effective spread should be computed");
+
+    // Inter-trade duration should be present (9 durations for 10 trades)
+    assert!(snapshot.inter_trade_duration_mean_ms.is_some(), "Duration mean should be computed");
+    assert!(snapshot.inter_trade_duration_std_ms.is_some(), "Duration std should be computed");
+
+    // Duration mean should be ~100ms (our insertion interval)
+    let mean = snapshot.inter_trade_duration_mean_ms.unwrap();
+    assert!((mean - 100.0).abs() < 1.0, "Duration mean should be ~100ms, got {}", mean);
+
+    // Duration std should be 0 (constant interval)
+    let std = snapshot.inter_trade_duration_std_ms.unwrap();
+    assert!(std < 1.0, "Duration std should be ~0 for constant intervals, got {}", std);
+}
+
+#[tokio::test]
+async fn test_algorithm_with_phase3_features() {
+    use ingestor::execution::market_maker::{AvellanedaStoikovMM, AvellanedaStoikovConfig, RegimeParams};
+
+    // Test entropy gating
+    let config = AvellanedaStoikovConfig {
+        min_entropy_for_quoting: Some(0.5),
+        regime_params: RegimeParams::fully_uniform(2.0, 0.5),
+        flow_skew_weight: 0.3,
+        ..Default::default()
+    };
+    let mut mm = AvellanedaStoikovMM::new(config);
+
+    // Low entropy should not quote
+    let low_entropy_quotes = mm.compute_quotes(
+        dec!(50000), dec!(50000), 0.001, 0.3, 0.0, 1000,
+    );
+    assert!(low_entropy_quotes.bid.is_none(), "Should not quote in low entropy");
+    assert!(low_entropy_quotes.ask.is_none(), "Should not quote in low entropy");
+
+    // High entropy should quote
+    let high_entropy_quotes = mm.compute_quotes(
+        dec!(50000), dec!(50000), 0.001, 0.8, 0.0, 2000,
+    );
+    assert!(high_entropy_quotes.bid.is_some(), "Should quote in high entropy");
+    assert!(high_entropy_quotes.ask.is_some(), "Should quote in high entropy");
+
+    // Test flow skew
+    let config2 = AvellanedaStoikovConfig {
+        flow_skew_weight: 0.5,
+        regime_params: RegimeParams::fully_uniform(2.0, 0.0), // No inventory skew
+        ..Default::default()
+    };
+    let mut mm2 = AvellanedaStoikovMM::new(config2);
+
+    let neutral_flow = mm2.compute_quotes(dec!(50000), dec!(50000), 0.001, 0.8, 0.0, 1000);
+    let positive_flow = mm2.compute_quotes(dec!(50000), dec!(50000), 0.001, 0.8, 1.0, 2000);
+
+    assert!(positive_flow.skew > neutral_flow.skew, "Positive flow should increase skew");
 }
 
