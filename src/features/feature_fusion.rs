@@ -103,6 +103,15 @@ pub struct FeaturesSnapshot {
     pub trend_monotonicity: Option<f64>,
     /// Hurst exponent from TrendFeatureEngine
     pub trend_hurst: Option<f64>,
+    // Phase 2: Trade analytics features
+    /// Effective spread: 2 * |trade_price - mid_price| (rolling average)
+    pub effective_spread: Option<Decimal>,
+    /// Realized spread: 2 * sign * (trade_price - mid_price_{t+delta}) (rolling average)
+    pub realized_spread: Option<Decimal>,
+    /// Mean inter-trade duration in milliseconds (rolling)
+    pub inter_trade_duration_mean_ms: Option<f64>,
+    /// Std deviation of inter-trade duration in milliseconds (rolling)
+    pub inter_trade_duration_std_ms: Option<f64>,
 }
 
 pub struct FeatureFusionEngine {
@@ -308,6 +317,11 @@ impl FeatureFusionEngine {
                     trend_momentum: None,
                     trend_monotonicity: None,
                     trend_hurst: None,
+                    // Phase 2: Trade analytics features
+                    effective_spread: trade_snap.effective_spread,
+                    realized_spread: trade_snap.realized_spread,
+                    inter_trade_duration_mean_ms: trade_snap.inter_trade_duration_mean_ms,
+                    inter_trade_duration_std_ms: trade_snap.inter_trade_duration_std_ms,
                 };
 
                 // Send snapshot whenever we have new data

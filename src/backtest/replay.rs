@@ -258,6 +258,12 @@ impl ParquetReplay {
             trend_momentum: self.get_f64(df, "trend_momentum", row),
             trend_monotonicity: self.get_f64(df, "trend_monotonicity", row),
             trend_hurst: self.get_f64(df, "trend_hurst", row),
+
+            // Phase 2: Trade analytics (may be None in older parquet files)
+            effective_spread: self.get_decimal(df, "effective_spread", row),
+            realized_spread: self.get_decimal(df, "realized_spread", row),
+            inter_trade_duration_mean_ms: self.get_f64(df, "inter_trade_duration_mean_ms", row),
+            inter_trade_duration_std_ms: self.get_f64(df, "inter_trade_duration_std_ms", row),
         })
     }
 

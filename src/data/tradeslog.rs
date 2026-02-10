@@ -16,6 +16,15 @@ pub struct Trade {
     pub is_buyer_maker: bool,
 }
 
+/// Pending trade for realized spread calculation
+#[derive(Debug, Clone)]
+struct PendingRealizedSpread {
+    trade_price: Decimal,
+    mid_price_at_trade: Decimal,
+    timestamp: u64,
+    is_buyer_maker: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct TradesLog {
     trades: VecDeque<Trade>,
@@ -26,6 +35,18 @@ pub struct TradesLog {
     sell_volume: Decimal,
     stats_dirty: bool,
     cached_stats: CachedStats,
+    // Phase 2: Effective spread tracking (rolling buffer)
+    effective_spreads: VecDeque<Decimal>,
+    effective_spread_window: usize,
+    // Phase 2: Realized spread tracking
+    pending_realized_spreads: VecDeque<PendingRealizedSpread>,
+    realized_spreads: VecDeque<Decimal>,
+    realized_spread_window: usize,
+    realized_spread_delta_ms: u64,
+    // Phase 2: Inter-trade duration tracking
+    inter_trade_durations: VecDeque<f64>,
+    inter_trade_duration_window: usize,
+    last_trade_timestamp: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -45,6 +66,11 @@ pub struct TradesLogFeatures {
     pub aggr_ratio_50: Option<Decimal>,
     pub aggr_ratio_100: Option<Decimal>,
     pub aggr_ratio_1000: Option<Decimal>,
+    // Phase 2 features
+    pub effective_spread: Option<Decimal>,
+    pub realized_spread: Option<Decimal>,
+    pub inter_trade_duration_mean_ms: Option<f64>,
+    pub inter_trade_duration_std_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -67,17 +93,32 @@ pub enum TradesLogError {
     InvalidWindowSize,
 }
 
+const EFFECTIVE_SPREAD_WINDOW: usize = 100;
+const REALIZED_SPREAD_WINDOW: usize = 100;
+const REALIZED_SPREAD_DELTA_MS: u64 = 1000; // 1 second default
+const INTER_TRADE_DURATION_WINDOW: usize = 100;
+
 impl TradesLog {
     pub fn new(max_len: usize) -> Self {
         Self {
             trades: VecDeque::with_capacity(max_len),
             max_len,
             trade_count: 0,
-            next_id: 0, 
+            next_id: 0,
             buy_volume: dec!(0),
             sell_volume: dec!(0),
             stats_dirty: true,
             cached_stats: CachedStats::default(),
+            // Phase 2 features
+            effective_spreads: VecDeque::with_capacity(EFFECTIVE_SPREAD_WINDOW),
+            effective_spread_window: EFFECTIVE_SPREAD_WINDOW,
+            pending_realized_spreads: VecDeque::with_capacity(REALIZED_SPREAD_WINDOW),
+            realized_spreads: VecDeque::with_capacity(REALIZED_SPREAD_WINDOW),
+            realized_spread_window: REALIZED_SPREAD_WINDOW,
+            realized_spread_delta_ms: REALIZED_SPREAD_DELTA_MS,
+            inter_trade_durations: VecDeque::with_capacity(INTER_TRADE_DURATION_WINDOW),
+            inter_trade_duration_window: INTER_TRADE_DURATION_WINDOW,
+            last_trade_timestamp: None,
         }
     }
 
@@ -125,7 +166,7 @@ impl TradesLog {
         // Handle trade eviction if buffer is full
         if self.trades.len() == self.max_len {
             let removed = self.trades.pop_front().unwrap();
-            
+
             // Adjust volumes and momentum for removed trade
             if removed.is_buyer_maker {
                 self.sell_volume -= removed.quantity;
@@ -141,6 +182,18 @@ impl TradesLog {
         } else {
             self.trade_count += 1;
         }
+
+        // Phase 2: Track inter-trade duration
+        if let Some(last_ts) = self.last_trade_timestamp {
+            if trade.timestamp > last_ts {
+                let duration_ms = (trade.timestamp - last_ts) as f64;
+                self.inter_trade_durations.push_back(duration_ms);
+                if self.inter_trade_durations.len() > self.inter_trade_duration_window {
+                    self.inter_trade_durations.pop_front();
+                }
+            }
+        }
+        self.last_trade_timestamp = Some(trade.timestamp);
 
         // Add new trade
         if trade.is_buyer_maker {
@@ -262,9 +315,106 @@ impl TradesLog {
         self.cached_stats.signed_count_momentum
     }
 
+    /// Records an effective spread measurement given the current mid price.
+    /// Effective spread = 2 * |trade_price - mid_price|
+    /// Should be called when a new trade arrives and mid_price is known.
+    pub fn record_effective_spread(&mut self, mid_price: Decimal) {
+        if let Some(trade) = self.trades.back() {
+            let spread = dec!(2) * (trade.price - mid_price).abs();
+            self.effective_spreads.push_back(spread);
+            if self.effective_spreads.len() > self.effective_spread_window {
+                self.effective_spreads.pop_front();
+            }
+        }
+    }
+
+    /// Returns the rolling average effective spread over the last N trades.
+    pub fn effective_spread(&self) -> Option<Decimal> {
+        if self.effective_spreads.is_empty() {
+            return None;
+        }
+        let sum: Decimal = self.effective_spreads.iter().copied().sum();
+        let count = Decimal::from(self.effective_spreads.len() as u64);
+        Some(sum / count)
+    }
+
+    /// Records a pending realized spread measurement.
+    /// Should be called when a trade occurs with known mid_price.
+    pub fn record_pending_realized_spread(&mut self, mid_price: Decimal) {
+        if let Some(trade) = self.trades.back() {
+            self.pending_realized_spreads.push_back(PendingRealizedSpread {
+                trade_price: trade.price,
+                mid_price_at_trade: mid_price,
+                timestamp: trade.timestamp,
+                is_buyer_maker: trade.is_buyer_maker,
+            });
+            // Limit pending buffer size
+            if self.pending_realized_spreads.len() > self.realized_spread_window * 2 {
+                self.pending_realized_spreads.pop_front();
+            }
+        }
+    }
+
+    /// Updates realized spread calculations with current mid price and timestamp.
+    /// Processes trades that are at least delta_ms old.
+    pub fn update_realized_spread(&mut self, current_mid: Decimal, current_timestamp: u64) {
+        // Process pending trades that have matured (age >= delta_ms)
+        while let Some(pending) = self.pending_realized_spreads.front() {
+            if current_timestamp >= pending.timestamp + self.realized_spread_delta_ms {
+                let pending = self.pending_realized_spreads.pop_front().unwrap();
+
+                // Realized spread = 2 * sign * (trade_price - future_mid)
+                // For buyer (taker buy, maker sell): sign = +1 (price moved favorably for maker if it went down)
+                // For seller (taker sell, maker buy): sign = -1
+                let sign = if pending.is_buyer_maker { dec!(-1) } else { dec!(1) };
+                let realized = dec!(2) * sign * (pending.trade_price - current_mid);
+
+                self.realized_spreads.push_back(realized);
+                if self.realized_spreads.len() > self.realized_spread_window {
+                    self.realized_spreads.pop_front();
+                }
+            } else {
+                break; // Remaining trades haven't matured yet
+            }
+        }
+    }
+
+    /// Returns the rolling average realized spread.
+    pub fn realized_spread(&self) -> Option<Decimal> {
+        if self.realized_spreads.is_empty() {
+            return None;
+        }
+        let sum: Decimal = self.realized_spreads.iter().copied().sum();
+        let count = Decimal::from(self.realized_spreads.len() as u64);
+        Some(sum / count)
+    }
+
+    /// Returns the rolling mean of inter-trade durations in milliseconds.
+    pub fn inter_trade_duration_mean(&self) -> Option<f64> {
+        if self.inter_trade_durations.is_empty() {
+            return None;
+        }
+        let sum: f64 = self.inter_trade_durations.iter().sum();
+        Some(sum / self.inter_trade_durations.len() as f64)
+    }
+
+    /// Returns the rolling standard deviation of inter-trade durations in milliseconds.
+    pub fn inter_trade_duration_std(&self) -> Option<f64> {
+        if self.inter_trade_durations.len() < 2 {
+            return None;
+        }
+        let mean = self.inter_trade_duration_mean()?;
+        let variance: f64 = self.inter_trade_durations
+            .iter()
+            .map(|d| (d - mean).powi(2))
+            .sum::<f64>()
+            / (self.inter_trade_durations.len() - 1) as f64;
+        Some(variance.sqrt())
+    }
+
     pub fn get_snapshot(&mut self) -> TradesLogFeatures {
         self.update_cached_stats();
-        
+
         TradesLogFeatures {
             last_price: self.last_price(),
             trade_imbalance: self.trade_imbalance(),
@@ -273,7 +423,7 @@ impl TradesLog {
             avg_trade_size: self.avg_trade_size(),
             signed_count_momentum: self.signed_count_momentum(),
             trade_rate_10s: self.trade_rate(10_000).ok(),
-            vwap_10: self.vwap(10).ok(),  
+            vwap_10: self.vwap(10).ok(),
             vwap_50: self.vwap(50).ok(),
             vwap_100: self.vwap(100).ok(),
             vwap_1000: self.vwap(1000).ok(),
@@ -281,6 +431,11 @@ impl TradesLog {
             aggr_ratio_50: self.aggressor_volume_ratio(50).ok(),
             aggr_ratio_100: self.aggressor_volume_ratio(100).ok(),
             aggr_ratio_1000: self.aggressor_volume_ratio(1000).ok(),
+            // Phase 2 features
+            effective_spread: self.effective_spread(),
+            realized_spread: self.realized_spread(),
+            inter_trade_duration_mean_ms: self.inter_trade_duration_mean(),
+            inter_trade_duration_std_ms: self.inter_trade_duration_std(),
         }
     }
 }
@@ -364,6 +519,48 @@ impl ConcurrentTradesLog {
             .filter(|t| t.id > last_id)
             .cloned()
             .collect()
+    }
+
+    /// Records an effective spread given the current mid price.
+    pub async fn record_effective_spread(&self, mid_price: Decimal) {
+        let mut log = self.inner.write().await;
+        log.record_effective_spread(mid_price);
+    }
+
+    /// Returns the rolling average effective spread.
+    pub async fn effective_spread(&self) -> Option<Decimal> {
+        let log = self.inner.read().await;
+        log.effective_spread()
+    }
+
+    /// Records a pending realized spread for the last trade.
+    pub async fn record_pending_realized_spread(&self, mid_price: Decimal) {
+        let mut log = self.inner.write().await;
+        log.record_pending_realized_spread(mid_price);
+    }
+
+    /// Updates realized spread calculations with current state.
+    pub async fn update_realized_spread(&self, current_mid: Decimal, current_timestamp: u64) {
+        let mut log = self.inner.write().await;
+        log.update_realized_spread(current_mid, current_timestamp);
+    }
+
+    /// Returns the rolling average realized spread.
+    pub async fn realized_spread(&self) -> Option<Decimal> {
+        let log = self.inner.read().await;
+        log.realized_spread()
+    }
+
+    /// Returns the rolling mean inter-trade duration in milliseconds.
+    pub async fn inter_trade_duration_mean(&self) -> Option<f64> {
+        let log = self.inner.read().await;
+        log.inter_trade_duration_mean()
+    }
+
+    /// Returns the rolling std deviation of inter-trade duration in milliseconds.
+    pub async fn inter_trade_duration_std(&self) -> Option<f64> {
+        let log = self.inner.read().await;
+        log.inter_trade_duration_std()
     }
 }
 
@@ -707,5 +904,223 @@ mod tests {
         let rate = log.trade_rate(2000).unwrap();
         // 3 trades in 2000ms window = 1.5 trades/second
         assert!((rate - 1.5).abs() < 0.01, "Expected ~1.5 trades/sec, got {}", rate);
+    }
+
+    // Phase 2: Effective Spread Tests
+
+    #[test]
+    fn test_effective_spread_buy_above_mid() {
+        let mut log = TradesLog::new(10);
+        log.insert_trade(create_test_trade(dec!(101), dec!(1), false)); // Buy at 101
+
+        // Mid price is 100, trade at 101 → effective spread = 2 * |101 - 100| = 2
+        log.record_effective_spread(dec!(100));
+
+        let spread = log.effective_spread().unwrap();
+        assert_eq!(spread, dec!(2), "Effective spread should be 2 for buy above mid");
+    }
+
+    #[test]
+    fn test_effective_spread_sell_below_mid() {
+        let mut log = TradesLog::new(10);
+        log.insert_trade(create_test_trade(dec!(99), dec!(1), true)); // Sell at 99
+
+        // Mid price is 100, trade at 99 → effective spread = 2 * |99 - 100| = 2
+        log.record_effective_spread(dec!(100));
+
+        let spread = log.effective_spread().unwrap();
+        assert_eq!(spread, dec!(2), "Effective spread should be 2 for sell below mid");
+    }
+
+    #[test]
+    fn test_effective_spread_at_mid() {
+        let mut log = TradesLog::new(10);
+        log.insert_trade(create_test_trade(dec!(100), dec!(1), false)); // Trade at mid
+
+        // Mid price is 100, trade at 100 → effective spread = 2 * |100 - 100| = 0
+        log.record_effective_spread(dec!(100));
+
+        let spread = log.effective_spread().unwrap();
+        assert_eq!(spread, dec!(0), "Effective spread should be 0 for trade at mid");
+    }
+
+    #[test]
+    fn test_effective_spread_rolling_avg() {
+        let mut log = TradesLog::new(10);
+
+        // Trade 1: 101 vs mid 100 → spread = 2
+        log.insert_trade(create_test_trade(dec!(101), dec!(1), false));
+        log.record_effective_spread(dec!(100));
+
+        // Trade 2: 102 vs mid 100 → spread = 4
+        log.insert_trade(create_test_trade(dec!(102), dec!(1), false));
+        log.record_effective_spread(dec!(100));
+
+        // Average should be (2 + 4) / 2 = 3
+        let spread = log.effective_spread().unwrap();
+        assert_eq!(spread, dec!(3), "Rolling average should be 3");
+    }
+
+    // Phase 2: Inter-Trade Duration Tests
+
+    #[test]
+    fn test_inter_trade_duration_computed() {
+        let mut log = TradesLog::new(10);
+
+        log.insert_trade(Trade {
+            id: 0,
+            price: dec!(100),
+            quantity: dec!(1),
+            timestamp: 1000,
+            is_buyer_maker: false,
+        });
+        log.insert_trade(Trade {
+            id: 0,
+            price: dec!(101),
+            quantity: dec!(1),
+            timestamp: 1500, // 500ms later
+            is_buyer_maker: false,
+        });
+
+        let mean = log.inter_trade_duration_mean().unwrap();
+        assert!((mean - 500.0).abs() < 0.01, "Duration should be 500ms, got {}", mean);
+    }
+
+    #[test]
+    fn test_inter_trade_duration_first_trade() {
+        let mut log = TradesLog::new(10);
+
+        log.insert_trade(Trade {
+            id: 0,
+            price: dec!(100),
+            quantity: dec!(1),
+            timestamp: 1000,
+            is_buyer_maker: false,
+        });
+
+        // First trade has no duration (nothing to compare to)
+        assert!(log.inter_trade_duration_mean().is_none(), "First trade should have no duration");
+    }
+
+    #[test]
+    fn test_inter_trade_duration_rolling_stats() {
+        let mut log = TradesLog::new(10);
+
+        // Insert trades with different intervals
+        log.insert_trade(Trade {
+            id: 0, price: dec!(100), quantity: dec!(1), timestamp: 1000, is_buyer_maker: false,
+        });
+        log.insert_trade(Trade {
+            id: 0, price: dec!(100), quantity: dec!(1), timestamp: 1100, is_buyer_maker: false, // 100ms
+        });
+        log.insert_trade(Trade {
+            id: 0, price: dec!(100), quantity: dec!(1), timestamp: 1300, is_buyer_maker: false, // 200ms
+        });
+        log.insert_trade(Trade {
+            id: 0, price: dec!(100), quantity: dec!(1), timestamp: 1600, is_buyer_maker: false, // 300ms
+        });
+
+        // Durations: [100, 200, 300], mean = 200
+        let mean = log.inter_trade_duration_mean().unwrap();
+        assert!((mean - 200.0).abs() < 0.01, "Mean should be 200ms, got {}", mean);
+
+        // Std should be sqrt(((100-200)^2 + (200-200)^2 + (300-200)^2) / 2) = sqrt(10000) = 100
+        let std = log.inter_trade_duration_std().unwrap();
+        assert!((std - 100.0).abs() < 0.01, "Std should be 100ms, got {}", std);
+    }
+
+    #[test]
+    fn test_snapshot_includes_phase2_features() {
+        let mut log = TradesLog::new(10);
+
+        // Add trades with timestamps
+        log.insert_trade(Trade {
+            id: 0, price: dec!(100), quantity: dec!(1), timestamp: 1000, is_buyer_maker: false,
+        });
+        log.insert_trade(Trade {
+            id: 0, price: dec!(101), quantity: dec!(1), timestamp: 1200, is_buyer_maker: false,
+        });
+
+        // Record effective spread
+        log.record_effective_spread(dec!(100));
+
+        let snapshot = log.get_snapshot();
+
+        // Check that phase 2 features are present
+        assert!(snapshot.effective_spread.is_some(), "Effective spread should be in snapshot");
+        assert!(snapshot.inter_trade_duration_mean_ms.is_some(), "Duration mean should be in snapshot");
+    }
+
+    // Phase 2: Realized Spread Tests
+
+    #[test]
+    fn test_realized_spread_favorable_fill() {
+        let mut log = TradesLog::new(10);
+
+        // Taker buy at 101, mid is 100
+        log.insert_trade(Trade {
+            id: 0, price: dec!(101), quantity: dec!(1), timestamp: 1000, is_buyer_maker: false,
+        });
+        log.record_pending_realized_spread(dec!(100));
+
+        // 1 second later, mid price dropped to 99 (favorable for maker who sold at 101)
+        // Realized spread = 2 * (+1) * (101 - 99) = 4
+        log.update_realized_spread(dec!(99), 2001);
+
+        let spread = log.realized_spread().unwrap();
+        assert_eq!(spread, dec!(4), "Realized spread should be 4 for favorable fill");
+    }
+
+    #[test]
+    fn test_realized_spread_adverse_fill() {
+        let mut log = TradesLog::new(10);
+
+        // Taker buy at 101, mid is 100
+        log.insert_trade(Trade {
+            id: 0, price: dec!(101), quantity: dec!(1), timestamp: 1000, is_buyer_maker: false,
+        });
+        log.record_pending_realized_spread(dec!(100));
+
+        // 1 second later, mid price rose to 103 (adverse for maker who sold at 101)
+        // Realized spread = 2 * (+1) * (101 - 103) = -4
+        log.update_realized_spread(dec!(103), 2001);
+
+        let spread = log.realized_spread().unwrap();
+        assert_eq!(spread, dec!(-4), "Realized spread should be -4 for adverse fill");
+    }
+
+    #[test]
+    fn test_realized_spread_no_future_mid() {
+        let mut log = TradesLog::new(10);
+
+        // Add trade but don't wait long enough for it to mature
+        log.insert_trade(Trade {
+            id: 0, price: dec!(101), quantity: dec!(1), timestamp: 1000, is_buyer_maker: false,
+        });
+        log.record_pending_realized_spread(dec!(100));
+
+        // Only 500ms later (not yet matured at 1000ms delta)
+        log.update_realized_spread(dec!(99), 1500);
+
+        // Should return None since no trades have matured
+        assert!(log.realized_spread().is_none(), "Should be None when no trades matured");
+    }
+
+    #[test]
+    fn test_realized_spread_sell_side() {
+        let mut log = TradesLog::new(10);
+
+        // Taker sell (is_buyer_maker=true) at 99, mid is 100
+        log.insert_trade(Trade {
+            id: 0, price: dec!(99), quantity: dec!(1), timestamp: 1000, is_buyer_maker: true,
+        });
+        log.record_pending_realized_spread(dec!(100));
+
+        // 1 second later, mid price rose to 101 (favorable for maker who bought at 99)
+        // Realized spread = 2 * (-1) * (99 - 101) = 2 * (-1) * (-2) = 4
+        log.update_realized_spread(dec!(101), 2001);
+
+        let spread = log.realized_spread().unwrap();
+        assert_eq!(spread, dec!(4), "Realized spread should be 4 for favorable sell fill");
     }
 }

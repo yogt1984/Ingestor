@@ -116,6 +116,11 @@ pub fn save_feature_as_parquet(features: &[FeaturesSnapshot], filepath: impl AsR
         "trend_momentum" => features.iter().map(|f| f.trend_momentum.unwrap_or(f64::NAN)).collect::<Vec<_>>(),
         "trend_monotonicity" => features.iter().map(|f| f.trend_monotonicity.unwrap_or(f64::NAN)).collect::<Vec<_>>(),
         "trend_hurst" => features.iter().map(|f| f.trend_hurst.unwrap_or(f64::NAN)).collect::<Vec<_>>(),
+        // Phase 2: Trade analytics features
+        "effective_spread" => features.iter().map(|f| decimal_to_f64(f.effective_spread)).collect::<Vec<_>>(),
+        "realized_spread" => features.iter().map(|f| decimal_to_f64(f.realized_spread)).collect::<Vec<_>>(),
+        "inter_trade_duration_mean_ms" => features.iter().map(|f| f.inter_trade_duration_mean_ms.unwrap_or(f64::NAN)).collect::<Vec<_>>(),
+        "inter_trade_duration_std_ms" => features.iter().map(|f| f.inter_trade_duration_std_ms.unwrap_or(f64::NAN)).collect::<Vec<_>>(),
     ].context("Failed to create DataFrame")?;
 
     // Create parent directories if they don't exist
@@ -175,6 +180,8 @@ pub fn validate_parquet_schema(filepath: &Path) -> Result<Vec<String>> {
         // Regime detection fields
         "regime", "regime_confidence", "trend_strength", "regime_persistence",
         "trend_momentum", "trend_monotonicity", "trend_hurst",
+        // Phase 2: Trade analytics features
+        "effective_spread", "realized_spread", "inter_trade_duration_mean_ms", "inter_trade_duration_std_ms",
     ];
     
     let actual_columns: Vec<String> = df.get_column_names().iter().map(|s| s.to_string()).collect();
@@ -522,6 +529,11 @@ mod tests {
             trend_momentum: Some(0.002),
             trend_monotonicity: Some(0.72),
             trend_hurst: Some(0.58),
+            // Phase 2: Trade analytics features
+            effective_spread: Some(dec!(0.50)),
+            realized_spread: Some(dec!(0.25)),
+            inter_trade_duration_mean_ms: Some(150.0),
+            inter_trade_duration_std_ms: Some(25.5),
         }
     }
 
