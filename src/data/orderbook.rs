@@ -66,6 +66,16 @@ impl RollingFlowTracker {
         self.prune_old(Instant::now());
     }
 
+    /// Returns the window duration in seconds.
+    pub fn window_secs(&self) -> u64 {
+        self.window.as_secs()
+    }
+
+    /// Resets the tracker, clearing all events while preserving configuration.
+    pub fn reset(&mut self) {
+        self.events.clear();
+    }
+
     /// Safer weight calculation with fallback and division guard.
     fn calculate_weight(&self, age_secs: f64) -> Decimal {
         let window_secs = self.window.as_secs_f64();
@@ -176,9 +186,11 @@ impl OrderBook {
     }
 
     /// Replaces current book state with full snapshot.
+    /// Also resets the flow tracker to prevent stale events from contaminating imbalance.
     pub fn apply_snapshot(&mut self, bids: Vec<(Decimal, Decimal)>, asks: Vec<(Decimal, Decimal)>) {
         self.bids.clear();
         self.asks.clear();
+        self.flow_tracker.reset();
 
         for (price, quantity) in bids {
             if price >= dec!(0) && quantity >= dec!(0) {
@@ -198,6 +210,16 @@ impl OrderBook {
     pub fn apply_deltas(&mut self, bids: Vec<(Decimal, Decimal)>, asks: Vec<(Decimal, Decimal)>) {
         // Process bids
         for (price, qty) in bids {
+            // Validate price and quantity (skip invalid deltas)
+            if price < dec!(0) {
+                log::warn!("Invalid negative price in bid delta: {}", price);
+                continue;
+            }
+            if qty < dec!(0) {
+                log::warn!("Invalid negative quantity in bid delta: {}", qty);
+                continue;
+            }
+
             let event = if qty == dec!(0) {
                 if self.bids.contains_key(&price) {
                     OrderFlowEvent::BidCancel
@@ -219,6 +241,16 @@ impl OrderBook {
 
         // Process asks (mirror of bids)
         for (price, qty) in asks {
+            // Validate price and quantity (skip invalid deltas)
+            if price < dec!(0) {
+                log::warn!("Invalid negative price in ask delta: {}", price);
+                continue;
+            }
+            if qty < dec!(0) {
+                log::warn!("Invalid negative quantity in ask delta: {}", qty);
+                continue;
+            }
+
             let event = if qty == dec!(0) {
                 if self.asks.contains_key(&price) {
                     OrderFlowEvent::AskCancel
@@ -810,5 +842,147 @@ mod tests {
         thread::sleep(Duration::from_millis(1500));
         tracker.prune_old_events(); // Explicit call
         assert_eq!(tracker.events.len(), 0);
+    }
+
+    #[test]
+    fn test_apply_deltas_negative_price_ignored() {
+        let mut book = OrderBook::new();
+        book.apply_snapshot(
+            vec![(dec!(100.0), dec!(1.0))],
+            vec![(dec!(101.0), dec!(1.0))],
+        );
+
+        // Try to add bid with negative price - should be ignored
+        book.apply_deltas(
+            vec![(dec!(-50.0), dec!(2.0))],
+            vec![],
+        );
+
+        // Book should remain unchanged
+        assert_eq!(book.best_bid(), Some((dec!(100.0), dec!(1.0))));
+        assert!(book.bids.get(&dec!(-50.0)).is_none());
+    }
+
+    #[test]
+    fn test_apply_deltas_negative_qty_ignored() {
+        let mut book = OrderBook::new();
+        book.apply_snapshot(
+            vec![(dec!(100.0), dec!(1.0))],
+            vec![(dec!(101.0), dec!(1.0))],
+        );
+
+        // Try to add ask with negative quantity - should be ignored
+        book.apply_deltas(
+            vec![],
+            vec![(dec!(102.0), dec!(-5.0))],
+        );
+
+        // Book should remain unchanged
+        assert_eq!(book.best_ask(), Some((dec!(101.0), dec!(1.0))));
+        assert!(book.asks.get(&dec!(102.0)).is_none());
+    }
+
+    #[test]
+    fn test_apply_deltas_zero_qty_cancels() {
+        let mut book = OrderBook::new();
+        book.apply_snapshot(
+            vec![(dec!(100.0), dec!(1.0)), (dec!(99.0), dec!(2.0))],
+            vec![(dec!(101.0), dec!(1.0))],
+        );
+
+        // Zero quantity should cancel the order
+        book.apply_deltas(
+            vec![(dec!(100.0), dec!(0))],
+            vec![],
+        );
+
+        // Best bid should now be 99.0
+        assert_eq!(book.best_bid(), Some((dec!(99.0), dec!(2.0))));
+        assert!(book.bids.get(&dec!(100.0)).is_none());
+    }
+
+    #[test]
+    fn test_apply_deltas_valid_unchanged() {
+        let mut book = OrderBook::new();
+        book.apply_snapshot(
+            vec![(dec!(100.0), dec!(1.0))],
+            vec![(dec!(101.0), dec!(1.0))],
+        );
+
+        // Valid deltas should work as before
+        book.apply_deltas(
+            vec![(dec!(100.5), dec!(3.0))],
+            vec![(dec!(101.5), dec!(2.0))],
+        );
+
+        // New best bid/ask
+        assert_eq!(book.best_bid(), Some((dec!(100.5), dec!(3.0))));
+        assert_eq!(book.best_ask(), Some((dec!(101.0), dec!(1.0))));
+    }
+
+    #[test]
+    fn test_snapshot_resets_flow_tracker() {
+        let mut book = OrderBook::new();
+
+        // Add some deltas to populate flow tracker
+        book.apply_deltas(
+            vec![(dec!(100.0), dec!(5.0)), (dec!(99.0), dec!(10.0))],
+            vec![(dec!(101.0), dec!(3.0))],
+        );
+
+        // Verify flow tracker has events
+        assert!(book.flow_tracker.events.len() > 0, "Flow tracker should have events after deltas");
+
+        // Apply snapshot - should reset flow tracker
+        book.apply_snapshot(
+            vec![(dec!(100.0), dec!(1.0))],
+            vec![(dec!(101.0), dec!(1.0))],
+        );
+
+        // Flow tracker should be empty
+        assert_eq!(book.flow_tracker.events.len(), 0, "Flow tracker should be empty after snapshot");
+    }
+
+    #[test]
+    fn test_snapshot_preserves_flow_window() {
+        let mut book = OrderBook::new();
+        let original_window = book.flow_tracker.window_secs();
+
+        // Apply some deltas
+        book.apply_deltas(
+            vec![(dec!(100.0), dec!(5.0))],
+            vec![],
+        );
+
+        // Apply snapshot
+        book.apply_snapshot(
+            vec![(dec!(100.0), dec!(1.0))],
+            vec![(dec!(101.0), dec!(1.0))],
+        );
+
+        // Window should be preserved
+        assert_eq!(book.flow_tracker.window_secs(), original_window, "Window duration should be preserved after snapshot");
+    }
+
+    #[test]
+    fn test_flow_imbalance_after_snapshot_clean() {
+        let mut book = OrderBook::new();
+
+        // Add deltas to create flow imbalance
+        book.apply_deltas(
+            vec![(dec!(100.0), dec!(10.0))],
+            vec![],
+        );
+
+        // Apply snapshot - resets flow tracker
+        book.apply_snapshot(
+            vec![(dec!(100.0), dec!(1.0))],
+            vec![(dec!(101.0), dec!(1.0))],
+        );
+
+        // Flow imbalance should be None (no events in tracker)
+        let (imbalance, pressure) = book.flow_tracker.imbalance();
+        assert!(imbalance.is_none(), "Flow imbalance should be None after snapshot");
+        assert_eq!(pressure, dec!(0), "Flow pressure should be zero after snapshot");
     }
 }
