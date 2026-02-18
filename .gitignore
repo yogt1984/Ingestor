@@ -21,3 +21,7 @@ Cargo.lock
 
 
 backlog
+
+# Jupyter notebooks
+*.ipynb
+.ipynb_checkpoints/
